@@ -2,6 +2,11 @@
 # Git'e hiç gerek yok (binlerce dosya, yüzlerce MB olabilir).
 node_modules/
 
+# GİZLİ bilgiler (veritabanı bağlantı adresi vb.) — ASLA GitHub'a
+# gitmemeli. Bu dosyalar sadece kendi bilgisayarında kalmalı.
+.env
+.env.local
+
 # Derleme çıktısı — npm run build ile her zaman yeniden üretilebilir.
 dist/
 

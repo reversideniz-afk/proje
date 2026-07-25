@@ -21,7 +21,7 @@
 // karar verir: ".cjs" = her zaman eski usül (CommonJS/require),
 // ".mjs" = her zaman yeni usül (ES Modules/import). Bu yüzden Electron
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
-const { app, BrowserWindow, session, desktopCapturer, ipcMain } = require("electron");
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu } = require("electron");
 const path = require("path");
 
 // app.isPackaged: uygulama .exe/.dmg olarak paketlenip paketlenmediğini
@@ -72,6 +72,12 @@ function createWindow() {
 // Electron hazır olduğunda (işletim sistemiyle bağlantı kurulduğunda)
 // pencereyi oluştur.
 app.whenReady().then(() => {
+  // YENİ: "File Edit View Window" gibi geliştirici görünümlü üst menü
+  // çubuğunu tamamen kaldırıyoruz — gerçek bir uygulama gibi hissettirsin
+  // diye. Not: DevTools'u manuel açmak istersen (Ctrl+Shift+I) klavye
+  // kısayolu hâlâ çalışıyor, sadece görünen menü kayboldu.
+  Menu.setApplicationMenu(null);
+
   // YENİ: Electron'un "sor sormaz her şeyi onayla" varsayılanını
   // KAPATIYORUZ. Kendi listemizi biz belirliyoruz: sadece "media"
   // (kamera/mikrofon) otomatik onaylansın — çünkü uygulamamızın buna

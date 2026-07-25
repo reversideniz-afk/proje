@@ -11,6 +11,8 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const bcrypt = require("bcryptjs");
+const { connectDB, User } = require("./db");
 
 const app = express();
 const server = http.createServer(app);
@@ -21,6 +23,24 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
+
+// YENİ (güvenlik): Artık TEK bir oda şifresi yerine, HER KANALIN
+// KENDİ şifresi var. Hiçbiri koda yazılmıyor — Render'ın Environment
+// panelinden ayarlanıyor. Bir kanalın şifresi ayarlanmamışsa, o kanal
+// şifresiz kalır (uyarı basıyoruz ki unutulmuş olduğunu fark edelim).
+const CHANNEL_SECRETS = {
+  Genel: process.env.CHANNEL_SECRET_GENEL,
+  Oyun: process.env.CHANNEL_SECRET_OYUN,
+  Müzik: process.env.CHANNEL_SECRET_MUZIK,
+};
+Object.entries(CHANNEL_SECRETS).forEach(([channel, secret]) => {
+  if (!secret) {
+    console.warn(`UYARI: "${channel}" kanalı için şifre ayarlanmamış — şifresiz girilebilir!`);
+  }
+});
+
+// Veritabanına bağlan (kişisel hesaplar için).
+connectDB();
 
 // NOT: Artık statik dosya sunmuyoruz — istemci (client) bir Electron masaüstü
 // uygulaması, tarayıcıdan açılan bir web sayfası değil. Bu sunucunun tek işi
@@ -57,9 +77,44 @@ function removeUserFromRoom(roomId, socketId) {
 io.on("connection", (socket) => {
   let currentRoom = null;
 
+  // ---- YENİ: Kişisel hesap girişi ----
+  // Kanal seçmeden ÖNCE, kullanıcı adı/şifre doğrulanıyor. "callback"
+  // kullanıyoruz (Socket.io'nun "acknowledgement" özelliği) — bu, normal
+  // bir fonksiyon çağrısı gibi doğrudan cevap almamızı sağlıyor, ayrı
+  // bir olay dinlemeye gerek kalmıyor.
+  socket.on("login", async ({ username, password }, callback) => {
+    if (!username || !password) {
+      return callback({ success: false, message: "Kullanıcı adı ve şifre gerekli." });
+    }
+    try {
+      const user = await User.findOne({ username: username.trim() });
+      // Kasıtlı olarak "kullanıcı yok" ile "şifre yanlış" durumlarında
+      // AYNI mesajı veriyoruz — hangisinin doğru olduğunu belli etmemek
+      // için (biri "bu kullanıcı adı var mı" diye deneme yapamasın).
+      if (!user) {
+        return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
+      }
+      const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+      if (!passwordMatches) {
+        return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
+      }
+      callback({ success: true, username: user.username });
+    } catch (err) {
+      console.error("Giriş sırasında hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
   // ---- Odaya katılma ----
-  socket.on("join-room", ({ roomId, displayName }) => {
+  socket.on("join-room", ({ roomId, displayName, secret }) => {
     if (!roomId || !displayName) return;
+
+    // YENİ (güvenlik): bu KANALA özel şifre kontrolü.
+    const expectedSecret = CHANNEL_SECRETS[roomId];
+    if (expectedSecret && secret !== expectedSecret) {
+      socket.emit("join-error", "Yanlış kanal şifresi.");
+      return;
+    }
 
     currentRoom = roomId;
     socket.join(roomId);

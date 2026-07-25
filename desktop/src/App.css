@@ -91,6 +91,12 @@
   max-width: 900px;
 }
 
+.peer-tiles-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .video-grid {
   flex: 1;
   display: flex;
@@ -158,9 +164,10 @@
 }
 
 .avatar-circle--small {
-  width: 60px;
-  height: 60px;
-  font-size: 24px;
+  /* Artık kendi avatarınla aynı boyut — tutarlı görünüm için. */
+  width: 90px;
+  height: 90px;
+  font-size: 36px;
 }
 
 .camera-off-placeholder--small {
@@ -273,7 +280,9 @@
 
 .name-entry form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
+  width: 220px;
 }
 
 .name-entry input {
@@ -291,6 +300,13 @@
   background: #5865f2;
   color: white;
   cursor: pointer;
+}
+
+.name-entry-hint {
+  font-size: 12px;
+  opacity: 0.6;
+  max-width: 240px;
+  text-align: center;
 }
 
 /* ------------------------------------------------------------
@@ -366,6 +382,60 @@
   border-radius: 6px;
   border: none;
   background: #4a4d53;
+  color: white;
+  cursor: pointer;
+}
+
+.peer-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.leave-button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: none;
+  background: #f04747;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.leave-button:hover {
+  background: #d43e3e;
+}
+
+.channel-password-modal {
+  max-width: 320px;
+}
+
+.channel-password-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.channel-password-modal input {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #4a4d53;
+  background: #1e1f22;
+  color: #e6e6e6;
+}
+
+.channel-password-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.channel-password-actions button[type='submit'] {
+  flex: 1;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: none;
+  background: #5865f2;
   color: white;
   cursor: pointer;
 }
