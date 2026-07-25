@@ -1,0 +1,19 @@
+/* Vite'ın varsayılan şablonundaki tanıtım-sayfası stillerini
+   (sabit genişlik, ortalanmış içerik vb.) temizleyip masaüstü
+   uygulaması için düz bir sıfırlama (reset) koyuyoruz. Bu estetik
+   bir karar değil, "pencereyi düzgün doldursun" işlevselliği. */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}

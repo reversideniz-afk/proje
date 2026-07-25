@@ -1,0 +1,10 @@
+# Bağımlılıklar — npm install ile her zaman yeniden oluşturulabilir,
+# Git'e hiç gerek yok (binlerce dosya, yüzlerce MB olabilir).
+node_modules/
+
+# Derleme çıktısı — npm run build ile her zaman yeniden üretilebilir.
+dist/
+
+# İşletim sistemi / editör dosyaları
+.DS_Store
+Thumbs.db
