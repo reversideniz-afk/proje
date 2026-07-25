@@ -42,6 +42,31 @@ Object.entries(CHANNEL_SECRETS).forEach(([channel, secret]) => {
 // Veritabanına bağlan (kişisel hesaplar için).
 connectDB();
 
+// YENİ (güvenlik): TURN sunucu bilgileri de koda/istemciye GÖMÜLMÜYOR —
+// sadece giriş yapmış (doğrulanmış) kullanıcılara, login başarılı
+// olduğunda gönderiliyor. STUN'ın aksine TURN gerçek ses/görüntü
+// trafiğini TAŞIYABİLDİĞİ için (bant genişliği maliyeti var), bu
+// bilgilerin rastgele biri tarafından ele geçirilip kötüye kullanılması
+// istenmez.
+function buildIceServers() {
+  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
+  const { TURN_URL, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
+  if (TURN_URL && TURN_USERNAME && TURN_CREDENTIAL) {
+    servers.push({
+      urls: TURN_URL,
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    });
+  }
+  return servers;
+}
+
+if (!process.env.TURN_URL || !process.env.TURN_USERNAME || !process.env.TURN_CREDENTIAL) {
+  console.warn(
+    "UYARI: TURN_URL/TURN_USERNAME/TURN_CREDENTIAL ayarlanmamış — sadece STUN kullanılacak."
+  );
+}
+
 // NOT: Artık statik dosya sunmuyoruz — istemci (client) bir Electron masaüstü
 // uygulaması, tarayıcıdan açılan bir web sayfası değil. Bu sunucunun tek işi
 // Socket.io üzerinden sinyalleşme (bkz. dosya başındaki açıklama).
@@ -98,7 +123,7 @@ io.on("connection", (socket) => {
       if (!passwordMatches) {
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
-      callback({ success: true, username: user.username });
+      callback({ success: true, username: user.username, iceServers: buildIceServers() });
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });

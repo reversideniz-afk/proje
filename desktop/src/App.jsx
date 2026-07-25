@@ -5,9 +5,10 @@ import './App.css'
 const SERVER_URL = 'https://proje-dh7l.onrender.com'
 const CHANNELS = ['Genel', 'Oyun', 'Müzik']
 
-const ICE_SERVERS = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-}
+// YENİ: TURN bilgileri artık koda GÖMÜLMÜYOR — sunucudan, girişten
+// (login) sonra geliyor. Bu, giriş yapılana kadar kullanılacak
+// varsayılan (sadece STUN) liste.
+const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 function describeMediaError(err) {
   switch (err.name) {
@@ -96,6 +97,14 @@ function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const displayName = username // Girişi yapan kişinin doğrulanmış adı.
 
+  // YENİ: sunucudan (login sonrası) gelen ICE sunucu listesi — TURN
+  // bilgilerini içeriyor ama koda hiç gömülü değil.
+  const [iceServers, setIceServers] = useState(DEFAULT_ICE_SERVERS)
+  const iceServersRef = useRef(DEFAULT_ICE_SERVERS)
+  useEffect(() => {
+    iceServersRef.current = iceServers
+  }, [iceServers])
+
   // --- YENİ: hangi kanala girmek istediğimiz, şifresini sorarken ---
   const [pendingChannel, setPendingChannel] = useState(null)
   const [channelPasswordInput, setChannelPasswordInput] = useState('')
@@ -104,6 +113,9 @@ function App() {
   const [peers, setPeers] = useState([])
   const [connectionError, setConnectionError] = useState(null)
   const [mediaError, setMediaError] = useState(null)
+  // YENİ: bağlantı kopması/yeniden bağlanma durumunu takip ediyoruz —
+  // artık kullanıcıya sessizce değil, görünür bir şekilde bildiriyoruz.
+  const [connectionStatus, setConnectionStatus] = useState('connected')
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
@@ -219,7 +231,7 @@ function App() {
   // hangi türden bahsettiğimizi biliyor (sinyal mesajlarına ekliyoruz).
   const createSubConnection = useCallback(
     (peerSocketId, connectionType) => {
-      const pc = new RTCPeerConnection(ICE_SERVERS)
+      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
 
       pc.ontrack = (event) => {
         console.log(
@@ -397,6 +409,7 @@ function App() {
     setIsMicOn(false)
     setIsCameraOn(false)
     setIsScreenSharing(false)
+    setConnectionStatus('connected')
     setActiveChannel(null)
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
@@ -411,13 +424,26 @@ function App() {
       setIsMicOn(false)
       setIsCameraOn(false)
       setIsScreenSharing(false)
+      setConnectionStatus('connected')
       setActiveChannel(channelName)
 
       const socket = io(SERVER_URL)
       socketRef.current = socket
 
       socket.on('connect', () => {
+        // "connect" olayı hem ilk bağlantıda hem de kopma sonrası
+        // YENİDEN bağlanmada tetikleniyor — ikisinde de odaya (tekrar)
+        // katılmamız lazım, Socket.io/sunucu bunu hatırlamıyor.
+        setConnectionStatus('connected')
         socket.emit('join-room', { roomId: channelName, displayName, secret: channelSecret })
+      })
+
+      // YENİ: bağlantı koparsa (wifi kesintisi, sunucu yeniden başlaması
+      // vb.) kullanıcıya GÖRÜNÜR bir şekilde bildiriyoruz. Socket.io
+      // varsayılan olarak arka planda kendiliğinden yeniden bağlanmayı
+      // dener — biz sadece bunu görünür kılıyoruz.
+      socket.on('disconnect', () => {
+        setConnectionStatus('reconnecting')
       })
 
       socket.on('existing-users', (users) => {
@@ -645,6 +671,9 @@ function App() {
         setIsLoggingIn(false)
         if (response?.success) {
           setUsername(response.username)
+          if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
+            setIceServers(response.iceServers)
+          }
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -731,6 +760,11 @@ function App() {
 
         {activeChannel && !connectionError && (
           <div className="channel-view">
+            {connectionStatus === 'reconnecting' && (
+              <div className="reconnecting-banner">
+                🔄 Bağlantı koptu, yeniden bağlanılıyor…
+              </div>
+            )}
             <div className="peer-panel">
               <div className="peer-panel-header">
                 <h2># {activeChannel}</h2>
