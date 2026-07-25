@@ -7,8 +7,11 @@ node_modules/
 .env
 .env.local
 
-# Derleme çıktısı — npm run build ile her zaman yeniden üretilebilir.
+# Derleme çıktısı — npm run build / npm run package ile her zaman
+# yeniden üretilebilir. "release" özellikle önemli — paketlenmiş
+# .exe (yüzlerce MB) buraya gidiyor, Git'e KESİNLİKLE girmemeli.
 dist/
+release/
 
 # İşletim sistemi / editör dosyaları
 .DS_Store
