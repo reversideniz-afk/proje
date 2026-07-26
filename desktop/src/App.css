@@ -768,6 +768,15 @@
   cursor: default;
 }
 
+/* YENİ: artık video kutucuğuna değil, tıklanan noktaya göre (üye
+   listesinden de açılabildiği için) konumlanıyor. */
+.volume-popup--floating {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 950;
+}
+
 .volume-popup-header {
   display: flex;
   align-items: center;
@@ -816,24 +825,6 @@
 .ptt-capture-hint {
   font-size: 12px;
   color: var(--accent);
-  text-align: center;
-  margin: 4px 0 0 0;
-}
-
-.ptt-global-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-muted);
-  justify-content: center;
-  margin: 4px 0 0 0;
-  cursor: pointer;
-}
-
-.ptt-global-error {
-  font-size: 11px;
-  color: #e8776f;
   text-align: center;
   margin: 4px 0 0 0;
 }
@@ -983,12 +974,12 @@
 }
 
 .reaction-picker {
-  display: none;
-  gap: 2px;
-}
-
-.chat-message--text-wrap:hover .reaction-picker {
   display: flex;
+  gap: 2px;
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 3px 5px;
 }
 
 .reaction-picker-option {

@@ -21,57 +21,6 @@ function formatKeyCode(code) {
   return code
 }
 
-// YENİ: Global bas-konuş için — tarayıcının kullandığı tuş kodunu
-// (event.code, ör. "KeyF"), node-global-key-listener kütüphanesinin
-// kendi isimlendirmesine (ör. "F") çeviriyoruz. Bu eşleştirmeyi
-// kütüphanenin KENDİ Windows tuş haritasından (tahmin etmeden,
-// doğrudan kaynağından) çıkardım.
-const DOM_CODE_TO_GLOBAL_KEY_NAME = {
-  Space: 'SPACE',
-  Tab: 'TAB',
-  ShiftLeft: 'LSHIFT',
-  ShiftRight: 'RSHIFT',
-  ControlLeft: 'LCONTROL',
-  ControlRight: 'RCONTROL',
-  AltLeft: 'LALT',
-  AltRight: 'RALT',
-  CapsLock: 'CAPSLOCK',
-  Escape: 'ESCAPE',
-  Backspace: 'BACK',
-  Enter: 'RETURN',
-  Home: 'HOME',
-  End: 'END',
-  PageUp: 'PRIOR',
-  PageDown: 'NEXT',
-  Insert: 'INSERT',
-  Delete: 'DELETE',
-  ArrowLeft: 'LEFT',
-  ArrowUp: 'UP',
-  ArrowRight: 'RIGHT',
-  ArrowDown: 'DOWN',
-  MetaLeft: 'LWIN',
-  MetaRight: 'RWIN',
-  Semicolon: 'OEM_1',
-  Equal: 'OEM_PLUS',
-  Comma: 'OEM_COMMA',
-  Minus: 'OEM_MINUS',
-  Period: 'OEM_PERIOD',
-  Slash: 'OEM_2',
-  Backquote: 'OEM_3',
-  BracketLeft: 'OEM_4',
-  Backslash: 'OEM_5',
-  BracketRight: 'OEM_6',
-  Quote: 'OEM_7',
-}
-
-function domCodeToGlobalKeyName(code) {
-  if (!code) return null
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3)
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5)
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code
-  return DOM_CODE_TO_GLOBAL_KEY_NAME[code] || null
-}
-
 // YENİ: Mesaj saatini okunabilir göstermek için.
 function formatMessageTime(dateStr) {
   try {
@@ -143,11 +92,7 @@ function RemoteCameraTile({
   micOn,
   isEnlarged,
   onToggleEnlarge,
-  volume,
-  onVolumeChange,
-  showVolumeMenu,
   onOpenVolumeMenu,
-  onCloseVolumeMenu,
 }) {
   const videoRef = useRef(null)
   const audioRef = useRef(null)
@@ -172,7 +117,7 @@ function RemoteCameraTile({
       onContextMenu={(e) => {
         e.preventDefault()
         e.stopPropagation()
-        onOpenVolumeMenu()
+        onOpenVolumeMenu(e)
       }}
     >
       {cameraOn ? (
@@ -189,26 +134,6 @@ function RemoteCameraTile({
       <span className="remote-video-label">
         {label} {!micOn && '🔇'}
       </span>
-
-      {/* YENİ: sağ tık ile açılan, kişiye özel ses seviyesi kaydırıcısı. */}
-      {showVolumeMenu && (
-        <div className="volume-popup" onClick={(e) => e.stopPropagation()}>
-          <div className="volume-popup-header">
-            <span>{label} — ses seviyesi</span>
-            <button className="volume-popup-close" onClick={onCloseVolumeMenu}>
-              ✕
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="200"
-            value={volume}
-            onChange={(e) => onVolumeChange(Number(e.target.value))}
-          />
-          <div className="volume-popup-value">{volume}%</div>
-        </div>
-      )}
     </div>
   )
 }
@@ -392,11 +317,6 @@ function App() {
   const [pttEnabled, setPttEnabled] = useState(false)
   const [pttKey, setPttKey] = useState(null) // event.code, ör. 'KeyV'
   const [isCapturingPttKey, setIsCapturingPttKey] = useState(false)
-  // YENİ: Global bas-konuş — açıksa, uygulama odakta olmasa bile
-  // (ör. oyun oynarken) tuş çalışır. Sadece pttEnabled+pttKey varken
-  // anlamlı.
-  const [pttGlobal, setPttGlobal] = useState(false)
-  const [pttGlobalError, setPttGlobalError] = useState(null)
   const [isCameraOn, setIsCameraOn] = useState(false)
 
   // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
@@ -417,8 +337,41 @@ function App() {
 
   // YENİ: kişi bazlı ses seviyesi (Discord'daki gibi, %0-%200 arası —
   // normal HTML ses elemanlarının %100 sınırını Web Audio API ile aşıyoruz).
-  const [peerVolumes, setPeerVolumes] = useState({}) // { peerSocketId: 0-200 }
-  const [volumeMenuFor, setVolumeMenuFor] = useState(null) // hangi kişinin kaydırıcısı açık
+  // ÖNEMLİ: artık geçici bağlantı kimliğine (socketId) DEĞİL, kullanıcı
+  // adına göre saklıyoruz — böylece kişi sesten çıkıp girse, ya da sen
+  // uygulamayı kapatıp açsan bile ayar kalıcı oluyor. localStorage'a da
+  // yazıyoruz ki bir dahaki açılışta da hatırlansın.
+  const [peerVolumes, setPeerVolumes] = useState(() => {
+    try {
+      const saved = window.localStorage?.getItem('peerVolumes')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  }) // { username: 0-200 }
+  useEffect(() => {
+    try {
+      window.localStorage?.setItem('peerVolumes', JSON.stringify(peerVolumes))
+    } catch {
+      /* localStorage kullanılamıyorsa sorun değil, sadece kalıcılık kaybolur */
+    }
+  }, [peerVolumes])
+
+  // YENİ: tek, konum-bazlı ses seviyesi popup'ı — hem video kutucuğuna
+  // hem üye listesindeki bir isme sağ tıklayınca AYNI popup açılıyor.
+  const [volumePopup, setVolumePopup] = useState(null) // { username, x, y } | null
+  const openVolumePopup = useCallback((username, e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setVolumePopup({ username, x: e.clientX, y: e.clientY })
+  }, [])
+  useEffect(() => {
+    if (!volumePopup) return
+    const closeIt = () => setVolumePopup(null)
+    window.addEventListener('click', closeIt)
+    return () => window.removeEventListener('click', closeIt)
+  }, [volumePopup])
+
   const audioContextRef = useRef(null)
   const gainNodesRef = useRef(new Map()) // peerSocketId -> GainNode
   const connectedAudioTracksRef = useRef(new Map()) // peerSocketId -> hangi track'e bağlandık
@@ -446,7 +399,9 @@ function App() {
         const singleTrackStream = new MediaStream([audioTrack])
         const source = ctx.createMediaStreamSource(singleTrackStream)
         const gainNode = ctx.createGain()
-        const currentVolume = peerVolumes[peerSocketId] ?? 100
+        // YENİ: ses seviyesini artık kullanıcı adından buluyoruz.
+        const username = peers.find((p) => p.socketId === peerSocketId)?.username
+        const currentVolume = (username && peerVolumes[username]) ?? 100
         gainNode.gain.value = currentVolume / 100
         source.connect(gainNode).connect(ctx.destination)
 
@@ -477,13 +432,20 @@ function App() {
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteStreams, getAudioContext])
+  }, [remoteStreams, getAudioContext, peers])
 
-  const setPeerVolume = useCallback((peerSocketId, percent) => {
-    setPeerVolumes((prev) => ({ ...prev, [peerSocketId]: percent }))
-    const gainNode = gainNodesRef.current.get(peerSocketId)
-    if (gainNode) gainNode.gain.value = percent / 100
-  }, [])
+  // YENİ: artık kullanıcı adına göre ayarlıyoruz — o kişi şu an sesteyse
+  // canlı ses seviyesini de anında güncelliyoruz, sesteyken olmasa bile
+  // tercih kaydediliyor (bir dahaki sese girişinde uygulanır).
+  const setPeerVolume = useCallback(
+    (username, percent) => {
+      setPeerVolumes((prev) => ({ ...prev, [username]: percent }))
+      const peerSocketId = peers.find((p) => p.username === username)?.socketId
+      const gainNode = peerSocketId ? gainNodesRef.current.get(peerSocketId) : null
+      if (gainNode) gainNode.gain.value = percent / 100
+    },
+    [peers]
+  )
 
   const socketRef = useRef(null)
   const localVideoRef = useRef(null)
@@ -733,7 +695,7 @@ function App() {
     setIsScreenSharing(false)
     setEnlargedTile(null)
     setInVoice(false)
-    setVolumeMenuFor(null)
+    setVolumePopup(null)
     // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
     // girişte sıfırdan, temiz kurulacaklar).
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
@@ -1015,7 +977,6 @@ function App() {
     if (pttEnabled) {
       setPttEnabled(false)
       setPttKey(null)
-      setPttGlobal(false)
       setMicActive(false)
     } else {
       setIsCapturingPttKey(true)
@@ -1064,51 +1025,6 @@ function App() {
       window.removeEventListener('keyup', handleKeyup)
     }
   }, [pttEnabled, pttKey, inVoice, setMicActive])
-
-  // YENİ: Global bas-konuş — pttGlobal açıksa, ana sürece "şu tuşu
-  // (global isimlendirmeyle) izle" diyoruz. Kapalıysa ya da şartlar
-  // sağlanmıyorsa (sesle ilgili değilsek, kanal yoksa vs.) "izleme"
-  // (null) diyoruz.
-  useEffect(() => {
-    if (!window.electronAPI?.setGlobalPttKey) return
-    const globalKeyName =
-      pttEnabled && pttGlobal && pttKey ? domCodeToGlobalKeyName(pttKey) : null
-    window.electronAPI.setGlobalPttKey(globalKeyName)
-    if (pttEnabled && pttGlobal && pttKey && !globalKeyName) {
-      setPttGlobalError('Bu tuş global modda henüz desteklenmiyor, başka bir tuş dene.')
-    } else {
-      setPttGlobalError(null)
-    }
-  }, [pttEnabled, pttGlobal, pttKey])
-
-  // YENİ: Ana süreçten gelen global tuş basma/bırakma olaylarını
-  // dinleyip mikrofonu buna göre açıp kapatıyoruz. Uygulama odakta
-  // OLMASA bile çalışır — bu yüzden inVoice/pttGlobal kontrolünü
-  // burada, olay geldiği anda yapıyoruz (eski değerlere takılmasın
-  // diye ref kullanmak yerine, bu effect zaten ilgili state'ler
-  // değiştikçe yeniden kuruluyor).
-  useEffect(() => {
-    if (!window.electronAPI?.onGlobalPttKeyDown) return
-    if (!pttEnabled || !pttGlobal || !inVoice) return
-
-    const unsubDown = window.electronAPI.onGlobalPttKeyDown(() => setMicActive(true))
-    const unsubUp = window.electronAPI.onGlobalPttKeyUp(() => setMicActive(false))
-    return () => {
-      unsubDown?.()
-      unsubUp?.()
-    }
-  }, [pttEnabled, pttGlobal, inVoice, setMicActive])
-
-  // Global dinleyici kurulumunda bir hata olursa (ör. işletim
-  // sistemi izin vermezse), kullanıcıya haber ver.
-  useEffect(() => {
-    if (!window.electronAPI?.onGlobalPttError) return
-    return window.electronAPI.onGlobalPttError((message) => {
-      setPttGlobalError(`Global bas-konuş kurulamadı: ${message}`)
-      setPttGlobal(false)
-    })
-  }, [])
-
 
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
@@ -1310,6 +1226,21 @@ function App() {
     const file = e.dataTransfer.files?.[0]
     if (file) sendPhotoFile(file)
   }
+
+  // YENİ: tepki paneli artık üzerine gelince değil, sağ tıklayınca
+  // açılıyor — sürekli fare gezdirirken panelin açılıp kapanması göz
+  // yoruyordu.
+  const [reactionPickerForMessageId, setReactionPickerForMessageId] = useState(null)
+  const handleMessageContextMenu = (e, messageId) => {
+    e.preventDefault()
+    setReactionPickerForMessageId((prev) => (prev === messageId ? null : messageId))
+  }
+  useEffect(() => {
+    if (!reactionPickerForMessageId) return
+    const closeIt = () => setReactionPickerForMessageId(null)
+    window.addEventListener('click', closeIt)
+    return () => window.removeEventListener('click', closeIt)
+  }, [reactionPickerForMessageId])
 
   const handlePhotoButtonClick = () => {
     photoFileInputRef.current?.click()
@@ -1556,19 +1487,6 @@ function App() {
                     {isCapturingPttKey && (
                       <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
                     )}
-                    {/* YENİ: Global bas-konuş anahtarı — sadece bir tuş
-                        ayarlanmışken anlamlı/görünür. */}
-                    {pttEnabled && !isCapturingPttKey && (
-                      <label className="ptt-global-toggle">
-                        <input
-                          type="checkbox"
-                          checked={pttGlobal}
-                          onChange={(e) => setPttGlobal(e.target.checked)}
-                        />
-                        🌐 Uygulama arka plandayken de çalışsın
-                      </label>
-                    )}
-                    {pttGlobalError && <p className="ptt-global-error">{pttGlobalError}</p>}
                   </div>
 
                   {isScreenSharing && (
@@ -1603,11 +1521,7 @@ function App() {
                             micOn={peer ? !peer.muted : false}
                             isEnlarged={enlargedTile === `${socketId}-camera`}
                             onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
-                            volume={peerVolumes[socketId] ?? 100}
-                            onVolumeChange={(percent) => setPeerVolume(socketId, percent)}
-                            showVolumeMenu={volumeMenuFor === socketId}
-                            onOpenVolumeMenu={() => setVolumeMenuFor(socketId)}
-                            onCloseVolumeMenu={() => setVolumeMenuFor(null)}
+                            onOpenVolumeMenu={(e) => label && openVolumePopup(label, e)}
                           />
                         )}
                         {peer?.sharingScreen && streams.screenStream && (
@@ -1661,7 +1575,11 @@ function App() {
                         <span className="chat-photo-hint">📷 tek seferlik — kaydedilmiyor</span>
                       </div>
                     ) : (
-                      <div key={item.id || `text-${i}`} className="chat-message chat-message--text-wrap">
+                      <div
+                        key={item.id || `text-${i}`}
+                        className="chat-message chat-message--text-wrap"
+                        onContextMenu={(e) => item.id && handleMessageContextMenu(e, item.id)}
+                      >
                         <span className="chat-message-author">{item.username}</span>
                         <span className="chat-message-time">{formatMessageTime(item.createdAt)}</span>
                         <button
@@ -1675,8 +1593,8 @@ function App() {
                         <span className="chat-message-text">
                           {renderMessageTextWithMentions(item.text, displayName)}
                         </span>
-                        {item.id && (
-                          <div className="chat-reactions">
+                        {item.id && (item.reactions?.length > 0 || reactionPickerForMessageId === item.id) && (
+                          <div className="chat-reactions" onClick={(e) => e.stopPropagation()}>
                             {Object.entries(
                               (item.reactions || []).reduce((acc, r) => {
                                 acc[r.emoji] = acc[r.emoji] || []
@@ -1697,18 +1615,23 @@ function App() {
                                 {emoji} {usernames.length}
                               </button>
                             ))}
-                            <div className="reaction-picker">
-                              {QUICK_REACTIONS.map((emoji) => (
-                                <button
-                                  key={emoji}
-                                  type="button"
-                                  className="reaction-picker-option"
-                                  onClick={() => handleToggleReaction(item.id, emoji)}
+                            {reactionPickerForMessageId === item.id && (
+                              <div className="reaction-picker reaction-picker--open">
+                                {QUICK_REACTIONS.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    className="reaction-picker-option"
+                                    onClick={() => {
+                                      handleToggleReaction(item.id, emoji)
+                                      setReactionPickerForMessageId(null)
+                                    }}
                                 >
                                   {emoji}
                                 </button>
                               ))}
                             </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1758,7 +1681,12 @@ function App() {
                 <h3>Çevrimiçi — {onlineMembers.length}</h3>
                 <ul>
                   {onlineMembers.map((m) => (
-                    <li key={m.username} className="member-item member-item--online">
+                    <li
+                      key={m.username}
+                      className="member-item member-item--online"
+                      onContextMenu={(e) => m.username !== displayName && openVolumePopup(m.username, e)}
+                      title={m.username !== displayName ? 'Ses seviyesini ayarlamak için sağ tıkla' : undefined}
+                    >
                       <span className="member-status-dot member-status-dot--online" />
                       {m.username} {m.inVoice && '🎙️'}
                     </li>
@@ -1770,7 +1698,12 @@ function App() {
                   <h3>Çevrimdışı — {offlineMembers.length}</h3>
                   <ul>
                     {offlineMembers.map((m) => (
-                      <li key={m.username} className="member-item member-item--offline">
+                      <li
+                        key={m.username}
+                        className="member-item member-item--offline"
+                        onContextMenu={(e) => openVolumePopup(m.username, e)}
+                        title="Ses seviyesini ayarlamak için sağ tıkla"
+                      >
                         <span className="member-status-dot member-status-dot--offline" />
                         {m.username}
                       </li>
@@ -1845,6 +1778,29 @@ function App() {
               İptal
             </button>
           </div>
+        </div>
+      )}
+
+      {volumePopup && (
+        <div
+          className="volume-popup volume-popup--floating"
+          style={{ left: volumePopup.x, top: volumePopup.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="volume-popup-header">
+            <span>{volumePopup.username} — ses seviyesi</span>
+            <button className="volume-popup-close" onClick={() => setVolumePopup(null)}>
+              ✕
+            </button>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="200"
+            value={peerVolumes[volumePopup.username] ?? 100}
+            onChange={(e) => setPeerVolume(volumePopup.username, Number(e.target.value))}
+          />
+          <div className="volume-popup-value">{peerVolumes[volumePopup.username] ?? 100}%</div>
         </div>
       )}
 
