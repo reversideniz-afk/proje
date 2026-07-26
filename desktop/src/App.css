@@ -856,3 +856,41 @@
   opacity: 0.6;
   margin-left: 2px;
 }
+
+.chat-message--photo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-photo {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 8px;
+  cursor: pointer;
+  object-fit: cover;
+}
+
+.chat-photo-hint {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.chat-photo-button {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.chat-photo-button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.chat-photo-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

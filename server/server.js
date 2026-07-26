@@ -37,6 +37,10 @@ const io = new Server(server, {
   cors: {
     origin: "*", // Geliştirme aşamasında serbest; canlıya alırken kısıtlanabilir.
   },
+  // YENİ: Varsayılan limit (1 MB) fotoğraf göndermek için çok düşük.
+  // 10 MB'lık bir fotoğraf base64'e çevrilince ~%33 büyüyor, üstüne
+  // biraz da pay bırakıyoruz.
+  maxHttpBufferSize: 15 * 1024 * 1024,
 });
 
 const PORT = process.env.PORT || 3001;
@@ -330,6 +334,42 @@ io.on("connection", (socket) => {
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı
+  // gibi: HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara
+  // anlık iletiliyor. Kanaldan çıkıp girsen bile bir daha görünmez.
+  socket.on("send-photo", ({ token, imageData, mimeType }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+
+    // GÜVENLİK/SAĞLAMLIK: beklenmedik veri tiplerini en başta reddet.
+    if (typeof imageData !== "string" || typeof mimeType !== "string") return;
+    if (!mimeType.startsWith("image/")) return;
+    // ~10 MB'lık bir görsel, base64'e çevrilince kabaca 13.3 milyon
+    // karaktere denk geliyor — biraz payla 14 milyonda sınır koyuyoruz.
+    if (imageData.length > 14 * 1024 * 1024) return;
+
+    const roomName = textRoomName(currentTextRoom);
+    io.to(roomName).emit("new-photo", {
+      username,
+      imageData,
+      mimeType,
+      createdAt: new Date(),
+    });
+
+    // Küçük bir nezaket: o an kanalda gönderenden başka kimse yoksa,
+    // bunu bilsin (fotoğraf "kayboldu", kimse görmedi).
+    const othersInRoom = Object.values(textRooms[currentTextRoom] || {}).filter(
+      (u) => u.username !== username
+    );
+    if (othersInRoom.length === 0) {
+      socket.emit("new-message", {
+        username: "Sistem",
+        text: "Şu an kanalda başka kimse yoktu, fotoğrafı kimse görmedi.",
+        createdAt: new Date(),
+      });
     }
   });
 

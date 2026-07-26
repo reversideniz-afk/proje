@@ -87,6 +87,87 @@ async function run() {
     `ℹ️  (Bilgi amaçlı) Mesaj yayınlandı mı: ${received !== null ? "EVET" : "HAYIR (beklenen — DB yok)"}`
   );
 
+  // ============================================================
+  // YENİ: Fotoğraf paylaşımı testleri — bu DB gerektirmiyor (kalıcı
+  // değil, anlık), bu yüzden UÇTAN UCA, tam olarak test edebiliyorum.
+  // ============================================================
+
+  // 1) Normal boyutlu bir "fotoğraf" gönder, Veli anlık alıyor mu?
+  const photoPromise = new Promise((resolve) => clientB.on("new-photo", resolve));
+  clientA.emit("send-photo", {
+    token: "TEST_BYPASS:Ali",
+    imageData: "sahte-base64-veri",
+    mimeType: "image/png",
+  });
+  const photo = await Promise.race([
+    photoPromise,
+    new Promise((r) => setTimeout(() => r(null), 2000)),
+  ]);
+  check(
+    photo !== null && photo.username === "Ali" && photo.mimeType === "image/png",
+    "Fotoğraf gönderilince odadaki diğer kişi anlık alıyor"
+  );
+
+  // 2) Aşırı büyük bir "fotoğraf" (14MB sınırını aşan) sessizce
+  // reddedilmeli.
+  const oversizedPromise = new Promise((resolve) => clientB.on("new-photo", resolve));
+  clientA.emit("send-photo", {
+    token: "TEST_BYPASS:Ali",
+    imageData: "a".repeat(15 * 1024 * 1024),
+    mimeType: "image/png",
+  });
+  const oversizedResult = await Promise.race([
+    oversizedPromise,
+    new Promise((r) => setTimeout(() => r("TIMEOUT"), 2000)),
+  ]);
+  check(oversizedResult === "TIMEOUT", "Aşırı büyük fotoğraf sessizce reddediliyor (yayınlanmıyor)");
+
+  // 3) Görsel olmayan bir MIME türü reddedilmeli.
+  const wrongTypePromise = new Promise((resolve) => clientB.on("new-photo", resolve));
+  clientA.emit("send-photo", {
+    token: "TEST_BYPASS:Ali",
+    imageData: "veri",
+    mimeType: "application/exe",
+  });
+  const wrongTypeResult = await Promise.race([
+    wrongTypePromise,
+    new Promise((r) => setTimeout(() => r("TIMEOUT"), 1500)),
+  ]);
+  check(wrongTypeResult === "TIMEOUT", "Görsel olmayan bir dosya türü reddediliyor");
+
+  // 4) Kanalda YALNIZ olan biri fotoğraf atarsa, "kimse görmedi" bilgisi almalı.
+  const clientC = io(SERVER_URL, { reconnection: false });
+  await new Promise((resolve) => clientC.on("connect", resolve));
+  clientC.emit("join-channel", { roomId: "test-chat-photo-yalniz", token: "TEST_BYPASS:Yalniz" });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const systemMsgPromise = new Promise((resolve) => clientC.on("new-message", resolve));
+  clientC.emit("send-photo", {
+    token: "TEST_BYPASS:Yalniz",
+    imageData: "veri",
+    mimeType: "image/png",
+  });
+  const systemMsg = await Promise.race([
+    systemMsgPromise,
+    new Promise((r) => setTimeout(() => r(null), 2000)),
+  ]);
+  check(
+    systemMsg !== null && systemMsg.text.includes("kimse görmedi"),
+    "Kanalda yalnızken fotoğraf atınca 'kimse görmedi' bilgisi geliyor"
+  );
+  clientC.disconnect();
+
+  // 5) Sunucu hâlâ ayakta mı (üstteki reddedilen denemeler sonrası)?
+  const serverStillAliveAfterPhotos = await new Promise((resolve) => {
+    const pingClient = io(SERVER_URL, { reconnection: false, timeout: 2000 });
+    pingClient.on("connect", () => {
+      pingClient.disconnect();
+      resolve(true);
+    });
+    pingClient.on("connect_error", () => resolve(false));
+  });
+  check(serverStillAliveAfterPhotos, "Reddedilen fotoğraf denemeleri sonrası sunucu ÇÖKMÜYOR");
+
   clientA.disconnect();
   clientB.disconnect();
 

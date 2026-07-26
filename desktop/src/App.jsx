@@ -262,6 +262,13 @@ function App() {
   // --- Sohbet ---
   const [messages, setMessages] = useState([])
   const [chatInput, setChatInput] = useState('')
+  // YENİ: fotoğraflar — WhatsApp'ın "tek seferlik" fotoğrafı gibi,
+  // HİÇBİR YERE kaydedilmiyor. Bu yüzden mesajlardan (messages) AYRI,
+  // sadece bu oturumda tutulan bir liste — kanaldan çıkıp girince,
+  // ya da geçmiş mesaj yüklenince buraya hiç dokunulmuyor.
+  const [ephemeralPhotos, setEphemeralPhotos] = useState([])
+  const [isSendingPhoto, setIsSendingPhoto] = useState(false)
+  const photoFileInputRef = useRef(null)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
 
@@ -630,6 +637,7 @@ function App() {
     cleanupPeerConnections()
     setPeers([])
     setMessages([])
+    setEphemeralPhotos([])
     setHasMoreHistory(true)
     setOnlineMembers([])
     setOfflineMembers([])
@@ -652,6 +660,7 @@ function App() {
       cleanupPeerConnections()
       setPeers([])
       setMessages([])
+      setEphemeralPhotos([])
       setHasMoreHistory(true)
       setOnlineMembers([])
       setOfflineMembers([])
@@ -705,6 +714,17 @@ function App() {
 
       socket.on('new-message', (message) => {
         setMessages((prev) => [...prev, message])
+        requestAnimationFrame(() => {
+          if (chatMessagesRef.current) {
+            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+          }
+        })
+      })
+
+      // YENİ: fotoğraf geldiğinde — kalıcı 'messages' listesine DEĞİL,
+      // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
+      socket.on('new-photo', (photo) => {
+        setEphemeralPhotos((prev) => [...prev, photo])
         requestAnimationFrame(() => {
           if (chatMessagesRef.current) {
             chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
@@ -1006,6 +1026,46 @@ function App() {
     setChatInput('')
   }
 
+  // YENİ: Fotoğraf seçme — dosya seçilince boyutu/tipini kontrol edip
+  // base64'e çevirip gönderiyoruz. HİÇBİR YERE kaydedilmiyor, sadece
+  // o an kanalda olanlara anlık iletiliyor.
+  const MAX_PHOTO_BYTES = 10 * 1024 * 1024 // 10 MB
+
+  const handlePhotoButtonClick = () => {
+    photoFileInputRef.current?.click()
+  }
+
+  const handlePhotoFileSelected = (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // aynı dosyayı üst üste seçebilsin diye
+    if (!file || !socketRef.current) return
+
+    if (!file.type.startsWith('image/')) {
+      setMediaError('Sadece görsel dosyaları paylaşılabilir.')
+      return
+    }
+    if (file.size > MAX_PHOTO_BYTES) {
+      setMediaError('Fotoğraf çok büyük (en fazla 10 MB olabilir).')
+      return
+    }
+
+    setIsSendingPhoto(true)
+    const reader = new FileReader()
+    reader.onload = () => {
+      socketRef.current?.emit('send-photo', {
+        token: sessionTokenRef.current,
+        imageData: reader.result,
+        mimeType: file.type,
+      })
+      setIsSendingPhoto(false)
+    }
+    reader.onerror = () => {
+      setMediaError('Fotoğraf okunamadı, tekrar dener misin?')
+      setIsSendingPhoto(false)
+    }
+    reader.readAsDataURL(file)
+  }
+
   const handleLoadOlderMessages = () => {
     if (!socketRef.current || messages.length === 0 || isLoadingOlder) return
     setIsLoadingOlder(true)
@@ -1071,6 +1131,14 @@ function App() {
       </div>
     )
   }
+
+  // YENİ: Mesajlar (kalıcı) ve fotoğrafları (geçici) tek bir zaman
+  // çizelgesinde, zaman sırasına göre birleştiriyoruz — sohbette
+  // ikisi de aynı akışta görünsün diye.
+  const chatTimeline = [
+    ...messages.map((m) => ({ ...m, kind: 'text' })),
+    ...ephemeralPhotos.map((p) => ({ ...p, kind: 'photo' })),
+  ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
 
   return (
     <div className="app-shell">
@@ -1263,7 +1331,7 @@ function App() {
 
               <div className="chat-panel">
                 <div className="chat-messages" ref={chatMessagesRef}>
-                  {messages.length === 0 && (
+                  {chatTimeline.length === 0 && (
                     <p className="chat-empty-hint">Henüz mesaj yok, ilk mesajı sen at.</p>
                   )}
                   {messages.length > 0 && hasMoreHistory && (
@@ -1276,14 +1344,43 @@ function App() {
                       {isLoadingOlder ? 'Yükleniyor…' : 'Daha eski mesajları göster'}
                     </button>
                   )}
-                  {messages.map((msg, i) => (
-                    <div key={i} className="chat-message">
-                      <span className="chat-message-author">{msg.username}</span>
-                      <span className="chat-message-text">{msg.text}</span>
-                    </div>
-                  ))}
+                  {chatTimeline.map((item, i) =>
+                    item.kind === 'photo' ? (
+                      <div key={`photo-${i}`} className="chat-message chat-message--photo">
+                        <span className="chat-message-author">{item.username}</span>
+                        <img
+                          src={item.imageData}
+                          alt="Paylaşılan fotoğraf"
+                          className="chat-photo"
+                          onClick={() => window.open(item.imageData, '_blank')}
+                        />
+                        <span className="chat-photo-hint">📷 tek seferlik — kaydedilmiyor</span>
+                      </div>
+                    ) : (
+                      <div key={`text-${i}`} className="chat-message">
+                        <span className="chat-message-author">{item.username}</span>
+                        <span className="chat-message-text">{item.text}</span>
+                      </div>
+                    )
+                  )}
                 </div>
                 <form className="chat-input-form" onSubmit={handleSendMessage}>
+                  <input
+                    ref={photoFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handlePhotoFileSelected}
+                  />
+                  <button
+                    type="button"
+                    className="chat-photo-button"
+                    onClick={handlePhotoButtonClick}
+                    disabled={isSendingPhoto}
+                    title="Fotoğraf paylaş (kaydedilmez, sadece anlık)"
+                  >
+                    {isSendingPhoto ? '…' : '📷'}
+                  </button>
                   <input
                     type="text"
                     value={chatInput}
