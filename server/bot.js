@@ -38,34 +38,57 @@ if (!fs.existsSync(YTDLP_PATH)) {
   );
 }
 
-// YENİ: YouTube, bulut sunucularından gelen otomatik istekleri
-// engelleyebiliyor — giriş yapmış bir hesabın çerezlerini kullanmak
-// bunu büyük ölçüde azaltıyor. YOUTUBE_COOKIES ortam değişkeni JSON
-// formatında (tarayıcı eklentisinin ürettiği hal) geliyor, yt-dlp
-// ise "Netscape" formatında bir dosya bekliyor — burada birini
-// diğerine çeviriyoruz.
-let cookiesFilePath;
+// YENİ: Çerezleri artık sunucu başlarken TEK SEFER dosyaya yazmıyoruz.
+// Gördüğümüz kanıt şuydu: yt-dlp, kullandığı çerez dosyasını KENDİSİ
+// güncelleyip geri yazıyor (oturum bilgisini "tazeliyor") — bu da bir
+// SONRAKİ çağrıda dosyanın beklenmedik şekilde değişmiş/bozulmuş
+// olmasına yol açıyordu. Çözüm: HER çağrıda, senin ORİJİNAL
+// çerezlerinden SIFIRDAN, TAZE bir dosya üretiyoruz — yt-dlp'nin
+// yaptığı değişiklikler bir sonraki denemeyi hiç etkilemesin.
+let RAW_COOKIES = null;
 if (process.env.YOUTUBE_COOKIES) {
   try {
-    const cookies = JSON.parse(process.env.YOUTUBE_COOKIES);
+    RAW_COOKIES = JSON.parse(process.env.YOUTUBE_COOKIES);
+    console.log(`YouTube çerezleri ayrıştırıldı (${RAW_COOKIES.length} çerez, bot için).`);
+  } catch (err) {
+    console.error("UYARI: YOUTUBE_COOKIES ayrıştırılamadı:", err.message);
+  }
+} else {
+  console.warn(
+    "UYARI: YOUTUBE_COOKIES ayarlanmamış — bot YouTube'un bot-engeline takılabilir."
+  );
+}
+
+// Her çağrıda TAZE, BENZERSİZ bir çerez dosyası üretir (yt-dlp'nin
+// önceki çağrıda dosyayı değiştirmiş olmasından etkilenmesin diye).
+// Dönen değer: {filePath, cleanup} — cleanup() işin bitince dosyayı siler.
+function writeFreshCookiesFile() {
+  if (!RAW_COOKIES) return { filePath: null, cleanup: () => {} };
+  try {
     const lines = ["# Netscape HTTP Cookie File"];
-    cookies.forEach((c) => {
+    RAW_COOKIES.forEach((c) => {
       const domain = c.domain?.startsWith(".") ? c.domain : `.${c.domain || "youtube.com"}`;
       const path_ = c.path || "/";
       const secure = c.secure ? "TRUE" : "FALSE";
       const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 2147483647;
       lines.push([domain, "TRUE", path_, secure, expiry, c.name, c.value].join("\t"));
     });
-    cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
-    fs.writeFileSync(cookiesFilePath, lines.join("\n"));
-    console.log("YouTube çerezleri yt-dlp için hazırlandı (bot için).");
+    const filePath = path.join(os.tmpdir(), `yt-cookies-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+    fs.writeFileSync(filePath, lines.join("\n"));
+    return {
+      filePath,
+      cleanup: () => {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          /* zaten silinmiş olabilir, sorun değil */
+        }
+      },
+    };
   } catch (err) {
-    console.error("UYARI: YOUTUBE_COOKIES işlenemedi:", err.message);
+    console.error("UYARI: çerez dosyası yazılamadı:", err.message);
+    return { filePath: null, cleanup: () => {} };
   }
-} else {
-  console.warn(
-    "UYARI: YOUTUBE_COOKIES ayarlanmamış — bot YouTube'un bot-engeline takılabilir."
-  );
 }
 
 const OPUS_CODEC = new RTCRtpCodecParameters({
@@ -88,10 +111,11 @@ const VP8_CODEC = new RTCRtpCodecParameters({
 function resolveVideo(query) {
   const isUrl = /^https?:\/\//i.test(query);
   const target = isUrl ? query : `ytsearch1:${query}`;
+  const { filePath: cookiesFile, cleanup } = writeFreshCookiesFile();
 
   return new Promise((resolve, reject) => {
     const args = ["--dump-single-json", "--no-warnings", "--flat-playlist"];
-    if (cookiesFilePath) args.push("--cookies", cookiesFilePath);
+    if (cookiesFile) args.push("--cookies", cookiesFile);
     args.push(target);
 
     const proc = spawn(YTDLP_PATH, args);
@@ -100,6 +124,7 @@ function resolveVideo(query) {
     proc.stdout.on("data", (chunk) => (output += chunk));
     proc.stderr.on("data", (chunk) => (errorOutput += chunk.toString()));
     proc.on("close", (code) => {
+      cleanup();
       if (code !== 0) {
         return reject(new Error(errorOutput.slice(-500) || `yt-dlp çıkış kodu ${code}`));
       }
@@ -117,31 +142,30 @@ function resolveVideo(query) {
         reject(new Error(`yt-dlp çıktısı ayrıştırılamadı: ${err.message}`));
       }
     });
-    proc.on("error", (err) => reject(err));
+    proc.on("error", (err) => {
+      cleanup();
+      reject(err);
+    });
   });
 }
 
 // ---- yt-dlp (ham ses çeker) -> ffmpeg (garanti webm/opus'a çevirir)
 // zinciri kuruyor. İkisini birbirine pipe ediyoruz. ----
 function startAudioProcess(videoUrl, channel) {
+  const { filePath: cookiesFile, cleanup } = writeFreshCookiesFile();
   const ytdlpArgs = ["-f", "bestaudio", "-o", "-", "--no-warnings"];
-  if (cookiesFilePath) ytdlpArgs.push("--cookies", cookiesFilePath);
+  if (cookiesFile) ytdlpArgs.push("--cookies", cookiesFile);
   ytdlpArgs.push(videoUrl);
 
-  // YENİ (kesin teşhis): tam bu anda çerez dosyası GERÇEKTEN var mı,
-  // kaç satır içeriyor — tahmin etmeyelim, direkt görelim.
-  if (cookiesFilePath) {
+  if (cookiesFile) {
     try {
-      const stat = fs.statSync(cookiesFilePath);
-      const lineCount = fs.readFileSync(cookiesFilePath, "utf-8").split("\n").length;
-      console.log(
-        `[bot/${channel}] Çerez dosyası kullanılıyor: ${cookiesFilePath} (${stat.size} bayt, ${lineCount} satır)`
-      );
-    } catch (err) {
-      console.error(`[bot/${channel}] UYARI: çerez dosyası OKUNAMADI:`, err.message);
+      const stat = fs.statSync(cookiesFile);
+      console.log(`[bot/${channel}] Taze çerez dosyası kullanılıyor (${stat.size} bayt).`);
+    } catch {
+      /* önemli değil, sadece bilgi amaçlı log */
     }
   } else {
-    console.warn(`[bot/${channel}] UYARI: cookiesFilePath tanımsız — çerezsiz deneniyor.`);
+    console.warn(`[bot/${channel}] UYARI: çerez yok — çerezsiz deneniyor.`);
   }
 
   const ytdlpProc = spawn(YTDLP_PATH, ytdlpArgs);
@@ -156,16 +180,31 @@ function startAudioProcess(videoUrl, channel) {
 
   ytdlpProc.stdout.pipe(ffmpegProc.stdin);
 
+  // YENİ: bu iki akışın uçları kapandığında (ör. ffmpeg süreci beklenmedik
+  // şekilde biterken yt-dlp hâlâ veri yazmaya çalışıyorsa) oluşan "EPIPE"
+  // hatasını burada YAKALIYORUZ — önceden bu, sunucuyu (güvenlik ağımız
+  // sayesinde çökertmese de) yakalanmamış bir hata olarak düşürüyordu.
+  ffmpegProc.stdin.on("error", (err) => {
+    if (err.code !== "EPIPE") {
+      console.error(`[bot/${channel}] ffmpeg girişinde hata:`, err.message);
+    }
+  });
+  ytdlpProc.stdout.on("error", (err) => {
+    console.error(`[bot/${channel}] yt-dlp çıkışında hata:`, err.message);
+  });
+
   let ytdlpErrorTail = "";
   ytdlpProc.stderr.on("data", (chunk) => {
     ytdlpErrorTail = (ytdlpErrorTail + chunk.toString()).slice(-1500);
   });
   ytdlpProc.on("close", (code) => {
+    cleanup();
     if (code !== 0 && code !== null) {
       console.error(`[bot/${channel}] yt-dlp çıkış kodu ${code}:\n${ytdlpErrorTail}`);
     }
   });
   ytdlpProc.on("error", (err) => {
+    cleanup();
     console.error(`[bot/${channel}] yt-dlp başlatılamadı:`, err.message);
   });
 
