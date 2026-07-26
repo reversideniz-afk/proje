@@ -222,10 +222,9 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       videoUrl = firstVideo.url;
     }
 
-    const info = await ytdl.getBasicInfo(videoUrl, { agent: ytdlAgent });
-    // YENİ (teşhis): hangi videoda kaç format bulunduğunu, hangi
-    // türde olduklarını logluyoruz — "hiç ses formatı yok mu" sorusuna
-    // kesin cevap versin diye.
+    // NOT: getBasicInfo() format listesini İÇERMİYOR — bu yüzden
+    // getInfo() kullanıyoruz (biraz daha yavaş ama formats dolu geliyor).
+    const info = await ytdl.getInfo(videoUrl, { agent: ytdlAgent });
     console.log(
       `[bot/${channel}] "${info.videoDetails.title}" (${videoUrl}) — ${info.formats.length} format bulundu, ${info.formats.filter((f) => f.hasAudio).length} tanesinde ses var.`
     );
