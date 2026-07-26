@@ -224,6 +224,23 @@ function startAudioProcess(videoUrl, channel) {
   return { ytdlpProc, ffmpegProc, audioStream: ffmpegProc.stdout };
 }
 
+// YENİ: Botun bağlantısına da (gerçek kullanıcılarınki gibi) STUN/TURN
+// bilgisi veriyoruz. Bu olmadan, Render'daki sunucu ile senin evindeki
+// bilgisayarın birbirini ağ üzerinde bulamayabiliyor — HİÇBİR hata
+// vermeden, sessizce. "Loglarda sorun yok ama ses gelmiyor"
+// durumunun en olası açıklaması tam olarak buydu.
+function buildBotIceServers() {
+  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
+  const { TURN_URL, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
+  if (TURN_URL && TURN_USERNAME && TURN_CREDENTIAL) {
+    servers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_CREDENTIAL });
+  } else {
+    console.warn("UYARI: Bot için TURN bilgisi yok — sadece STUN ile deneyecek.");
+  }
+  return servers;
+}
+const BOT_ICE_SERVERS = buildBotIceServers();
+
 function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemberList }) {
   // channel -> { peerConnections: Map<realSocketId, {pc, sender}>, currentProcess, inVoice }
   const channelState = new Map();
@@ -248,6 +265,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
   function createConnectionToPeer(channel, realSocketId) {
     const state = getOrCreateChannelState(channel);
     const pc = new RTCPeerConnection({
+      iceServers: BOT_ICE_SERVERS,
       codecs: { audio: [OPUS_CODEC], video: [VP8_CODEC] },
     });
 
@@ -266,6 +284,15 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
           data: { type: "ice-candidate", candidate, connectionType: "main" },
         });
       }
+    };
+
+    // YENİ (kesin teşhis): bağlantı gerçekten "connected" durumuna
+    // ulaşıyor mu, yoksa takılıp kalıyor mu — artık bunu doğrudan görüyoruz.
+    pc.onconnectionstatechange = () => {
+      console.log(`[bot/${channel}] ${realSocketId} bağlantı durumu: ${pc.connectionState}`);
+    };
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[bot/${channel}] ${realSocketId} ICE durumu: ${pc.iceConnectionState}`);
     };
 
     // sender.sendRtp: ham ses verisini (Opus payload) alıp doğru RTP
