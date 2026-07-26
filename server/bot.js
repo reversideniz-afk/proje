@@ -348,17 +348,34 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     audioStream.pipe(demuxer);
 
     state.currentProcess = { ytdlpProc, ffmpegProc, demuxer };
+    state._loggedSendError = false;
 
     demuxer.on("error", (err) => {
       console.error(`[bot/${channel}] ses ayrıştırma hatası:`, err.message);
     });
 
+    // YENİ (teşhis): boru hattının GERÇEKTEN veri üretip üretmediğini
+    // ve o veriyi göndermeye çalışırken hata olup olmadığını görelim
+    // — önceden hatalar sessizce yutuluyordu.
+    let firstPacketLogged = false;
     demuxer.on("data", (opusPacket) => {
-      state.peerConnections.forEach(({ sender }) => {
+      if (!firstPacketLogged) {
+        firstPacketLogged = true;
+        console.log(
+          `[bot/${channel}] İlk ses paketi üretildi (${opusPacket.length} bayt). Şu an ${state.peerConnections.size} bağlantıya gönderiliyor.`
+        );
+      }
+      state.peerConnections.forEach(({ pc, sender }, peerSocketId) => {
         try {
           sender.sendRtp(opusPacket);
         } catch (err) {
-          // Bir bağlantıda anlık bir sorun olsa bile diğerlerini etkilemesin.
+          if (!state._loggedSendError) {
+            state._loggedSendError = true;
+            console.error(
+              `[bot/${channel}] ${peerSocketId} bağlantı durumu: ${pc.connectionState}, ICE: ${pc.iceConnectionState} — gönderim hatası:`,
+              err.message
+            );
+          }
         }
       });
     });
