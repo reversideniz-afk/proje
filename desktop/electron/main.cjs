@@ -39,7 +39,7 @@ function createWindow() {
     width: 1100,
     height: 720,
     // "title" pencerenin üst çubuğunda görünen isim
-    title: "Sesli Sohbet",
+    title: "Disco",
     webPreferences: {
       // preload.js: renderer (React) ile main process arasında GÜVENLİ
       // bir köprü. Şu an için boş ama ileride (ör. sistem bildirimleri

@@ -160,7 +160,61 @@ function EyeIcon({ visible }) {
   )
 }
 
+// YENİ: her ekranda (giriş dahil) sabit köşede duran küçük yakınlaştırma
+// kontrolü — Ctrl+/Ctrl- ile aynı işi yapar, sadece tıklanabilir hali.
+function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset }) {
+  return (
+    <div className="zoom-control">
+      <button onClick={onZoomOut} title="Küçült (Ctrl -)">
+        −
+      </button>
+      <span onClick={onReset} title="Sıfırla (Ctrl 0)">
+        {Math.round(zoomLevel * 100)}%
+      </span>
+      <button onClick={onZoomIn} title="Büyüt (Ctrl +)">
+        +
+      </button>
+    </div>
+  )
+}
+
 function App() {
+  // YENİ: Arayüz yakınlaştırma — tüm pencereyi büyütüp küçültüyor.
+  // Son seçilen seviye, uygulama kapanıp açılsa bile hatırlanıyor.
+  const [zoomLevel, setZoomLevel] = useState(() => {
+    const saved = window.localStorage?.getItem('zoomLevel')
+    const parsed = saved ? parseFloat(saved) : 1
+    return Number.isFinite(parsed) ? parsed : 1
+  })
+
+  useEffect(() => {
+    window.electronAPI?.setZoomFactor?.(zoomLevel)
+    window.localStorage?.setItem('zoomLevel', String(zoomLevel))
+  }, [zoomLevel])
+
+  const zoomIn = () => setZoomLevel((z) => Math.min(Math.round((z + 0.1) * 10) / 10, 1.8))
+  const zoomOut = () => setZoomLevel((z) => Math.max(Math.round((z - 0.1) * 10) / 10, 0.6))
+  const zoomReset = () => setZoomLevel(1)
+
+  // Ctrl+ / Ctrl- / Ctrl+0 (Mac'te Cmd) — standart yakınlaştırma kısayolları.
+  useEffect(() => {
+    const handleKeydown = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        zoomIn()
+      } else if (e.key === '-') {
+        e.preventDefault()
+        zoomOut()
+      } else if (e.key === '0') {
+        e.preventDefault()
+        zoomReset()
+      }
+    }
+    window.addEventListener('keydown', handleKeydown)
+    return () => window.removeEventListener('keydown', handleKeydown)
+  }, [])
+
   // --- Kişisel hesap girişi ---
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -184,6 +238,9 @@ function App() {
 
   // YENİ: kanal listesi artık sunucudan geliyor (koda gömülü değil).
   const [channels, setChannels] = useState([])
+  // YENİ: bu kişinin daha önce üye olduğu kanallar — bu kanallara
+  // girerken şifre sorulmuyor.
+  const [memberChannels, setMemberChannels] = useState([])
 
   // --- Kanal (metin) durumu ---
   const [activeChannel, setActiveChannel] = useState(null)
@@ -912,6 +969,7 @@ function App() {
             setIceServers(response.iceServers)
           }
           setChannels(Array.isArray(response.channels) ? response.channels : [])
+          setMemberChannels(Array.isArray(response.memberChannels) ? response.memberChannels : [])
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -929,6 +987,11 @@ function App() {
     e.preventDefault()
     if (pendingChannel) {
       joinChannel(pendingChannel, channelPasswordInput)
+      // İyimser güncelleme: doğru şifreyse (asıl kontrol sunucuda,
+      // burası sadece kilit ikonunu güncelliyor) bir daha sormasın.
+      setMemberChannels((prev) =>
+        prev.includes(pendingChannel) ? prev : [...prev, pendingChannel]
+      )
     }
     setPendingChannel(null)
     setShowChannelPassword(false)
@@ -969,7 +1032,7 @@ function App() {
   if (!loggedIn) {
     return (
       <div className="name-entry">
-        <h1>Sesli Sohbet</h1>
+        <h1>Disco</h1>
         <p>Hesabınla giriş yap:</p>
         <form onSubmit={handleLogin}>
           <input
@@ -1004,6 +1067,7 @@ function App() {
         <p className="name-entry-hint">
           Hesabın yoksa, grubu kuran kişiden hesap açmasını isteyebilirsin.
         </p>
+        <ZoomControl zoomLevel={zoomLevel} onZoomOut={zoomOut} onZoomIn={zoomIn} onReset={zoomReset} />
       </div>
     )
   }
@@ -1011,23 +1075,31 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="channel-sidebar">
-        <h1 className="app-title">Sesli Sohbet</h1>
+        <h1 className="app-title">Disco</h1>
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
-          {channels.map((channel) => (
-            <button
-              key={channel}
-              className={
-                'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
-              }
-              onClick={() => {
-                setPendingChannel(channel)
-                setChannelPasswordInput('')
-              }}
-            >
-              # {channel}
-            </button>
-          ))}
+          {channels.map((channel) => {
+            const isMember = memberChannels.includes(channel)
+            return (
+              <button
+                key={channel}
+                className={
+                  'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
+                }
+                onClick={() => {
+                  if (isMember) {
+                    // YENİ: zaten üyeysen şifre sorulmadan direkt gir.
+                    joinChannel(channel, null)
+                  } else {
+                    setPendingChannel(channel)
+                    setChannelPasswordInput('')
+                  }
+                }}
+              >
+                # {channel} {!isMember && <span className="channel-lock">🔒</span>}
+              </button>
+            )
+          })}
         </nav>
       </aside>
 
@@ -1321,6 +1393,8 @@ function App() {
           </div>
         </div>
       )}
+
+      <ZoomControl zoomLevel={zoomLevel} onZoomOut={zoomOut} onZoomIn={zoomIn} onReset={zoomReset} />
     </div>
   )
 }

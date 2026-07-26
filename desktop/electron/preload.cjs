@@ -14,7 +14,7 @@
 //     iptal etti)" bilgisini main.cjs'e geri gönderir.
 // ============================================================
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   onScreenSources: (callback) => {
@@ -27,5 +27,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   selectScreenSource: (sourceId) => {
     ipcRenderer.send("screen-source-selected", sourceId);
   },
+  // YENİ: Arayüz yakınlaştırma — tüm pencereyi (yazı, buton, boşluk,
+  // her şeyi orantılı) büyütüp küçültüyor. webFrame, Electron'un
+  // renderer-seviyesinde zoom kontrolü sağlayan modülü.
+  setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
+  getZoomFactor: () => webFrame.getZoomFactor(),
 });
 

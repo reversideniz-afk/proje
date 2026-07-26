@@ -11,6 +11,12 @@
 //      ihtiyaç duymayan kısım)
 //   3) MongoDB bağlı DEĞİLKEN bile sunucu çökmeden, düzgün bir hata
 //      mesajıyla "giriş başarısız" diyebiliyor mu (sağlamlık testi)
+// YENİ: "zaten üyesen şifre sorulmasın" özelliği DOĞRUDAN MongoDB'ye
+// dayandığı için (kimin üye olduğunu oradan kontrol ediyoruz), bu
+// spesifik davranışı burada test EDEMİYORUM — gerçek DB ile
+// (kardeşinle) canlı test etmen gerekiyor. Burada sadece DB
+// bağlı DEĞİLKEN bile eski (üye kontrolü olmadan çalışan) davranışın
+// bozulmadığını doğruluyorum.
 // ============================================================
 const bcrypt = require("bcryptjs");
 const { io } = require("socket.io-client");

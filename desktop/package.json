@@ -15,7 +15,7 @@
   },
   "build": {
     "appId": "com.alganis.seslisohbet",
-    "productName": "Sesli Sohbet",
+    "productName": "Disco",
     "files": [
       "dist/**/*",
       "electron/**/*",

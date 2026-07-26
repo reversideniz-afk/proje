@@ -809,3 +809,50 @@
   text-align: center;
   margin: 4px 0 0 0;
 }
+
+.zoom-control {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 900;
+}
+
+.zoom-control button {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 16px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-control button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.zoom-control span {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 38px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.channel-lock {
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 2px;
+}

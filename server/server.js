@@ -167,12 +167,24 @@ io.on("connection", (socket) => {
       }
       const token = crypto.randomUUID();
       sessionTokens.set(token, user.username);
+
+      // YENİ: bu kullanıcının daha önce üye olduğu kanalları da
+      // gönderiyoruz — istemci bu kanallar için şifre sormayacak.
+      let memberChannels = [];
+      try {
+        const memberships = await ChannelMember.find({ username: user.username }).lean();
+        memberChannels = memberships.map((m) => m.channel);
+      } catch (err) {
+        console.error("Üyelikler alınırken hata:", err.message);
+      }
+
       callback({
         success: true,
         username: user.username,
         token,
         iceServers: buildIceServers(),
         channels: CHANNELS_CONFIG.map((c) => c.name),
+        memberChannels,
       });
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
@@ -192,7 +204,19 @@ io.on("connection", (socket) => {
       socket.emit("join-error", "Böyle bir kanal yok.");
       return;
     }
-    if (channelConfig.secret && secret !== channelConfig.secret) {
+
+    // YENİ: Bu kişi bu kanalın DAHA ÖNCE zaten üyesi olmuşsa (bir kere
+    // doğru şifreyle girmişse), şifreyi tekrar sormuyoruz — sadece HİÇ
+    // üye olmadığı bir kanala girerken şifre isteniyor.
+    let isExistingMember = false;
+    try {
+      const existingMembership = await ChannelMember.findOne({ channel: roomId, username });
+      isExistingMember = !!existingMembership;
+    } catch (err) {
+      console.error("Üyelik kontrolü sırasında hata:", err.message);
+    }
+
+    if (!isExistingMember && channelConfig.secret && secret !== channelConfig.secret) {
       socket.emit("join-error", "Yanlış kanal şifresi.");
       return;
     }
