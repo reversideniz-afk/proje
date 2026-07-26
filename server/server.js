@@ -18,6 +18,7 @@ const http = require("http");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const bcrypt = require("bcryptjs");
+const { createMusicBot, BOT_SOCKET_PREFIX } = require("./bot");
 
 // YENİ (sağlamlık): Kodda gözden kaçan bir hata olsa bile (ör. beklenmedik
 // bir veri tipi), sunucunun TÜMDEN çökmesini istemiyoruz — herkesin
@@ -127,6 +128,15 @@ async function buildMemberList(channel) {
     username: u.username,
     inVoice: Object.values(voiceRooms[channel] || {}).some((v) => v.username === u.username),
   }));
+
+  // YENİ: Bot, her kanala otomatik "eklenmiş" görünür — kendi bir
+  // socket bağlantısı olmasa bile, listede daima çevrimiçi.
+  online.push({
+    username: musicBot.BOT_NAME,
+    inVoice: Object.values(voiceRooms[channel] || {}).some((v) => v.isBot),
+    isBot: true,
+  });
+
   const onlineUsernames = new Set(online.map((m) => m.username));
 
   let offline = [];
@@ -140,6 +150,17 @@ async function buildMemberList(channel) {
   }
   return { online, offline };
 }
+
+// YENİ: Müzik botu — io/oda yapıları hazır olduktan sonra kuruluyor,
+// bu fonksiyonlara referans veriyoruz ki bot.js kendi bağlantılarını/
+// duyurularını aynı altyapı üzerinden yapabilsin.
+const musicBot = createMusicBot({
+  io,
+  voiceRooms,
+  textRoomName,
+  voiceRoomName,
+  buildMemberList,
+});
 
 io.on("connection", (socket) => {
   let currentTextRoom = null;
@@ -306,6 +327,14 @@ io.on("connection", (socket) => {
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
     }
+
+    // YENİ: Mesaj bir bot komutuysa (! ile başlıyorsa), botu tetikle.
+    // Mesajın kendisi zaten normal şekilde kaydedildi/yayınlandı (komutu
+    // kimin, ne zaman yazdığı sohbette görünsün diye) — bot buna EK
+    // olarak tepki veriyor.
+    musicBot.handleChatCommand(currentTextRoom, trimmedText).catch((err) => {
+      console.error("Bot komutu işlenirken hata:", err.message);
+    });
   });
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
@@ -336,6 +365,13 @@ io.on("connection", (socket) => {
 
   // ---- WebRTC sinyal mesajlarını ilet (offer / answer / ice candidate) ----
   socket.on("signal", ({ to, data }) => {
+    // YENİ: hedef bot ise, sunucudaki normal yönlendirme yerine
+    // doğrudan bot modülüne veriyoruz (bot gerçek bir socket değil).
+    if (typeof to === "string" && to.startsWith(BOT_SOCKET_PREFIX)) {
+      const channel = to.slice(BOT_SOCKET_PREFIX.length);
+      musicBot.handleIncomingSignal(channel, socket.id, data);
+      return;
+    }
     io.to(to).emit("signal", { from: socket.id, data });
   });
 

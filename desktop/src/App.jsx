@@ -1233,7 +1233,8 @@ function App() {
                   {onlineMembers.map((m) => (
                     <li key={m.username} className="member-item member-item--online">
                       <span className="member-status-dot member-status-dot--online" />
-                      {m.username} {m.inVoice && '🎙️'}
+                      {m.username} {m.isBot && <span className="bot-tag">BOT</span>}{' '}
+                      {m.inVoice && '🎙️'}
                     </li>
                   ))}
                 </ul>
