@@ -128,6 +128,22 @@ function startAudioProcess(videoUrl, channel) {
   if (cookiesFilePath) ytdlpArgs.push("--cookies", cookiesFilePath);
   ytdlpArgs.push(videoUrl);
 
+  // YENİ (kesin teşhis): tam bu anda çerez dosyası GERÇEKTEN var mı,
+  // kaç satır içeriyor — tahmin etmeyelim, direkt görelim.
+  if (cookiesFilePath) {
+    try {
+      const stat = fs.statSync(cookiesFilePath);
+      const lineCount = fs.readFileSync(cookiesFilePath, "utf-8").split("\n").length;
+      console.log(
+        `[bot/${channel}] Çerez dosyası kullanılıyor: ${cookiesFilePath} (${stat.size} bayt, ${lineCount} satır)`
+      );
+    } catch (err) {
+      console.error(`[bot/${channel}] UYARI: çerez dosyası OKUNAMADI:`, err.message);
+    }
+  } else {
+    console.warn(`[bot/${channel}] UYARI: cookiesFilePath tanımsız — çerezsiz deneniyor.`);
+  }
+
   const ytdlpProc = spawn(YTDLP_PATH, ytdlpArgs);
   const ffmpegProc = spawn(ffmpegPath, [
     "-i", "pipe:0",
