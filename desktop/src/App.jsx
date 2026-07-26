@@ -311,29 +311,6 @@ function App() {
 
   const localMainStreamRef = useRef(null)
 
-  // YENİ: Bot müziğini mikrofonla "karıştırmak" için paylaşılan ses
-  // altyapısı. Böylece müzik, mikrofonla AYNI giden hatta gidiyor —
-  // mikrofonu yazılımdan kapatınca müzik de otomatik kesiliyor
-  // (donanım/kulaklık düğmesiyle kapatmak bunu etkilemiyor, çünkü
-  // yazılım hâlâ "mikrofon açık" sanıyor — istenen davranış tam bu).
-  const audioMixContextRef = useRef(null)
-  const mixDestinationRef = useRef(null)
-  const musicAudioElRef = useRef(null)
-  const musicSourceNodeRef = useRef(null)
-
-  const getOrCreateAudioMix = useCallback(() => {
-    if (!audioMixContextRef.current) {
-      audioMixContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
-    }
-    if (audioMixContextRef.current.state === 'suspended') {
-      audioMixContextRef.current.resume()
-    }
-    if (!mixDestinationRef.current) {
-      mixDestinationRef.current = audioMixContextRef.current.createMediaStreamDestination()
-    }
-    return { ctx: audioMixContextRef.current, destination: mixDestinationRef.current }
-  }, [])
-
   useEffect(() => {
     localMainStreamRef.current = localMainStream
   }, [localMainStream])
@@ -576,10 +553,6 @@ function App() {
     setEnlargedTile(null)
     setInVoice(false)
     setVolumeMenuFor(null)
-    // YENİ: o an müzik çalıyorsa (bu kişi üzerinden), onu da durdur.
-    if (musicAudioElRef.current) {
-      musicAudioElRef.current.pause()
-    }
     // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
     // girişte sıfırdan, temiz kurulacaklar).
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
@@ -682,54 +655,6 @@ function App() {
         })
       })
 
-      // YENİ: Müzik botu — "!çal" komutunu BEN yazdıysam (ve sesteysem),
-      // sunucu bana "şu adresi çal" diyor. Müziği kendi <audio>
-      // elemanımla çalıp, karışım hattına bağlayarak mikrofonuma
-      // "karıştırıyorum" — böylece diğerleri bunu benim ses
-      // bağlantımdan (zaten çalışan, güvenilir yoldan) duyuyor.
-      socket.on('bot-play', ({ streamUrl }) => {
-        const fullUrl = `${SERVER_URL}${streamUrl}`
-        console.log('[bot müziği] Çalma isteği alındı:', fullUrl)
-        try {
-          const { ctx, destination } = getOrCreateAudioMix()
-          console.log('[bot müziği] AudioContext durumu:', ctx.state)
-          if (!musicAudioElRef.current) {
-            const audioEl = new Audio()
-            audioEl.crossOrigin = 'anonymous'
-            audioEl.addEventListener('playing', () => {
-              console.log('[bot müziği] ✅ Gerçekten çalmaya BAŞLADI.')
-            })
-            audioEl.addEventListener('error', () => {
-              console.error(
-                '[bot müziği] <audio> elemanı hata verdi:',
-                audioEl.error?.code,
-                audioEl.error?.message
-              )
-            })
-            const source = ctx.createMediaElementSource(audioEl)
-            source.connect(destination)
-            musicAudioElRef.current = audioEl
-            musicSourceNodeRef.current = source
-            console.log('[bot müziği] <audio> elemanı ve karışım bağlantısı ilk kez kuruldu.')
-          }
-          musicAudioElRef.current.src = fullUrl
-          musicAudioElRef.current
-            .play()
-            .then(() => console.log('[bot müziği] play() başarıyla çağrıldı (tarayıcı reddetmedi).'))
-            .catch((err) => {
-              console.error('[bot müziği] play() REDDEDİLDİ:', err.name, err.message)
-            })
-        } catch (err) {
-          console.error('[bot müziği] kurulum sırasında hata:', err)
-        }
-      })
-
-      socket.on('bot-stop', () => {
-        if (musicAudioElRef.current) {
-          musicAudioElRef.current.pause()
-        }
-      })
-
       // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
       // tetiklenmezler ama baştan hazır olmaları lazım. ----
       socket.on('existing-voice-users', (users) => {
@@ -828,35 +753,28 @@ function App() {
   // bas-konuş bunu kullanıyor, mantık tek bir yerde.
   const setMicActive = useCallback(
     async (active) => {
-      const existingMixedTrack = localMainStream?.getAudioTracks()[0]
-      if (!existingMixedTrack) {
+      const existingAudioTrack = localMainStream?.getAudioTracks()[0]
+      if (!existingAudioTrack) {
         if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          // YENİ: mikrofonu DOĞRUDAN göndermek yerine, paylaşılan
-          // karışım hattından geçiriyoruz — bot müziği de aynı hatta
-          // karışacak (bkz. 'bot-play' dinleyicisi).
-          const { ctx, destination } = getOrCreateAudioMix()
-          const micSourceNode = ctx.createMediaStreamSource(micStream)
-          micSourceNode.connect(destination)
-          const mixedTrack = destination.stream.getAudioTracks()[0]
-
+          const newAudioTrack = micStream.getAudioTracks()[0]
           const otherTracks = localMainStream ? localMainStream.getTracks() : []
-          const newLocalStream = new MediaStream([...otherTracks, mixedTrack])
+          const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
           setLocalMainStream(newLocalStream)
           setIsMicOn(true)
-          addTrackToMainConnections(mixedTrack, newLocalStream)
+          addTrackToMainConnections(newAudioTrack, newLocalStream)
           socketRef.current?.emit('state-update', { muted: false })
         } catch (err) {
           setMediaError(describeMediaError(err))
         }
         return
       }
-      existingMixedTrack.enabled = active
+      existingAudioTrack.enabled = active
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
     },
-    [localMainStream, addTrackToMainConnections, getOrCreateAudioMix]
+    [localMainStream, addTrackToMainConnections]
   )
 
   const toggleMic = useCallback(() => {
@@ -1316,8 +1234,7 @@ function App() {
                   {onlineMembers.map((m) => (
                     <li key={m.username} className="member-item member-item--online">
                       <span className="member-status-dot member-status-dot--online" />
-                      {m.username} {m.isBot && <span className="bot-tag">BOT</span>}{' '}
-                      {m.inVoice && '🎙️'}
+                      {m.username} {m.inVoice && '🎙️'}
                     </li>
                   ))}
                 </ul>

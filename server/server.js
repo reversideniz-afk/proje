@@ -18,7 +18,6 @@ const http = require("http");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const bcrypt = require("bcryptjs");
-const { createMusicBot } = require("./bot");
 
 // YENİ (sağlamlık): Kodda gözden kaçan bir hata olsa bile (ör. beklenmedik
 // bir veri tipi), sunucunun TÜMDEN çökmesini istemiyoruz — herkesin
@@ -142,31 +141,6 @@ async function buildMemberList(channel) {
   }
   return { online, offline };
 }
-
-// YENİ: bir kişinin belirli bir kanalda seste olup olmadığını
-// kontrol eden basit yardımcı — müzik botu, "!çal" yazan kişinin
-// gerçekten seste olup olmadığını buradan soruyor.
-function isUserInVoice(channel, socketId) {
-  return !!(voiceRooms[channel] && voiceRooms[channel][socketId]);
-}
-
-// YENİ: Müzik botu — artık kendi WebRTC bağlantısı KURMUYOR (bu,
-// önceki mimaride çözemediğimiz sorunların kaynağıydı). Bunun
-// yerine, komutu yazan kişinin İSTEMCİSİNE "şu adresi çal" diyor —
-// o kişi zaten sesteyse, müzik onun ZATEN ÇALIŞAN bağlantısından gider.
-const musicBot = createMusicBot({ io, textRoomName, isUserInVoice });
-
-// YENİ: Botun YouTube'dan çektiği sesi HTTP üzerinden yayınladığı
-// adres — istemciler burayı bir <audio> elemanıyla doğrudan çalabilir.
-app.get("/bot-audio", (req, res) => {
-  const videoUrl = req.query.url;
-  if (!videoUrl || typeof videoUrl !== "string") {
-    return res.status(400).end();
-  }
-  res.setHeader("Content-Type", "audio/webm");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  musicBot.streamAudioToResponse(videoUrl, res);
-});
 
 io.on("connection", (socket) => {
   let currentTextRoom = null;
@@ -303,7 +277,6 @@ io.on("connection", (socket) => {
     }
     socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
     socket.leave(voiceRoomName(roomId));
-    musicBot.handleHostDisconnected(roomId, socket.id);
 
     const memberList = await buildMemberList(roomId);
     io.to(textRoomName(roomId)).emit("channel-members", memberList);
@@ -334,14 +307,6 @@ io.on("connection", (socket) => {
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
     }
-
-    // YENİ: Mesaj bir bot komutuysa (! ile başlıyorsa), botu tetikle.
-    // Mesajın kendisi zaten normal şekilde kaydedildi/yayınlandı (komutu
-    // kimin, ne zaman yazdığı sohbette görünsün diye) — bot buna EK
-    // olarak tepki veriyor.
-    musicBot.handleChatCommand(currentTextRoom, trimmedText, socket.id).catch((err) => {
-      console.error("Bot komutu işlenirken hata:", err.message);
-    });
   });
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
@@ -394,7 +359,6 @@ io.on("connection", (socket) => {
         if (Object.keys(voiceRooms[roomId]).length === 0) delete voiceRooms[roomId];
       }
       socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
-      musicBot.handleHostDisconnected(roomId, socket.id);
     }
     if (currentTextRoom) {
       const roomId = currentTextRoom;

@@ -24,14 +24,6 @@
 const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu } = require("electron");
 const path = require("path");
 
-// YENİ: Chromium, normalde "kullanıcı az önce bir şeye tıklamadıysa" sesin
-// otomatik çalmasını engeller. Bizim durumumuzda müzik botu, bir sohbet
-// mesajına (sunucudan gecikmeli bir cevap olarak) tepki olarak çalmaya
-// başlıyor — bu, tarayıcının "az önce tıklandı" penceresini kaçırabiliyor.
-// Bu satır, bu kısıtlamayı TAMAMEN kaldırıyor (sadece bizim kendi
-// uygulamamızda geçerli, başka hiçbir web sitesini etkilemiyor).
-app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
-
 // app.isPackaged: uygulama .exe/.dmg olarak paketlenip paketlenmediğini
 // söylüyor. Paketlenmemişse (yani "npm run dev" ile geliştirme modundaysak)
 // isDev true olur.
