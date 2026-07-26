@@ -22,10 +22,41 @@ const prism = require("prism-media");
 const BOT_NAME = process.env.BOT_NAME || "DJ Dikkat";
 const BOT_SOCKET_PREFIX = "bot-voice::";
 
+// YENİ: YouTube, Render gibi bulut sunucularından gelen otomatik
+// istekleri "bot" olarak işaretleyip engelliyor. Bunu aşmak için,
+// giriş yapmış gerçek bir YouTube hesabının çerezlerini kullanıyoruz
+// — bu, isteklerin "gerçek bir kullanıcıdan" geliyormuş gibi
+// görünmesini sağlıyor. YOUTUBE_COOKIES ortam değişkeni ayarlı
+// değilse, bot yine çalışmaya çalışır ama YouTube'un engeline takılma
+// ihtimali yüksek kalır.
+let ytdlAgent;
+if (process.env.YOUTUBE_COOKIES) {
+  try {
+    const cookies = JSON.parse(process.env.YOUTUBE_COOKIES);
+    ytdlAgent = ytdl.createAgent(cookies);
+    console.log("YouTube çerezleri yüklendi (bot için).");
+  } catch (err) {
+    console.error("UYARI: YOUTUBE_COOKIES ayrıştırılamadı:", err.message);
+  }
+} else {
+  console.warn(
+    "UYARI: YOUTUBE_COOKIES ayarlanmamış — bot YouTube'un bot-engeline takılabilir."
+  );
+}
+
 const OPUS_CODEC = new RTCRtpCodecParameters({
   mimeType: "audio/opus",
   clockRate: 48000,
   channels: 2,
+});
+
+// YENİ: video'yu "inactive" (kapalı) bıraksak bile, müzakerenin
+// tamamlanabilmesi için EN AZ bir video codec'i tanımlı olması
+// gerekiyor — yoksa "negotiate codecs failed" hatası alınıyor
+// (bunu gerçek bir müzakere testiyle bulup doğruladım).
+const VP8_CODEC = new RTCRtpCodecParameters({
+  mimeType: "video/VP8",
+  clockRate: 90000,
 });
 
 function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemberList }) {
@@ -53,7 +84,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
   function createConnectionToPeer(channel, realSocketId) {
     const state = getOrCreateChannelState(channel);
     const pc = new RTCPeerConnection({
-      codecs: { audio: [OPUS_CODEC] },
+      codecs: { audio: [OPUS_CODEC], video: [VP8_CODEC] },
     });
 
     const track = new MediaStreamTrack({ kind: "audio" });
@@ -182,8 +213,12 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       videoUrl = firstVideo.url;
     }
 
-    const info = await ytdl.getBasicInfo(videoUrl);
-    const stream = ytdl(videoUrl, { filter: "audioonly", quality: "highestaudio" });
+    const info = await ytdl.getBasicInfo(videoUrl, { agent: ytdlAgent });
+    const stream = ytdl(videoUrl, {
+      filter: "audioonly",
+      quality: "highestaudio",
+      agent: ytdlAgent,
+    });
     const demuxer = new prism.opus.WebmDemuxer();
     stream.pipe(demuxer);
 
