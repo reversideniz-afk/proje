@@ -30,10 +30,14 @@ const BOT_SOCKET_PREFIX = "bot-voice::";
 // değilse, bot yine çalışmaya çalışır ama YouTube'un engeline takılma
 // ihtimali yüksek kalır.
 let ytdlAgent;
+let ytsrCookieHeader;
 if (process.env.YOUTUBE_COOKIES) {
   try {
     const cookies = JSON.parse(process.env.YOUTUBE_COOKIES);
     ytdlAgent = ytdl.createAgent(cookies);
+    // YENİ: ytsr (arama) ayrı bir kütüphane, kendi başına çerezsiz
+    // kalmıştı — aynı çerezleri ona da HTTP başlığı olarak veriyoruz.
+    ytsrCookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     console.log("YouTube çerezleri yüklendi (bot için).");
   } catch (err) {
     console.error("UYARI: YOUTUBE_COOKIES ayrıştırılamadı:", err.message);
@@ -202,7 +206,10 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
     let videoUrl = query;
     if (!ytdl.validateURL(query)) {
-      const results = await ytsr(query, { limit: 1 });
+      const results = await ytsr(query, {
+        limit: 1,
+        requestOptions: ytsrCookieHeader ? { headers: { Cookie: ytsrCookieHeader } } : undefined,
+      });
       const firstVideo = results.items.find((item) => item.type === "video");
       if (!firstVideo) {
         io.to(textRoomName(channel)).emit("new-message", {
@@ -216,8 +223,11 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     }
 
     const info = await ytdl.getBasicInfo(videoUrl, { agent: ytdlAgent });
+    // YENİ: "sadece ses" formatı her videoda bulunmuyor — bunun yerine
+    // "sesi olan HERHANGİ bir format" diyoruz (görüntülü bile olsa,
+    // demuxer zaten sadece sesi çıkaracak) — bu daha güvenilir çıktı.
     const stream = ytdl(videoUrl, {
-      filter: "audioonly",
+      filter: (format) => format.hasAudio,
       quality: "highestaudio",
       agent: ytdlAgent,
     });
