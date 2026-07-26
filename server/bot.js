@@ -223,6 +223,13 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     }
 
     const info = await ytdl.getBasicInfo(videoUrl, { agent: ytdlAgent });
+    // YENİ (teşhis): hangi videoda kaç format bulunduğunu, hangi
+    // türde olduklarını logluyoruz — "hiç ses formatı yok mu" sorusuna
+    // kesin cevap versin diye.
+    console.log(
+      `[bot/${channel}] "${info.videoDetails.title}" (${videoUrl}) — ${info.formats.length} format bulundu, ${info.formats.filter((f) => f.hasAudio).length} tanesinde ses var.`
+    );
+
     // YENİ: "sadece ses" formatı her videoda bulunmuyor — bunun yerine
     // "sesi olan HERHANGİ bir format" diyoruz (görüntülü bile olsa,
     // demuxer zaten sadece sesi çıkaracak) — bu daha güvenilir çıktı.
@@ -238,11 +245,13 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
     // YENİ: hata dinleyicileri ekliyoruz — önceden bu yoktu, akışta
     // bir sorun olduğunda sessizce hiçbir şey olmuyor gibi görünüyordu.
+    // Artık hatanın TAM DETAYINI (stack dahil) ve HANGİ VİDEO için
+    // olduğunu da yazıyoruz.
     stream.on("error", (err) => {
-      console.error(`[bot/${channel}] YouTube akışı hatası:`, err.message);
+      console.error(`[bot/${channel}] YouTube akışı hatası (video: ${videoUrl}):`, err.stack || err.message);
     });
     demuxer.on("error", (err) => {
-      console.error(`[bot/${channel}] ses ayrıştırma hatası:`, err.message);
+      console.error(`[bot/${channel}] ses ayrıştırma hatası (video: ${videoUrl}):`, err.stack || err.message);
     });
 
     demuxer.on("data", (opusPacket) => {
@@ -319,7 +328,10 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
         return false; // bilinmeyen komut, normal mesaj gibi davran
       }
     } catch (err) {
-      console.error(`[bot/${channel}] komut işlenirken hata:`, err.message);
+      console.error(
+        `[bot/${channel}] komut işlenirken hata (komut: "${trimmed}"):`,
+        err.stack || err.message
+      );
       io.to(textRoomName(channel)).emit("new-message", {
         username: BOT_NAME,
         text: "Bir şeyler ters gitti, tekrar dener misin?",
