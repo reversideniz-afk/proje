@@ -233,6 +233,38 @@ async function run() {
     "Veritabanı bağlı değilken 'toggle-reaction' denemesi sonrası sunucu ÇÖKMÜYOR"
   );
 
+  // ============================================================
+  // YENİ: Mesaj silme/düzenleme/toplu silme — bunlar da DB gerektiriyor,
+  // burada sadece geçersiz girdilerin reddedildiğini ve DB'siz çökmediğini
+  // doğruluyorum. Sahiplik kontrolünü (başkasının mesajını silememe)
+  // canlıda, gerçek MongoDB ile test etmen gerekecek.
+  // ============================================================
+  clientA.emit("delete-message", { token: "TEST_BYPASS:Ali", messageId: "000000000000000000000000" });
+  clientA.emit("edit-message", {
+    token: "TEST_BYPASS:Ali",
+    messageId: "000000000000000000000000",
+    newText: "yeni metin",
+  });
+  // Geçersiz "!sil n" değerleri (negatif, sıfır, sayı olmayan) sessizce
+  // reddedilmeli — çökmemeli.
+  clientA.emit("delete-last-n", { token: "TEST_BYPASS:Ali", n: -5 });
+  clientA.emit("delete-last-n", { token: "TEST_BYPASS:Ali", n: 0 });
+  clientA.emit("delete-last-n", { token: "TEST_BYPASS:Ali", n: "abc" });
+  await new Promise((r) => setTimeout(r, 500));
+
+  const serverStillAliveAfterDeleteEdit = await new Promise((resolve) => {
+    const pingClient = io(SERVER_URL, { reconnection: false, timeout: 2000 });
+    pingClient.on("connect", () => {
+      pingClient.disconnect();
+      resolve(true);
+    });
+    pingClient.on("connect_error", () => resolve(false));
+  });
+  check(
+    serverStillAliveAfterDeleteEdit,
+    "Silme/düzenleme/toplu-silme denemeleri (DB'siz, geçersiz değerlerle) sonrası sunucu ÇÖKMÜYOR"
+  );
+
   clientA.disconnect();
   clientB.disconnect();
 

@@ -33,21 +33,65 @@ function formatMessageTime(dateStr) {
 // YENİ: Birisi @kullanıcıadı ile bahsedildiğinde çalınan kısa, nazik
 // bir "ping" sesi — dışarıdan bir ses dosyası eklemeye gerek kalmasın
 // diye programatik olarak (Web Audio API ile) üretiliyor.
-function playMentionSound() {
+// YENİ: Tüm ses efektlerinin ortak temeli — dışarıdan ses dosyası
+// eklemeden (Web Audio API ile üreterek), belirli bir frekans/süre/
+// dalga tipinde kısa bir ton çalar.
+function playTone(ctx, frequency, startOffset, duration, gainValue = 0.12, type = 'sine') {
+  const oscillator = ctx.createOscillator()
+  const gainNode = ctx.createGain()
+  oscillator.type = type
+  oscillator.frequency.value = frequency
+  oscillator.connect(gainNode)
+  gainNode.connect(ctx.destination)
+  const startTime = ctx.currentTime + startOffset
+  gainNode.gain.setValueAtTime(gainValue, startTime)
+  gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
+  oscillator.start(startTime)
+  oscillator.stop(startTime + duration)
+}
+
+function withAudioContext(fn) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    const oscillator = ctx.createOscillator()
-    const gainNode = ctx.createGain()
-    oscillator.connect(gainNode)
-    gainNode.connect(ctx.destination)
-    oscillator.frequency.value = 880
-    gainNode.gain.setValueAtTime(0.15, ctx.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
-    oscillator.start()
-    oscillator.stop(ctx.currentTime + 0.3)
+    fn(ctx)
   } catch {
     // Ses opsiyonel bir özellik — başarısız olursa sessizce geç.
   }
+}
+
+// Birisi @kullanıcıadımla bahsettiğinde.
+function playMentionSound() {
+  withAudioContext((ctx) => playTone(ctx, 880, 0, 0.3, 0.15))
+}
+
+// YENİ: Biri sese katıldığında — yükselen, "hoş geldin" hissi veren iki nota.
+function playJoinSound() {
+  withAudioContext((ctx) => {
+    playTone(ctx, 523.25, 0, 0.12, 0.1) // Do
+    playTone(ctx, 659.25, 0.08, 0.16, 0.1) // Mi
+  })
+}
+
+// YENİ: Biri sesten ayrıldığında — alçalan iki nota.
+function playLeaveSound() {
+  withAudioContext((ctx) => {
+    playTone(ctx, 659.25, 0, 0.12, 0.1) // Mi
+    playTone(ctx, 523.25, 0.08, 0.16, 0.1) // Do
+  })
+}
+
+// YENİ: Yeni bir mesaj geldiğinde — kısa, nazik bir "tık".
+function playMessageSound() {
+  withAudioContext((ctx) => playTone(ctx, 700, 0, 0.09, 0.07))
+}
+
+// YENİ: Biri (ya da sen) ekran paylaşımını başlattığında — farklı bir
+// tını (üçgen dalga) ile ayırt edilebilir olsun diye.
+function playScreenShareSound() {
+  withAudioContext((ctx) => {
+    playTone(ctx, 440, 0, 0.1, 0.1, 'triangle')
+    playTone(ctx, 880, 0.07, 0.14, 0.1, 'triangle')
+  })
 }
 
 // YENİ: Mesaj metnindeki @kullanıcıadı bahsetmelerini vurgulu göster.
@@ -325,6 +369,18 @@ function App() {
 
   const [remoteStreams, setRemoteStreams] = useState({})
   const [peers, setPeers] = useState([]) // artık SADECE seste olanlar
+  // YENİ: Birinin ekran paylaşımını YENİ BAŞLATTIĞI anı (false->true
+  // geçişini) yakalayıp ses çalmak için, önceki durumu saklıyoruz.
+  const prevPeersRef = useRef([])
+  useEffect(() => {
+    peers.forEach((peer) => {
+      const prevPeer = prevPeersRef.current.find((p) => p.socketId === peer.socketId)
+      if (peer.sharingScreen && !prevPeer?.sharingScreen) {
+        playScreenShareSound()
+      }
+    })
+    prevPeersRef.current = peers
+  }, [peers])
   const [mediaError, setMediaError] = useState(null)
   const [screenSourceOptions, setScreenSourceOptions] = useState(null)
 
@@ -796,14 +852,19 @@ function App() {
 
       socket.on('new-message', (message) => {
         setMessages((prev) => [...prev, message])
-        // YENİ: Beni @kullanıcıadımla bahsettiyse ve şu an pencere
-        // görünür/odakta değilse, nazik bir ses çal.
-        if (
-          displayName &&
-          message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`) &&
-          document.hidden
-        ) {
-          playMentionSound()
+        // YENİ: Kendi mesajım değilse ses çal — beni @bahsetmişse (ve
+        // pencere görünür değilse) daha belirgin olan bahsetme sesi,
+        // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
+        // aynı anda çalmıyor.
+        const isOwnMessage = message.username === displayName
+        const isMention =
+          displayName && message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`)
+        if (!isOwnMessage) {
+          if (isMention && document.hidden) {
+            playMentionSound()
+          } else {
+            playMessageSound()
+          }
         }
         requestAnimationFrame(() => {
           if (chatMessagesRef.current) {
@@ -816,6 +877,7 @@ function App() {
       // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
       socket.on('new-photo', (photo) => {
         setEphemeralPhotos((prev) => [...prev, photo])
+        if (photo.username !== displayName) playMessageSound()
         requestAnimationFrame(() => {
           if (chatMessagesRef.current) {
             chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
@@ -838,6 +900,18 @@ function App() {
         )
       })
 
+      // YENİ: Mesaj(lar) silindiğinde, listeden kaldır.
+      socket.on('messages-deleted', ({ messageIds }) => {
+        setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)))
+      })
+
+      // YENİ: Bir mesaj düzenlendiğinde, metnini güncelle.
+      socket.on('message-edited', ({ messageId, newText, editedAt }) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, text: newText, editedAt } : m))
+        )
+      })
+
       // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
       // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
       // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
@@ -855,9 +929,11 @@ function App() {
       socket.on('voice-user-joined', (user) => {
         setPeers((prev) => [...prev, user])
         getOrCreateMainConnection(user.socketId)
+        playJoinSound()
       })
 
       socket.on('voice-user-left', ({ socketId }) => {
+        playLeaveSound()
         setPeers((prev) => prev.filter((p) => p.socketId !== socketId))
         const entry = peerConnectionsRef.current.get(socketId)
         if (entry) {
@@ -1073,6 +1149,7 @@ function App() {
       setIsScreenSharing(true)
       addTrackToScreenConnections(screenTrack, screenStream)
       socketRef.current?.emit('state-update', { sharingScreen: true })
+      playScreenShareSound()
     } catch (err) {
       if (err.name !== 'NotAllowedError') {
         setMediaError(describeMediaError(err))
@@ -1136,6 +1213,18 @@ function App() {
     e.preventDefault()
     const text = chatInput.trim()
     if (!text || !socketRef.current) return
+
+    // YENİ: "!sil n" komutu — kendi son N mesajını topluca siler.
+    const silMatch = text.match(/^!sil\s+(\d+)$/i)
+    if (silMatch) {
+      socketRef.current.emit('delete-last-n', {
+        token: sessionTokenRef.current,
+        n: Number(silMatch[1]),
+      })
+      setChatInput('')
+      return
+    }
+
     socketRef.current.emit('send-message', { token: sessionTokenRef.current, text })
     setChatInput('')
     // Mesaj gönderilince "yazıyor" durumunu hemen bitir.
@@ -1241,6 +1330,36 @@ function App() {
     window.addEventListener('click', closeIt)
     return () => window.removeEventListener('click', closeIt)
   }, [reactionPickerForMessageId])
+
+  // YENİ: Mesaj düzenleme/silme — sadece KENDİ mesajın için.
+  const [editingMessageId, setEditingMessageId] = useState(null)
+  const [editingText, setEditingText] = useState('')
+
+  const handleStartEdit = (message) => {
+    setEditingMessageId(message.id)
+    setEditingText(message.text)
+    setReactionPickerForMessageId(null)
+  }
+  const handleCancelEdit = () => {
+    setEditingMessageId(null)
+    setEditingText('')
+  }
+  const handleSubmitEdit = (messageId) => {
+    const trimmed = editingText.trim()
+    if (trimmed) {
+      socketRef.current?.emit('edit-message', {
+        token: sessionTokenRef.current,
+        messageId,
+        newText: trimmed,
+      })
+    }
+    setEditingMessageId(null)
+    setEditingText('')
+  }
+  const handleDeleteMessage = (messageId) => {
+    socketRef.current?.emit('delete-message', { token: sessionTokenRef.current, messageId })
+    setReactionPickerForMessageId(null)
+  }
 
   const handlePhotoButtonClick = () => {
     photoFileInputRef.current?.click()
@@ -1580,20 +1699,50 @@ function App() {
                         className="chat-message chat-message--text-wrap"
                         onContextMenu={(e) => item.id && handleMessageContextMenu(e, item.id)}
                       >
-                        <span className="chat-message-author">{item.username}</span>
-                        <span className="chat-message-time">{formatMessageTime(item.createdAt)}</span>
-                        <button
-                          type="button"
-                          className="chat-message-copy"
-                          title="Metni kopyala"
-                          onClick={() => navigator.clipboard?.writeText(item.text)}
-                        >
-                          📋
-                        </button>
-                        <span className="chat-message-text">
-                          {renderMessageTextWithMentions(item.text, displayName)}
-                        </span>
-                        {item.id && (item.reactions?.length > 0 || reactionPickerForMessageId === item.id) && (
+                        {editingMessageId === item.id ? (
+                          // YENİ: düzenleme modu — metni doğrudan burada değiştir.
+                          <div className="chat-message-edit-row" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="text"
+                              value={editingText}
+                              onChange={(e) => setEditingText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSubmitEdit(item.id)
+                                if (e.key === 'Escape') handleCancelEdit()
+                              }}
+                              autoFocus
+                              maxLength={2000}
+                            />
+                            <button type="button" onClick={() => handleSubmitEdit(item.id)}>
+                              ✓
+                            </button>
+                            <button type="button" onClick={handleCancelEdit}>
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="chat-message-author">{item.username}</span>
+                            <span className="chat-message-time">
+                              {formatMessageTime(item.createdAt)}
+                              {item.editedAt && ' (düzenlendi)'}
+                            </span>
+                            <button
+                              type="button"
+                              className="chat-message-copy"
+                              title="Metni kopyala"
+                              onClick={() => navigator.clipboard?.writeText(item.text)}
+                            >
+                              📋
+                            </button>
+                            <span className="chat-message-text">
+                              {renderMessageTextWithMentions(item.text, displayName)}
+                            </span>
+                          </>
+                        )}
+                        {item.id &&
+                          (item.reactions?.length > 0 ||
+                            reactionPickerForMessageId === item.id) && (
                           <div className="chat-reactions" onClick={(e) => e.stopPropagation()}>
                             {Object.entries(
                               (item.reactions || []).reduce((acc, r) => {
@@ -1630,6 +1779,26 @@ function App() {
                                   {emoji}
                                 </button>
                               ))}
+                              {item.username === displayName && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="reaction-picker-option"
+                                    title="Düzenle"
+                                    onClick={() => handleStartEdit(item)}
+                                  >
+                                    ✏️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="reaction-picker-option"
+                                    title="Sil"
+                                    onClick={() => handleDeleteMessage(item.id)}
+                                  >
+                                    🗑️
+                                  </button>
+                                </>
+                              )}
                             </div>
                             )}
                           </div>

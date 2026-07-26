@@ -203,6 +203,29 @@ async function run() {
     "3. kişi sese girince, önceki İKİ kişi de (Kişi1 VE Kişi2) 'voice-user-joined' ile ayrı ayrı haberdar oluyor"
   );
 
+  // ============================================================
+  // YENİ (GÜVENLİK): Aynı ses odasında OLMAYAN biri, rastgele bir
+  // socket kimliğine sinyal göndererek yetkisiz bir WebRTC bağlantısı
+  // kurmaya çalışamamalı — sunucu bunu artık sessizce reddediyor.
+  // ============================================================
+  const outsider = await connectJoinChannelAndVoice("Yabanci", "test-chat");
+  // p1, "test-oda-mesh" odasının seste olan bir üyesi — outsider ise
+  // TAMAMEN FARKLI bir kanalda/ses odasında.
+  const p1UnexpectedSignalPromise = new Promise((resolve) => p1.on("signal", resolve));
+  outsider.emit("signal", {
+    to: p1.id, // p1'in (sunucunun gördüğü) socket kimliği
+    data: { type: "offer", sdp: { fake: "yetkisiz-teklif" } },
+  });
+  const unexpectedSignal = await Promise.race([
+    p1UnexpectedSignalPromise,
+    new Promise((r) => setTimeout(() => r("TIMEOUT"), 2000)),
+  ]);
+  check(
+    unexpectedSignal === "TIMEOUT",
+    "Farklı ses odasındaki biri, rastgele bir kişiye sinyal gönderemiyor (güvenlik düzeltmesi doğrulandı)"
+  );
+  outsider.disconnect();
+
   p1.disconnect();
   p2.disconnect();
   p3.disconnect();

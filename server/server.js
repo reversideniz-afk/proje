@@ -134,6 +134,7 @@ function serializeMessage(msg) {
     username: msg.username,
     text: msg.text,
     createdAt: msg.createdAt,
+    editedAt: msg.editedAt || null,
     reactions: msg.reactions || [],
   };
 }
@@ -356,6 +357,7 @@ io.on("connection", (socket) => {
         username: message.username,
         text: message.text,
         createdAt: message.createdAt,
+        editedAt: null,
         reactions: [],
       });
       // YENİ: bu kanalın ÜYESİ olan ama şu an BAŞKA bir kanalda olan
@@ -409,6 +411,98 @@ io.on("connection", (socket) => {
       });
     } catch (err) {
       console.error("Tepki güncellenirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Tek bir mesajı silme ----
+  // GÜVENLİK: sadece KENDİ mesajını silebilirsin — başkasının mesajını
+  // silme yetkisi hiç kimseye verilmiyor, "channel" ve "username" ikisi
+  // birden eşleşmeli.
+  socket.on("delete-message", async ({ token, messageId }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom || typeof messageId !== "string") return;
+
+    try {
+      const result = await Message.deleteOne({
+        _id: messageId,
+        channel: currentTextRoom,
+        username,
+      });
+      if (result.deletedCount > 0) {
+        io.to(textRoomName(currentTextRoom)).emit("messages-deleted", { messageIds: [messageId] });
+      }
+    } catch (err) {
+      console.error("Mesaj silinirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Tek bir mesajı düzenleme ----
+  // GÜVENLİK: sadece KENDİ mesajını düzenleyebilirsin.
+  socket.on("edit-message", async ({ token, messageId, newText }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+    if (typeof messageId !== "string" || typeof newText !== "string") return;
+    const trimmed = newText.trim();
+    if (!trimmed || trimmed.length > 2000) return;
+
+    try {
+      const message = await Message.findOne({
+        _id: messageId,
+        channel: currentTextRoom,
+        username,
+      });
+      if (!message) return;
+      message.text = trimmed;
+      message.editedAt = new Date();
+      await message.save();
+
+      io.to(textRoomName(currentTextRoom)).emit("message-edited", {
+        messageId,
+        newText: trimmed,
+        editedAt: message.editedAt,
+      });
+    } catch (err) {
+      console.error("Mesaj düzenlenirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: "!sil n" komutu — KENDİ son N mesajını topluca sil ----
+  // GÜVENLİK: sadece gönderenin KENDİ mesajları siliniyor — bir kanaldaki
+  // TÜM geçmişi ya da başkalarının mesajlarını silme yetkisi yok. Bu,
+  // "yanlışlıkla bir şey paylaştım, hemen geri alayım" senaryosu için.
+  socket.on("delete-last-n", async ({ token, n }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+    const count = Number(n);
+    if (!Number.isInteger(count) || count < 1) return;
+    const cappedCount = Math.min(count, 200); // aşırı büyük bir değere karşı makul bir tavan
+
+    try {
+      const toDelete = await Message.find({ channel: currentTextRoom, username })
+        .sort({ createdAt: -1 })
+        .limit(cappedCount)
+        .select("_id")
+        .lean();
+      const idsToDelete = toDelete.map((m) => m._id);
+      if (idsToDelete.length === 0) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Silinecek mesajın yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+      await Message.deleteMany({ _id: { $in: idsToDelete } });
+      io.to(textRoomName(currentTextRoom)).emit("messages-deleted", {
+        messageIds: idsToDelete.map((id) => id.toString()),
+      });
+      socket.emit("new-message", {
+        username: "Sistem",
+        text: `${idsToDelete.length} mesajın silindi.`,
+        createdAt: new Date(),
+      });
+    } catch (err) {
+      console.error("Toplu mesaj silinirken hata:", err.message);
     }
   });
 
@@ -480,6 +574,16 @@ io.on("connection", (socket) => {
 
   // ---- WebRTC sinyal mesajlarını ilet (offer / answer / ice candidate) ----
   socket.on("signal", ({ to, data }) => {
+    // GÜVENLİK DÜZELTMESİ: Önceden bu, "to" olarak verilen HERHANGİ
+    // bir socket kimliğine, hiç doğrulama yapmadan iletiliyordu. Bu,
+    // giriş yapmış ama İLGİLİ ses odasında OLMAYAN birinin, başka bir
+    // kişiye sahte bir WebRTC teklifi göndererek yetkisiz bir bağlantı
+    // (izinsiz mikrofon/kamera erişimi) kurmaya çalışabileceği anlamına
+    // geliyordu. Artık: hem gönderenin HEM hedefin, AYNI ses odasında
+    // olduğunu doğruluyoruz — değilse, mesaj sessizce yok sayılıyor.
+    if (typeof to !== "string" || !currentVoiceRoom) return;
+    const targetSocket = io.sockets.sockets.get(to);
+    if (!targetSocket || !targetSocket.rooms.has(voiceRoomName(currentVoiceRoom))) return;
     io.to(to).emit("signal", { from: socket.id, data });
   });
 

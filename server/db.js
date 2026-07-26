@@ -36,6 +36,8 @@ const messageSchema = new mongoose.Schema({
   username: { type: String, required: true },
   text: { type: String, required: true, maxlength: 2000, trim: true },
   createdAt: { type: Date, default: Date.now },
+  // YENİ: mesaj düzenlenmişse ne zaman düzenlendiği (arayüzde "(düzenlendi)" göstermek için).
+  editedAt: { type: Date, default: null },
   // YENİ: emoji tepkileri — [{ emoji: "👍", username: "Alganis" }, ...]
   // Aynı kişi aynı emojiyi tekrar tıklarsa, o kaydı siliyoruz (aç/kapa).
   reactions: {
