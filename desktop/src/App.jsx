@@ -950,7 +950,7 @@ function App() {
 
     socketRef.current.emit(
       'load-older-messages',
-      { token: sessionTokenRef.current, channel: activeChannel, before: messages[0].createdAt },
+      { token: sessionTokenRef.current, before: messages[0].createdAt },
       (response) => {
         const older = response?.messages || []
         setMessages((prev) => [...older, ...prev])

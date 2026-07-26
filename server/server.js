@@ -18,6 +18,17 @@ const http = require("http");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const bcrypt = require("bcryptjs");
+
+// YENİ (sağlamlık): Kodda gözden kaçan bir hata olsa bile (ör. beklenmedik
+// bir veri tipi), sunucunun TÜMDEN çökmesini istemiyoruz — herkesin
+// bağlantısı bir kişinin hatası yüzünden kesilmesin. Hatayı loglayıp
+// sunucuyu ayakta tutuyoruz.
+process.on("uncaughtException", (err) => {
+  console.error("YAKALANMAMIŞ HATA (sunucu ayakta kalıyor):", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("YAKALANMAMIŞ PROMISE HATASI (sunucu ayakta kalıyor):", reason);
+});
 const { connectDB, User, Message, ChannelMember } = require("./db");
 
 const app = express();
@@ -136,7 +147,12 @@ io.on("connection", (socket) => {
 
   // ---- Kişisel hesap girişi ----
   socket.on("login", async ({ username, password }, callback) => {
-    if (!username || !password) {
+    // GÜVENLİK: sadece "boş mu" değil, "gerçekten metin mi" diye de
+    // AÇIKÇA kontrol ediyoruz — biri kullanıcı adı yerine özel
+    // hazırlanmış bir nesne gönderirse (MongoDB sorgu operatörü gibi),
+    // bunun sessizce bir "yan etkiye" güvenerek değil, kasıtlı olarak
+    // reddedilmesini istiyoruz.
+    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
       return callback({ success: false, message: "Kullanıcı adı ve şifre gerekli." });
     }
     try {
@@ -166,7 +182,7 @@ io.on("connection", (socket) => {
   // ---- YENİ: Metin kanalına katılma (SES BAĞLANTISI KURMAZ) ----
   socket.on("join-channel", async ({ roomId, token, secret }) => {
     const username = resolveUsername(token);
-    if (!roomId || !username) {
+    if (typeof roomId !== "string" || !roomId || !username) {
       socket.emit("join-error", "Önce giriş yapman gerekiyor.");
       return;
     }
@@ -269,9 +285,12 @@ io.on("connection", (socket) => {
   // ---- Sohbet mesajı gönderme (kalıcı) ----
   socket.on("send-message", async ({ token, text }) => {
     const username = resolveUsername(token);
-    const trimmedText = (text || "").trim();
-    if (!username || !currentTextRoom || !trimmedText) return;
-    if (trimmedText.length > 2000) return;
+    // GÜVENLİK/SAĞLAMLIK: "text" beklenmedik bir tipte (ör. bir nesne)
+    // gelirse .trim() çağrısı hata fırlatabilirdi — bunu try/catch'e
+    // girmeden, en başta AÇIKÇA reddediyoruz.
+    if (!username || !currentTextRoom || typeof text !== "string") return;
+    const trimmedText = text.trim();
+    if (!trimmedText || trimmedText.length > 2000) return;
 
     try {
       const message = await Message.create({
@@ -290,14 +309,22 @@ io.on("connection", (socket) => {
   });
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
-  socket.on("load-older-messages", async ({ token, channel, before }, callback) => {
+  socket.on("load-older-messages", async ({ token, before }, callback) => {
     const username = resolveUsername(token);
-    if (!username || !channel) {
+    // GÜVENLİK DÜZELTMESİ: hangi kanaldan istediğimizi istemciden
+    // ALMIYORUZ artık — sunucunun KENDİ, doğrulanmış kaydı olan
+    // currentTextRoom'u kullanıyoruz. Önceki halinde, istemci
+    // "channel" alanına özel hazırlanmış bir değer göndererek
+    // teorik olarak BAŞKA bir kanalın (şifresini bilmediği bir
+    // kanalın) mesajlarını isteyebilirdi — artık bu imkansız,
+    // çünkü sadece kendi ZATEN girmiş olduğu kanalın geçmişini
+    // isteyebiliyor.
+    if (!username || !currentTextRoom) {
       if (typeof callback === "function") callback({ messages: [] });
       return;
     }
     try {
-      const query = { channel };
+      const query = { channel: currentTextRoom };
       if (before) query.createdAt = { $lt: new Date(before) };
       const older = await Message.find(query).sort({ createdAt: -1 }).limit(50).lean();
       if (typeof callback === "function") callback({ messages: older.reverse() });

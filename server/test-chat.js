@@ -70,7 +70,7 @@ async function run() {
   const olderMessagesResponse = await new Promise((resolve) => {
     clientA.emit(
       "load-older-messages",
-      { token: "TEST_BYPASS:Ali", channel: ROOM, before: new Date().toISOString() },
+      { token: "TEST_BYPASS:Ali", before: new Date().toISOString() },
       resolve
     );
   });
