@@ -3,10 +3,13 @@
 // ------------------------------------------------------------
 // DENEYSEL — bu, projedeki en yeni türden kod: sunucunun kendisi
 // gerçek zamanlı ses işleyip WebRTC üzerinden katılımcılara
-// yayınlıyor. Diğer özelliklerin aksine, YouTube'a ve gerçek
-// tarayıcı bağlantısına ihtiyaç duyduğu için bunu sandbox'ımda
-// uçtan uca test edemedim — ilk canlı testlerde ince ayar
-// gerekebilir.
+// yayınlıyor.
+//
+// YouTube çekme motoru olarak artık yt-dlp kullanılıyor (Node.js
+// kütüphanesi değil, ayrı bir program — Render'ın "Build Command"
+// ayarında indiriliyor, bkz. README/talimatlar). Bu, en aktif
+// güncellenen, YouTube'un sık değişen savunmasına en hızlı
+// yetişen araç.
 //
 // Bot, gerçek bir Socket.io bağlantısı DEĞİL — sunucu sürecinin
 // içinde yaşayan "sahte bir katılımcı". Gerçek kullanıcıların
@@ -15,32 +18,49 @@
 // ============================================================
 
 const { RTCPeerConnection, MediaStreamTrack, RTCRtpCodecParameters } = require("werift");
-const ytdl = require("@distube/ytdl-core");
-const ytsr = require("@distube/ytsr");
+const { spawn } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
 const prism = require("prism-media");
+const ffmpegPath = require("ffmpeg-static");
 
 const BOT_NAME = process.env.BOT_NAME || "DJ Dikkat";
 const BOT_SOCKET_PREFIX = "bot-voice::";
 
-// YENİ: YouTube, Render gibi bulut sunucularından gelen otomatik
-// istekleri "bot" olarak işaretleyip engelliyor. Bunu aşmak için,
-// giriş yapmış gerçek bir YouTube hesabının çerezlerini kullanıyoruz
-// — bu, isteklerin "gerçek bir kullanıcıdan" geliyormuş gibi
-// görünmesini sağlıyor. YOUTUBE_COOKIES ortam değişkeni ayarlı
-// değilse, bot yine çalışmaya çalışır ama YouTube'un engeline takılma
-// ihtimali yüksek kalır.
-let ytdlAgent;
-let ytsrCookieHeader;
+// yt-dlp ikili dosyası, Render'ın Build Command'ı sırasında bu
+// klasöre indiriliyor (bkz. kurulum talimatları). __dirname
+// kullanıyoruz ki çalıştığı klasör ne olursa olsun doğru yeri bulsun.
+const YTDLP_PATH = path.join(__dirname, process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp");
+if (!fs.existsSync(YTDLP_PATH)) {
+  console.warn(
+    `UYARI: yt-dlp bulunamadı (${YTDLP_PATH}) — Render'ın Build Command'ına indirme adımını eklediğinden emin ol, yoksa müzik botu çalışmaz.`
+  );
+}
+
+// YENİ: YouTube, bulut sunucularından gelen otomatik istekleri
+// engelleyebiliyor — giriş yapmış bir hesabın çerezlerini kullanmak
+// bunu büyük ölçüde azaltıyor. YOUTUBE_COOKIES ortam değişkeni JSON
+// formatında (tarayıcı eklentisinin ürettiği hal) geliyor, yt-dlp
+// ise "Netscape" formatında bir dosya bekliyor — burada birini
+// diğerine çeviriyoruz.
+let cookiesFilePath;
 if (process.env.YOUTUBE_COOKIES) {
   try {
     const cookies = JSON.parse(process.env.YOUTUBE_COOKIES);
-    ytdlAgent = ytdl.createAgent(cookies);
-    // YENİ: ytsr (arama) ayrı bir kütüphane, kendi başına çerezsiz
-    // kalmıştı — aynı çerezleri ona da HTTP başlığı olarak veriyoruz.
-    ytsrCookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-    console.log("YouTube çerezleri yüklendi (bot için).");
+    const lines = ["# Netscape HTTP Cookie File"];
+    cookies.forEach((c) => {
+      const domain = c.domain?.startsWith(".") ? c.domain : `.${c.domain || "youtube.com"}`;
+      const path_ = c.path || "/";
+      const secure = c.secure ? "TRUE" : "FALSE";
+      const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 2147483647;
+      lines.push(["TRUE".padStart(1), domain, "TRUE", path_, secure, expiry, c.name, c.value].join("\t"));
+    });
+    cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
+    fs.writeFileSync(cookiesFilePath, lines.join("\n"));
+    console.log("YouTube çerezleri yt-dlp için hazırlandı (bot için).");
   } catch (err) {
-    console.error("UYARI: YOUTUBE_COOKIES ayrıştırılamadı:", err.message);
+    console.error("UYARI: YOUTUBE_COOKIES işlenemedi:", err.message);
   }
 } else {
   console.warn(
@@ -63,8 +83,94 @@ const VP8_CODEC = new RTCRtpCodecParameters({
   clockRate: 90000,
 });
 
+// ---- yt-dlp'ye bir arama sorgusu YA DA doğrudan bir link verip,
+// video adresini + başlığını almak için ortak fonksiyon. ----
+function resolveVideo(query) {
+  const isUrl = /^https?:\/\//i.test(query);
+  const target = isUrl ? query : `ytsearch1:${query}`;
+
+  return new Promise((resolve, reject) => {
+    const args = ["--dump-single-json", "--no-warnings", "--flat-playlist"];
+    if (cookiesFilePath) args.push("--cookies", cookiesFilePath);
+    args.push(target);
+
+    const proc = spawn(YTDLP_PATH, args);
+    let output = "";
+    let errorOutput = "";
+    proc.stdout.on("data", (chunk) => (output += chunk));
+    proc.stderr.on("data", (chunk) => (errorOutput += chunk.toString()));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(errorOutput.slice(-500) || `yt-dlp çıkış kodu ${code}`));
+      }
+      try {
+        const parsed = JSON.parse(output);
+        // Arama sonucu bir "playlist" gibi entries içinde gelir,
+        // doğrudan link ise ayrıştırılan nesnenin KENDİSİ video bilgisidir.
+        const videoInfo = parsed.entries ? parsed.entries[0] : parsed;
+        if (!videoInfo) return resolve(null);
+        resolve({
+          url: videoInfo.webpage_url || videoInfo.url || target,
+          title: videoInfo.title || query,
+        });
+      } catch (err) {
+        reject(new Error(`yt-dlp çıktısı ayrıştırılamadı: ${err.message}`));
+      }
+    });
+    proc.on("error", (err) => reject(err));
+  });
+}
+
+// ---- yt-dlp (ham ses çeker) -> ffmpeg (garanti webm/opus'a çevirir)
+// zinciri kuruyor. İkisini birbirine pipe ediyoruz. ----
+function startAudioProcess(videoUrl, channel) {
+  const ytdlpArgs = ["-f", "bestaudio", "-o", "-", "--no-warnings"];
+  if (cookiesFilePath) ytdlpArgs.push("--cookies", cookiesFilePath);
+  ytdlpArgs.push(videoUrl);
+
+  const ytdlpProc = spawn(YTDLP_PATH, ytdlpArgs);
+  const ffmpegProc = spawn(ffmpegPath, [
+    "-i", "pipe:0",
+    "-f", "webm",
+    "-c:a", "libopus",
+    "-ar", "48000",
+    "-ac", "2",
+    "pipe:1",
+  ]);
+
+  ytdlpProc.stdout.pipe(ffmpegProc.stdin);
+
+  let ytdlpErrorTail = "";
+  ytdlpProc.stderr.on("data", (chunk) => {
+    ytdlpErrorTail = (ytdlpErrorTail + chunk.toString()).slice(-1500);
+  });
+  ytdlpProc.on("close", (code) => {
+    if (code !== 0 && code !== null) {
+      console.error(`[bot/${channel}] yt-dlp çıkış kodu ${code}:\n${ytdlpErrorTail}`);
+    }
+  });
+  ytdlpProc.on("error", (err) => {
+    console.error(`[bot/${channel}] yt-dlp başlatılamadı:`, err.message);
+  });
+
+  let ffmpegErrorTail = "";
+  ffmpegProc.stderr.on("data", (chunk) => {
+    ffmpegErrorTail = (ffmpegErrorTail + chunk.toString()).slice(-1500);
+  });
+  ffmpegProc.on("close", (code) => {
+    if (code !== 0 && code !== null) {
+      console.error(`[bot/${channel}] ffmpeg çıkış kodu ${code}:\n${ffmpegErrorTail}`);
+    }
+  });
+  ffmpegProc.on("error", (err) => {
+    console.error(`[bot/${channel}] ffmpeg başlatılamadı:`, err.message);
+  });
+
+  return { ytdlpProc, ffmpegProc, audioStream: ffmpegProc.stdout };
+}
+
 function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemberList }) {
-  // channel -> { peerConnections: Map<realSocketId, {mainPc, track}>, currentProcess, audioTrack }
+  // channel -> { peerConnections: Map<realSocketId, {pc, sender}>, currentProcess, inVoice }
   const channelState = new Map();
 
   function getOrCreateChannelState(channel) {
@@ -72,7 +178,6 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       channelState.set(channel, {
         peerConnections: new Map(),
         currentProcess: null,
-        audioTrack: null,
         inVoice: false,
       });
     }
@@ -94,8 +199,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     const track = new MediaStreamTrack({ kind: "audio" });
     // Gerçek kullanıcıların bağlantısı hem ses hem görüntü yuvası
     // açıyor (recvonly) — botun cevabı bu iki yuvaya da denk düşen
-    // bir yapıda olmalı, yoksa SDP uyumsuzluğu olur (bu projede daha
-    // önce tam bu tür bir hatayla karşılaşmıştık). Bot'un görüntüsü
+    // bir yapıda olmalı, yoksa SDP uyumsuzluğu olur. Bot'un görüntüsü
     // yok, o yüzden video'yu "inactive" bırakıyoruz.
     const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
     pc.addTransceiver("video", { direction: "inactive" });
@@ -109,11 +213,9 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       }
     };
 
-    // ÖNEMLİ: writeRtp yerine artık transceiver.sender.sendRtp
-    // kullanıyoruz — bu, ham ses verisini (Opus payload) alıp doğru
-    // RTP paketleme (sıra numarası, zaman damgası, payload type)
-    // işini KENDİSİ otomatik yapıyor. İlk denemede writeRtp'ye ham
-    // veri vermek işe yaramamıştı (RTP başlığı eksik kalıyordu).
+    // sender.sendRtp: ham ses verisini (Opus payload) alıp doğru RTP
+    // paketleme (sıra numarası, zaman damgası, payload type) işini
+    // KENDİSİ otomatik yapıyor.
     state.peerConnections.set(realSocketId, { pc, sender: transceiver.sender });
 
     return { pc, sender: transceiver.sender };
@@ -196,7 +298,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     io.to(textRoomName(channel)).emit("channel-members", memberList);
   }
 
-  // ---- YouTube'dan şarkı arayıp çalar. ----
+  // ---- YouTube'dan (yt-dlp ile) şarkı arayıp çalar. ----
   async function playSong(channel, query) {
     const state = getOrCreateChannelState(channel);
     if (!state.inVoice) {
@@ -204,53 +306,35 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     }
     stopSong(channel); // önceki şarkı varsa durdur
 
-    let videoUrl = query;
-    if (!ytdl.validateURL(query)) {
-      const results = await ytsr(query, {
-        limit: 1,
-        requestOptions: ytsrCookieHeader ? { headers: { Cookie: ytsrCookieHeader } } : undefined,
+    let resolved;
+    try {
+      resolved = await resolveVideo(query);
+    } catch (err) {
+      console.error(`[bot/${channel}] video bulunurken hata:`, err.message);
+      io.to(textRoomName(channel)).emit("new-message", {
+        username: BOT_NAME,
+        text: "Bir sorun oldu, tekrar dener misin?",
+        createdAt: new Date(),
       });
-      const firstVideo = results.items.find((item) => item.type === "video");
-      if (!firstVideo) {
-        io.to(textRoomName(channel)).emit("new-message", {
-          username: BOT_NAME,
-          text: `"${query}" için bir şey bulamadım.`,
-          createdAt: new Date(),
-        });
-        return;
-      }
-      videoUrl = firstVideo.url;
+      return;
+    }
+    if (!resolved) {
+      io.to(textRoomName(channel)).emit("new-message", {
+        username: BOT_NAME,
+        text: `"${query}" için bir şey bulamadım.`,
+        createdAt: new Date(),
+      });
+      return;
     }
 
-    // NOT: getBasicInfo() format listesini İÇERMİYOR — bu yüzden
-    // getInfo() kullanıyoruz (biraz daha yavaş ama formats dolu geliyor).
-    const info = await ytdl.getInfo(videoUrl, { agent: ytdlAgent });
-    console.log(
-      `[bot/${channel}] "${info.videoDetails.title}" (${videoUrl}) — ${info.formats.length} format bulundu, ${info.formats.filter((f) => f.hasAudio).length} tanesinde ses var.`
-    );
-
-    // YENİ: "sadece ses" formatı her videoda bulunmuyor — bunun yerine
-    // "sesi olan HERHANGİ bir format" diyoruz (görüntülü bile olsa,
-    // demuxer zaten sadece sesi çıkaracak) — bu daha güvenilir çıktı.
-    const stream = ytdl(videoUrl, {
-      filter: (format) => format.hasAudio,
-      quality: "highestaudio",
-      agent: ytdlAgent,
-    });
+    const { ytdlpProc, ffmpegProc, audioStream } = startAudioProcess(resolved.url, channel);
     const demuxer = new prism.opus.WebmDemuxer();
-    stream.pipe(demuxer);
+    audioStream.pipe(demuxer);
 
-    state.currentProcess = { stream, demuxer };
+    state.currentProcess = { ytdlpProc, ffmpegProc, demuxer };
 
-    // YENİ: hata dinleyicileri ekliyoruz — önceden bu yoktu, akışta
-    // bir sorun olduğunda sessizce hiçbir şey olmuyor gibi görünüyordu.
-    // Artık hatanın TAM DETAYINI (stack dahil) ve HANGİ VİDEO için
-    // olduğunu da yazıyoruz.
-    stream.on("error", (err) => {
-      console.error(`[bot/${channel}] YouTube akışı hatası (video: ${videoUrl}):`, err.stack || err.message);
-    });
     demuxer.on("error", (err) => {
-      console.error(`[bot/${channel}] ses ayrıştırma hatası (video: ${videoUrl}):`, err.stack || err.message);
+      console.error(`[bot/${channel}] ses ayrıştırma hatası:`, err.message);
     });
 
     demuxer.on("data", (opusPacket) => {
@@ -269,7 +353,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
     io.to(textRoomName(channel)).emit("new-message", {
       username: BOT_NAME,
-      text: `▶️ Şimdi çalıyor: ${info.videoDetails.title}`,
+      text: `▶️ Şimdi çalıyor: ${resolved.title}`,
       createdAt: new Date(),
     });
   }
@@ -286,9 +370,19 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       }
       return;
     }
+    const { ytdlpProc, ffmpegProc, demuxer } = state.currentProcess;
     try {
-      state.currentProcess.stream.destroy();
-      state.currentProcess.demuxer.destroy();
+      ytdlpProc.kill("SIGKILL");
+    } catch {
+      /* zaten kapanmış olabilir */
+    }
+    try {
+      ffmpegProc.kill("SIGKILL");
+    } catch {
+      /* zaten kapanmış olabilir */
+    }
+    try {
+      demuxer.destroy();
     } catch {
       /* zaten kapanmış olabilir */
     }
@@ -303,8 +397,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
   }
 
   // ---- Sohbete yazılan bir komutu işler. "true" dönerse, bu mesaj
-  // bir bot komutuydu demektir (çağıran taraf normal mesaj olarak da
-  // kaydedebilir, komut olduğunu bilerek). ----
+  // bir bot komutuydu demektir. ----
   async function handleChatCommand(channel, text) {
     const trimmed = text.trim();
     if (!trimmed.startsWith("!")) return false;
