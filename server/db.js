@@ -36,6 +36,12 @@ const messageSchema = new mongoose.Schema({
   username: { type: String, required: true },
   text: { type: String, required: true, maxlength: 2000, trim: true },
   createdAt: { type: Date, default: Date.now },
+  // YENİ: emoji tepkileri — [{ emoji: "👍", username: "Alganis" }, ...]
+  // Aynı kişi aynı emojiyi tekrar tıklarsa, o kaydı siliyoruz (aç/kapa).
+  reactions: {
+    type: [{ emoji: String, username: String, _id: false }],
+    default: [],
+  },
 });
 const Message = mongoose.models.Message || mongoose.model("Message", messageSchema);
 

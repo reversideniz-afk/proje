@@ -168,6 +168,71 @@ async function run() {
   });
   check(serverStillAliveAfterPhotos, "Reddedilen fotoğraf denemeleri sonrası sunucu ÇÖKMÜYOR");
 
+  // ============================================================
+  // YENİ: Yazıyor göstergesi — DB gerektirmiyor, tam test edilebiliyor.
+  // NOT: Taze bağlantılar kullanıyoruz — clientA/clientB, az önceki
+  // "aşırı büyük dosya" testinde (kasıtlı olarak) 15MB'lık bir veri
+  // göndermeye çalıştı; bu, o bağlantıları sonraki testler için
+  // güvenilmez bırakabiliyor (gerçek kullanımda bu hiç olmaz, çünkü
+  // istemci zaten 10MB üstünü göndermeden reddediyor — bu sadece
+  // testin kendi sırasından kaynaklanan yapay bir durum).
+  // ============================================================
+  const clientD = io(SERVER_URL, { reconnection: false });
+  await new Promise((resolve) => clientD.on("connect", resolve));
+  clientD.emit("join-channel", { roomId: "test-chat-typing", token: "TEST_BYPASS:Ali" });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const clientE = io(SERVER_URL, { reconnection: false });
+  await new Promise((resolve) => clientE.on("connect", resolve));
+  clientE.emit("join-channel", { roomId: "test-chat-typing", token: "TEST_BYPASS:Veli" });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const typingPromise = new Promise((resolve) => clientE.on("user-typing", resolve));
+  clientD.emit("typing-start", { token: "TEST_BYPASS:Ali" });
+  const typingEvent = await Promise.race([
+    typingPromise,
+    new Promise((r) => setTimeout(() => r(null), 2000)),
+  ]);
+  check(
+    typingEvent !== null && typingEvent.username === "Ali",
+    "'typing-start' gönderilince odadaki diğer kişi anlık haberdar oluyor"
+  );
+
+  const stopTypingPromise = new Promise((resolve) => clientE.on("user-stopped-typing", resolve));
+  clientD.emit("typing-stop", { token: "TEST_BYPASS:Ali" });
+  const stopTypingEvent = await Promise.race([
+    stopTypingPromise,
+    new Promise((r) => setTimeout(() => r(null), 2000)),
+  ]);
+  check(
+    stopTypingEvent !== null && stopTypingEvent.username === "Ali",
+    "'typing-stop' gönderilince odadaki diğer kişi anlık haberdar oluyor"
+  );
+  clientD.disconnect();
+  clientE.disconnect();
+
+  // YENİ: Tepki (reaction) ekleme DB gerektiriyor — burada sadece
+  // DB bağlı değilken çökmediğini doğruluyorum, gerçek davranışı
+  // sen canlıda test edeceksin.
+  clientA.emit("toggle-reaction", {
+    token: "TEST_BYPASS:Ali",
+    messageId: "000000000000000000000000",
+    emoji: "👍",
+  });
+  await new Promise((r) => setTimeout(r, 500));
+  const serverStillAliveAfterReaction = await new Promise((resolve) => {
+    const pingClient = io(SERVER_URL, { reconnection: false, timeout: 2000 });
+    pingClient.on("connect", () => {
+      pingClient.disconnect();
+      resolve(true);
+    });
+    pingClient.on("connect_error", () => resolve(false));
+  });
+  check(
+    serverStillAliveAfterReaction,
+    "Veritabanı bağlı değilken 'toggle-reaction' denemesi sonrası sunucu ÇÖKMÜYOR"
+  );
+
   clientA.disconnect();
   clientB.disconnect();
 

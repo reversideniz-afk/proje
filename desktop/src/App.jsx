@@ -3,6 +3,8 @@ import { io } from 'socket.io-client'
 import './App.css'
 
 const SERVER_URL = 'https://proje-dh7l.onrender.com'
+// YENİ: Mesaj tepkileri için hızlı seçim listesi.
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉']
 
 // YENİ: TURN bilgileri koda GÖMÜLMÜYOR — girişten sonra sunucudan geliyor.
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -244,6 +246,10 @@ function App() {
 
   // --- Kanal (metin) durumu ---
   const [activeChannel, setActiveChannel] = useState(null)
+  const activeChannelRef = useRef(null)
+  useEffect(() => {
+    activeChannelRef.current = activeChannel
+  }, [activeChannel])
   const [pendingChannel, setPendingChannel] = useState(null)
   const [channelPasswordInput, setChannelPasswordInput] = useState('')
   const [showChannelPassword, setShowChannelPassword] = useState(false)
@@ -271,6 +277,15 @@ function App() {
   const photoFileInputRef = useRef(null)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
+  // YENİ: o an aktif kanalda kimlerin yazıyor olduğu.
+  const [typingUsers, setTypingUsers] = useState([])
+  const isTypingRef = useRef(false)
+  const typingStopTimeoutRef = useRef(null)
+  // YENİ: hangi kanallarda (SADECE üye olunanlarda — sunucu zaten
+  // sadece üyelere bildirim gönderiyor) okunmamış aktivite var.
+  const [unreadChannels, setUnreadChannels] = useState([])
+  // YENİ: sohbet üstüne dosya sürüklenirken görsel ipucu için.
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
@@ -638,6 +653,7 @@ function App() {
     setPeers([])
     setMessages([])
     setEphemeralPhotos([])
+    setTypingUsers([])
     setHasMoreHistory(true)
     setOnlineMembers([])
     setOfflineMembers([])
@@ -661,6 +677,8 @@ function App() {
       setPeers([])
       setMessages([])
       setEphemeralPhotos([])
+      setTypingUsers([])
+      setUnreadChannels((prev) => prev.filter((c) => c !== channelName))
       setHasMoreHistory(true)
       setOnlineMembers([])
       setOfflineMembers([])
@@ -730,6 +748,29 @@ function App() {
             chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
           }
         })
+      })
+
+      // YENİ: Yazıyor göstergesi.
+      socket.on('user-typing', ({ username }) => {
+        setTypingUsers((prev) => (prev.includes(username) ? prev : [...prev, username]))
+      })
+      socket.on('user-stopped-typing', ({ username }) => {
+        setTypingUsers((prev) => prev.filter((u) => u !== username))
+      })
+
+      // YENİ: Bir mesajın tepkileri değiştiğinde, o mesajı güncelle.
+      socket.on('reactions-updated', ({ messageId, reactions }) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+        )
+      })
+
+      // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
+      // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
+      // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
+      socket.on('channel-activity', ({ channel }) => {
+        if (channel === activeChannelRef.current) return
+        setUnreadChannels((prev) => (prev.includes(channel) ? prev : [...prev, channel]))
       })
 
       // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
@@ -1024,20 +1065,42 @@ function App() {
     if (!text || !socketRef.current) return
     socketRef.current.emit('send-message', { token: sessionTokenRef.current, text })
     setChatInput('')
+    // Mesaj gönderilince "yazıyor" durumunu hemen bitir.
+    if (typingStopTimeoutRef.current) {
+      clearTimeout(typingStopTimeoutRef.current)
+      typingStopTimeoutRef.current = null
+    }
+    if (isTypingRef.current) {
+      isTypingRef.current = false
+      socketRef.current.emit('typing-stop', { token: sessionTokenRef.current })
+    }
   }
 
-  // YENİ: Fotoğraf seçme — dosya seçilince boyutu/tipini kontrol edip
-  // base64'e çevirip gönderiyoruz. HİÇBİR YERE kaydedilmiyor, sadece
-  // o an kanalda olanlara anlık iletiliyor.
+  // YENİ: Yazıyor göstergesi — her tuşta "typing-start" göndermek yerine,
+  // sadece BAŞLARKEN bir kere gönderiyoruz; 3 saniye sessizlik olunca
+  // otomatik "typing-stop" gidiyor.
+  const handleChatInputChange = (e) => {
+    setChatInput(e.target.value)
+    if (!socketRef.current) return
+
+    if (!isTypingRef.current) {
+      isTypingRef.current = true
+      socketRef.current.emit('typing-start', { token: sessionTokenRef.current })
+    }
+    if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current)
+    typingStopTimeoutRef.current = setTimeout(() => {
+      isTypingRef.current = false
+      socketRef.current?.emit('typing-stop', { token: sessionTokenRef.current })
+    }, 3000)
+  }
+
+  // YENİ: Fotoğraf gönderme — dosya seçme VE Ctrl+V yapıştırma, ikisi de
+  // bu ortak fonksiyonu kullanıyor. Boyutu/tipini kontrol edip base64'e
+  // çevirip gönderiyoruz. HİÇBİR YERE kaydedilmiyor, sadece o an kanalda
+  // olanlara anlık iletiliyor.
   const MAX_PHOTO_BYTES = 10 * 1024 * 1024 // 10 MB
 
-  const handlePhotoButtonClick = () => {
-    photoFileInputRef.current?.click()
-  }
-
-  const handlePhotoFileSelected = (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = '' // aynı dosyayı üst üste seçebilsin diye
+  const sendPhotoFile = (file) => {
     if (!file || !socketRef.current) return
 
     if (!file.type.startsWith('image/')) {
@@ -1064,6 +1127,58 @@ function App() {
       setIsSendingPhoto(false)
     }
     reader.readAsDataURL(file)
+  }
+
+  // YENİ: Bir mesaja emoji tepkisi ekleme/kaldırma (aç/kapa).
+  const handleToggleReaction = (messageId, emoji) => {
+    socketRef.current?.emit('toggle-reaction', {
+      token: sessionTokenRef.current,
+      messageId,
+      emoji,
+    })
+  }
+
+  // YENİ: Sohbet alanına dosya sürükleyip bırakma — fotoğraf yapıştırmayla
+  // aynı ortak fonksiyonu (sendPhotoFile) kullanıyor.
+  const handleChatDragOver = (e) => {
+    e.preventDefault()
+    setIsDraggingPhoto(true)
+  }
+  const handleChatDragLeave = () => {
+    setIsDraggingPhoto(false)
+  }
+  const handleChatDrop = (e) => {
+    e.preventDefault()
+    setIsDraggingPhoto(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) sendPhotoFile(file)
+  }
+
+  const handlePhotoButtonClick = () => {
+    photoFileInputRef.current?.click()
+  }
+
+  const handlePhotoFileSelected = (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // aynı dosyayı üst üste seçebilsin diye
+    sendPhotoFile(file)
+  }
+
+  // YENİ: Mesaj kutusuna Ctrl+V ile bir fotoğraf yapıştırılırsa,
+  // normal metin yapıştırma yerine fotoğraf gönderme akışını başlatıyoruz.
+  const handleChatInputPaste = (e) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault() // metin kutusuna resmin dosya adı vs. yapıştırılmasın
+        const file = item.getAsFile()
+        if (file) sendPhotoFile(file)
+        return
+      }
+    }
+    // Görsel yoksa hiçbir şey yapmıyoruz — normal metin yapıştırma
+    // (tarayıcının kendi varsayılan davranışı) olduğu gibi devam eder.
   }
 
   const handleLoadOlderMessages = () => {
@@ -1148,6 +1263,7 @@ function App() {
         <nav className="channel-list">
           {channels.map((channel) => {
             const isMember = memberChannels.includes(channel)
+            const hasUnread = unreadChannels.includes(channel)
             return (
               <button
                 key={channel}
@@ -1165,6 +1281,7 @@ function App() {
                 }}
               >
                 # {channel} {!isMember && <span className="channel-lock">🔒</span>}
+                {hasUnread && <span className="channel-unread-dot" />}
               </button>
             )
           })}
@@ -1172,9 +1289,17 @@ function App() {
       </aside>
 
       <main className="main-panel">
-        {connectionError && <p className="error-text">{connectionError}</p>}
+        {connectionError && (
+          <div className="no-channel-placeholder">
+            <p className="error-text">{connectionError}</p>
+          </div>
+        )}
 
-        {!activeChannel && !connectionError && <p>Başlamak için soldan bir kanal seç.</p>}
+        {!activeChannel && !connectionError && (
+          <div className="no-channel-placeholder">
+            <p>Başlamak için soldan bir kanal seç.</p>
+          </div>
+        )}
 
         {activeChannel && !connectionError && (
           <div className="channel-view">
@@ -1330,7 +1455,16 @@ function App() {
               )}
 
               <div className="chat-panel">
-                <div className="chat-messages" ref={chatMessagesRef}>
+                <div
+                  className={'chat-messages' + (isDraggingPhoto ? ' chat-messages--dragging' : '')}
+                  ref={chatMessagesRef}
+                  onDragOver={handleChatDragOver}
+                  onDragLeave={handleChatDragLeave}
+                  onDrop={handleChatDrop}
+                >
+                  {isDraggingPhoto && (
+                    <div className="chat-drop-hint">📷 Bırak, gönderilsin</div>
+                  )}
                   {chatTimeline.length === 0 && (
                     <p className="chat-empty-hint">Henüz mesaj yok, ilk mesajı sen at.</p>
                   )}
@@ -1357,11 +1491,52 @@ function App() {
                         <span className="chat-photo-hint">📷 tek seferlik — kaydedilmiyor</span>
                       </div>
                     ) : (
-                      <div key={`text-${i}`} className="chat-message">
+                      <div key={item.id || `text-${i}`} className="chat-message chat-message--text-wrap">
                         <span className="chat-message-author">{item.username}</span>
                         <span className="chat-message-text">{item.text}</span>
+                        {item.id && (
+                          <div className="chat-reactions">
+                            {Object.entries(
+                              (item.reactions || []).reduce((acc, r) => {
+                                acc[r.emoji] = acc[r.emoji] || []
+                                acc[r.emoji].push(r.username)
+                                return acc
+                              }, {})
+                            ).map(([emoji, usernames]) => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                className={
+                                  'reaction-pill' +
+                                  (usernames.includes(displayName) ? ' reaction-pill--mine' : '')
+                                }
+                                onClick={() => handleToggleReaction(item.id, emoji)}
+                                title={usernames.join(', ')}
+                              >
+                                {emoji} {usernames.length}
+                              </button>
+                            ))}
+                            <div className="reaction-picker">
+                              {QUICK_REACTIONS.map((emoji) => (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  className="reaction-picker-option"
+                                  onClick={() => handleToggleReaction(item.id, emoji)}
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
+                  )}
+                  {typingUsers.length > 0 && (
+                    <p className="chat-typing-indicator">
+                      {typingUsers.join(', ')} yazıyor…
+                    </p>
                   )}
                 </div>
                 <form className="chat-input-form" onSubmit={handleSendMessage}>
@@ -1384,8 +1559,9 @@ function App() {
                   <input
                     type="text"
                     value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Mesaj yaz…"
+                    onChange={handleChatInputChange}
+                    onPaste={handleChatInputPaste}
+                    placeholder="Mesaj yaz… (fotoğraf yapıştırabilirsin)"
                     maxLength={2000}
                   />
                   <button type="submit">Gönder</button>

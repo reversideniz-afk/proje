@@ -126,6 +126,18 @@ function voiceRoomName(channel) {
   return `voice:${channel}`;
 }
 
+// YENİ: .lean() sorgu sonuçlarını istemciye göndereceğimiz tutarlı
+// şekle çeviriyor (_id -> id, string olarak).
+function serializeMessage(msg) {
+  return {
+    id: msg._id.toString(),
+    username: msg.username,
+    text: msg.text,
+    createdAt: msg.createdAt,
+    reactions: msg.reactions || [],
+  };
+}
+
 async function buildMemberList(channel) {
   const online = Object.values(textRooms[channel] || {}).map((u) => ({
     username: u.username,
@@ -241,6 +253,18 @@ io.on("connection", (socket) => {
       console.error("Kanal üyeliği kaydedilirken hata:", err.message);
     }
 
+    // YENİ: Bu kişiyi, ÜYE OLDUĞU TÜM kanalların "bildirim" odalarına
+    // da katıyoruz — böylece o an başka bir kanaldayken bile, üye
+    // olduğu diğer kanallarda yeni mesaj gelirse haberdar olabiliyor
+    // (okunmamış işareti için). Kilitli/üye olmadığı kanallar için bu
+    // hiç çalışmıyor — bilerek, sadece üyelere özel.
+    try {
+      const allMemberships = await ChannelMember.find({ username }).lean();
+      allMemberships.forEach((m) => socket.join(`member-notify:${m.channel}`));
+    } catch (err) {
+      console.error("Bildirim odalarına katılırken hata:", err.message);
+    }
+
     // Diğer metin-kanalı üyelerine bildir.
     socket.to(textRoomName(roomId)).emit("member-online", { username });
 
@@ -255,7 +279,7 @@ io.on("connection", (socket) => {
         .sort({ createdAt: -1 })
         .limit(50)
         .lean();
-      socket.emit("message-history", history.reverse());
+      socket.emit("message-history", history.reverse().map(serializeMessage));
     } catch (err) {
       console.error("Mesaj geçmişi alınırken hata:", err.message);
     }
@@ -328,12 +352,63 @@ io.on("connection", (socket) => {
         text: trimmedText,
       });
       io.to(textRoomName(currentTextRoom)).emit("new-message", {
+        id: message._id.toString(),
         username: message.username,
         text: message.text,
         createdAt: message.createdAt,
+        reactions: [],
+      });
+      // YENİ: bu kanalın ÜYESİ olan ama şu an BAŞKA bir kanalda olan
+      // kişilere hafif bir "burada bir şey oldu" işareti gönder —
+      // okunmamış kanal işareti için. Kendisi zaten mesajı gördüğü
+      // için göndereni hariç tutuyoruz.
+      socket.to(`member-notify:${currentTextRoom}`).emit("channel-activity", {
+        channel: currentTextRoom,
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Yazıyor... göstergesi ----
+  socket.on("typing-start", ({ token }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+    socket.to(textRoomName(currentTextRoom)).emit("user-typing", { username });
+  });
+  socket.on("typing-stop", ({ token }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+    socket.to(textRoomName(currentTextRoom)).emit("user-stopped-typing", { username });
+  });
+
+  // ---- YENİ: Mesaj emoji tepkisi (aç/kapa) ----
+  socket.on("toggle-reaction", async ({ token, messageId, emoji }) => {
+    const username = resolveUsername(token);
+    if (!username || !currentTextRoom) return;
+    if (typeof messageId !== "string" || typeof emoji !== "string") return;
+    if (emoji.length > 8) return; // tek bir emoji karakteri için fazlasıyla yeterli
+
+    try {
+      const message = await Message.findOne({ _id: messageId, channel: currentTextRoom });
+      if (!message) return;
+
+      const existingIndex = message.reactions.findIndex(
+        (r) => r.username === username && r.emoji === emoji
+      );
+      if (existingIndex >= 0) {
+        message.reactions.splice(existingIndex, 1);
+      } else {
+        message.reactions.push({ emoji, username });
+      }
+      await message.save();
+
+      io.to(textRoomName(currentTextRoom)).emit("reactions-updated", {
+        messageId,
+        reactions: message.reactions,
+      });
+    } catch (err) {
+      console.error("Tepki güncellenirken hata:", err.message);
     }
   });
 
@@ -357,6 +432,9 @@ io.on("connection", (socket) => {
       imageData,
       mimeType,
       createdAt: new Date(),
+    });
+    socket.to(`member-notify:${currentTextRoom}`).emit("channel-activity", {
+      channel: currentTextRoom,
     });
 
     // Küçük bir nezaket: o an kanalda gönderenden başka kimse yoksa,
@@ -392,7 +470,8 @@ io.on("connection", (socket) => {
       const query = { channel: currentTextRoom };
       if (before) query.createdAt = { $lt: new Date(before) };
       const older = await Message.find(query).sort({ createdAt: -1 }).limit(50).lean();
-      if (typeof callback === "function") callback({ messages: older.reverse() });
+      if (typeof callback === "function")
+        callback({ messages: older.reverse().map(serializeMessage) });
     } catch (err) {
       console.error("Eski mesajlar alınırken hata:", err.message);
       if (typeof callback === "function") callback({ messages: [] });

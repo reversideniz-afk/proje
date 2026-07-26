@@ -86,14 +86,20 @@
 .main-panel {
   flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   background: var(--bg-void);
   color: var(--text-primary);
   padding: 24px;
   box-sizing: border-box;
-  text-align: center;
   overflow: auto;
+}
+
+.no-channel-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .whoami {
@@ -109,15 +115,17 @@
 .channel-view {
   display: flex;
   gap: 20px;
-  align-items: flex-start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  max-width: 1100px;
   text-align: left;
 }
 
 .channel-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -346,6 +354,7 @@
 .member-list-panel {
   width: 190px;
   flex-shrink: 0;
+  overflow-y: auto;
   background: var(--bg-sidebar);
   border-radius: 10px;
   padding: 14px 12px;
@@ -621,7 +630,8 @@
   flex-direction: column;
   background: var(--bg-panel);
   border-radius: 10px;
-  height: 420px;
+  flex: 1;
+  min-height: 200px;
   overflow: hidden;
 }
 
@@ -893,4 +903,96 @@
 .chat-photo-button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ------------------------------------------------------------
+   YENİ: Sürükle-bırak fotoğraf, yazıyor göstergesi, tepkiler,
+   okunmamış kanal işareti
+------------------------------------------------------------ */
+
+.chat-messages--dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: 8px;
+}
+
+.chat-drop-hint {
+  position: sticky;
+  top: 0;
+  text-align: center;
+  padding: 10px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--bg-panel);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  pointer-events: none;
+}
+
+.chat-typing-indicator {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 4px 0 0 0;
+}
+
+.chat-message--text-wrap {
+  position: relative;
+}
+
+.chat-reactions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.reaction-pill {
+  font-size: 11px;
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.reaction-pill--mine {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.reaction-picker {
+  display: none;
+  gap: 2px;
+}
+
+.chat-message--text-wrap:hover .reaction-picker {
+  display: flex;
+}
+
+.reaction-picker-option {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  opacity: 0.6;
+}
+
+.reaction-picker-option:hover {
+  opacity: 1;
+  background: var(--bg-panel-hover);
+}
+
+.channel-unread-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 6px;
 }
