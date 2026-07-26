@@ -49,7 +49,7 @@ async function testChannelSecrets() {
 
   // Yanlış kanal şifresi
   const joinErrorPromise = new Promise((resolve) => client.on("join-error", resolve));
-  client.emit("join-room", { roomId: "Genel", displayName: "Test", secret: "yanlis" });
+  client.emit("join-channel", { roomId: "Genel", token: "TEST_BYPASS:Test", secret: "yanlis" });
   const joinError = await Promise.race([
     joinErrorPromise,
     new Promise((r) => setTimeout(() => r(null), 2000)),
@@ -62,17 +62,17 @@ async function testChannelSecrets() {
     client2.on("connect", resolve);
     client2.on("connect_error", reject);
   });
-  const existingUsersPromise = new Promise((resolve) => client2.on("existing-users", resolve));
-  client2.emit("join-room", {
+  const membersPromise = new Promise((resolve) => client2.on("channel-members", resolve));
+  client2.emit("join-channel", {
     roomId: "Genel",
-    displayName: "Test2",
-    secret: process.env.CHANNEL_SECRET_GENEL,
+    token: "TEST_BYPASS:Test2",
+    secret: process.env.CHANNEL_1_SECRET,
   });
-  const existingUsers = await Promise.race([
-    existingUsersPromise,
+  const members = await Promise.race([
+    membersPromise,
     new Promise((r) => setTimeout(() => r(null), 2000)),
   ]);
-  check(existingUsers !== null, "Doğru KANAL şifresiyle giriş kabul ediliyor");
+  check(members !== null, "Doğru KANAL şifresiyle giriş kabul ediliyor");
 
   client.disconnect();
   client2.disconnect();

@@ -3,11 +3,8 @@ import { io } from 'socket.io-client'
 import './App.css'
 
 const SERVER_URL = 'https://proje-dh7l.onrender.com'
-const CHANNELS = ['Genel', 'Oyun', 'Müzik']
 
-// YENİ: TURN bilgileri artık koda GÖMÜLMÜYOR — sunucudan, girişten
-// (login) sonra geliyor. Bu, giriş yapılana kadar kullanılacak
-// varsayılan (sadece STUN) liste.
+// YENİ: TURN bilgileri koda GÖMÜLMÜYOR — girişten sonra sunucudan geliyor.
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 function describeMediaError(err) {
@@ -27,7 +24,8 @@ function describeMediaError(err) {
 }
 
 // Karşı tarafın kamera görüntüsü (ya da kamerası kapalıysa avatar).
-function RemoteCameraTile({ stream, label, cameraOn, micOn }) {
+// YENİ: tıklanınca büyütülüyor (isEnlarged/onToggleEnlarge).
+function RemoteCameraTile({ stream, label, cameraOn, micOn, isEnlarged, onToggleEnlarge }) {
   const videoRef = useRef(null)
   const audioRef = useRef(null)
 
@@ -45,14 +43,15 @@ function RemoteCameraTile({ stream, label, cameraOn, micOn }) {
   }, [cameraOn, micOn, stream])
 
   return (
-    <div className="remote-video-wrapper">
+    <div
+      className={'video-tile remote-video-wrapper' + (isEnlarged ? ' video-tile--enlarged' : '')}
+      onClick={onToggleEnlarge}
+    >
       {cameraOn ? (
         <video ref={videoRef} autoPlay playsInline className="remote-video" />
       ) : (
-        <div className="camera-off-placeholder camera-off-placeholder--small">
-          <div className="avatar-circle avatar-circle--small">
-            {label.charAt(0).toUpperCase()}
-          </div>
+        <div className="camera-off-placeholder">
+          <div className="avatar-circle">{label.charAt(0).toUpperCase()}</div>
           <audio ref={audioRef} autoPlay />
         </div>
       )}
@@ -63,9 +62,8 @@ function RemoteCameraTile({ stream, label, cameraOn, micOn }) {
   )
 }
 
-// YENİ: Karşı tarafın EKRAN paylaşımı — kameradan tamamen AYRI, kendi
-// kutucuğu. Sadece o kişi paylaşım yapıyorken render ediliyor.
-function RemoteScreenTile({ stream, label }) {
+// Karşı tarafın EKRAN paylaşımı — kameradan ayrı, kendi kutucuğu.
+function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge }) {
   const videoRef = useRef(null)
 
   useEffect(() => {
@@ -76,63 +74,112 @@ function RemoteScreenTile({ stream, label }) {
   }, [stream])
 
   return (
-    <div className="remote-video-wrapper">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        className="remote-video remote-video--screen"
-      />
+    <div
+      className={'video-tile remote-video-wrapper' + (isEnlarged ? ' video-tile--enlarged' : '')}
+      onClick={onToggleEnlarge}
+    >
+      <video ref={videoRef} autoPlay playsInline className="remote-video remote-video--screen" />
       <span className="remote-video-label">{label} 🖥️ ekranı</span>
     </div>
   )
 }
 
+function EyeIcon({ visible }) {
+  return visible ? (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <path
+        d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.4 5.5A9.9 9.9 0 0112 5c5 0 9 4 10 7-.4 1.1-1.1 2.3-2.1 3.4M6.3 6.3C4.4 7.6 3 9.6 2 12c1 3 5 7 10 7 1.3 0 2.5-.2 3.6-.6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <path
+        d="M2 12c1-3 5-7 10-7s9 4 10 7c-1 3-5 7-10 7s-9-4-10-7z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+}
+
 function App() {
-  // --- YENİ: kişisel hesap girişi (isim yerine kullanıcı adı+şifre) ---
+  // --- Kişisel hesap girişi ---
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
   const [loginError, setLoginError] = useState(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
-  const displayName = username // Girişi yapan kişinin doğrulanmış adı.
+  const displayName = username
 
-  // YENİ: sunucudan (login sonrası) gelen ICE sunucu listesi — TURN
-  // bilgilerini içeriyor ama koda hiç gömülü değil.
+  const [sessionToken, setSessionToken] = useState(null)
+  const sessionTokenRef = useRef(null)
+  useEffect(() => {
+    sessionTokenRef.current = sessionToken
+  }, [sessionToken])
+
   const [iceServers, setIceServers] = useState(DEFAULT_ICE_SERVERS)
   const iceServersRef = useRef(DEFAULT_ICE_SERVERS)
   useEffect(() => {
     iceServersRef.current = iceServers
   }, [iceServers])
 
-  // --- YENİ: hangi kanala girmek istediğimiz, şifresini sorarken ---
+  // YENİ: kanal listesi artık sunucudan geliyor (koda gömülü değil).
+  const [channels, setChannels] = useState([])
+
+  // --- Kanal (metin) durumu ---
+  const [activeChannel, setActiveChannel] = useState(null)
   const [pendingChannel, setPendingChannel] = useState(null)
   const [channelPasswordInput, setChannelPasswordInput] = useState('')
-
-  const [activeChannel, setActiveChannel] = useState(null)
-  const [peers, setPeers] = useState([])
+  const [showChannelPassword, setShowChannelPassword] = useState(false)
   const [connectionError, setConnectionError] = useState(null)
-  const [mediaError, setMediaError] = useState(null)
-  // YENİ: bağlantı kopması/yeniden bağlanma durumunu takip ediyoruz —
-  // artık kullanıcıya sessizce değil, görünür bir şekilde bildiriyoruz.
   const [connectionStatus, setConnectionStatus] = useState('connected')
+
+  // YENİ: üye listesi (Discord tarzı, sağda) — online (metin kanalına
+  // bağlı herkes, seste olanlar ayrıca işaretli) + offline (daha önce
+  // bu kanala girmiş ama şu an bağlı olmayanlar).
+  const [onlineMembers, setOnlineMembers] = useState([])
+  const [offlineMembers, setOfflineMembers] = useState([])
+
+  // YENİ: sese girmek artık AYRI, isteğe bağlı bir adım.
+  const [inVoice, setInVoice] = useState(false)
+
+  // --- Sohbet ---
+  const [messages, setMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [hasMoreHistory, setHasMoreHistory] = useState(true)
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false)
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
   const [isMicOn, setIsMicOn] = useState(false)
   const [isCameraOn, setIsCameraOn] = useState(false)
 
-  // --- YENİ: Ekran paylaşımı artık TAMAMEN AYRI bir akış/bağlantı ---
+  // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
   const [localScreenStream, setLocalScreenStream] = useState(null)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
 
-  // remoteStreams artık kişi başına { mainStream, screenStream } tutuyor.
   const [remoteStreams, setRemoteStreams] = useState({})
-
+  const [peers, setPeers] = useState([]) // artık SADECE seste olanlar
+  const [mediaError, setMediaError] = useState(null)
   const [screenSourceOptions, setScreenSourceOptions] = useState(null)
+
+  // YENİ: büyütülmüş kutucuk — bir video/ekran kutucuğuna tıklayınca
+  // o kutucuk büyür, diğerleri küçük bir şeride iner.
+  const [enlargedTile, setEnlargedTile] = useState(null)
+  const toggleEnlarge = (tileId) => {
+    setEnlargedTile((prev) => (prev === tileId ? null : tileId))
+  }
 
   const socketRef = useRef(null)
   const localVideoRef = useRef(null)
+  const chatMessagesRef = useRef(null)
   const localScreenVideoRef = useRef(null)
 
   const localMainStreamRef = useRef(null)
@@ -146,8 +193,6 @@ function App() {
   }, [localScreenStream])
 
   // peerConnectionsRef: Map<peerSocketId, { mainPc, screenPc }>
-  // screenPc, ekran paylaşımı fiilen başlayana kadar null kalır (tembel
-  // kurulum) — herkesle "boşuna" ikinci bir bağlantı açmaya gerek yok.
   const peerConnectionsRef = useRef(new Map())
 
   useEffect(() => {
@@ -203,8 +248,6 @@ function App() {
     }
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
-  // connectionType: 'main' | 'screen' — hangi alt bağlantıdan geldiğini
-  // bilmemiz lazım ki doğru kutuya (mainStream/screenStream) yazalım.
   const syncReceiversToStream = useCallback((pc, peerSocketId, connectionType) => {
     const streamKey = connectionType === 'screen' ? 'screenStream' : 'mainStream'
     const receivers = pc.getReceivers()
@@ -219,27 +262,17 @@ function App() {
         }
       })
       if (!changed && peerEntry[streamKey]) return prev
-      return {
-        ...prev,
-        [peerSocketId]: { ...peerEntry, [streamKey]: existing },
-      }
+      return { ...prev, [peerSocketId]: { ...peerEntry, [streamKey]: existing } }
     })
   }, [])
 
-  // Tek bir alt bağlantının (main YA DA screen) ortak kurulum mantığı —
-  // olay dinleyicileri, teklif gönderme vs. connectionType parametresiyle
-  // hangi türden bahsettiğimizi biliyor (sinyal mesajlarına ekliyoruz).
   const createSubConnection = useCallback(
     (peerSocketId, connectionType) => {
       const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
 
-      pc.ontrack = (event) => {
-        console.log(
-          `[WebRTC ${peerSocketId}/${connectionType}] ontrack: kind=${event.track.kind}`
-        )
+      pc.ontrack = () => {
         syncReceiversToStream(pc, peerSocketId, connectionType)
       }
-
       pc.onicecandidate = (event) => {
         if (event.candidate && socketRef.current) {
           socketRef.current.emit('signal', {
@@ -248,13 +281,9 @@ function App() {
           })
         }
       }
-
       pc.onconnectionstatechange = () => {
         console.log(`[WebRTC ${peerSocketId}/${connectionType}] durum: ${pc.connectionState}`)
       }
-
-      // Çakışan müzakereleri önleyen kilit (daha önce eklediğimiz mantığın
-      // aynısı, artık her alt bağlantı için ayrı ayrı geçerli).
       pc.onnegotiationneeded = async () => {
         if (pc.makingOffer) return
         pc.makingOffer = true
@@ -271,16 +300,11 @@ function App() {
           pc.makingOffer = false
         }
       }
-
       return pc
     },
     [syncReceiversToStream]
   )
 
-  // "Ana" (mikrofon+kamera) bağlantıyı bulur, yoksa kurar. Kurulurken
-  // baştan bir ses+görüntü yuvası açıyoruz (recvonly) ki karşı taraf
-  // medya olsun olmasın hemen bir kutucuk görsün — bu, önceden test edip
-  // sağlamlaştırdığımız, güvendiğimiz desen.
   const getOrCreateMainConnection = useCallback(
     (peerSocketId) => {
       let entry = peerConnectionsRef.current.get(peerSocketId)
@@ -303,8 +327,6 @@ function App() {
     [createSubConnection]
   )
 
-  // "Ekran" bağlantısı TAMAMEN TEMBEL — sadece gerçekten ihtiyaç olduğunda
-  // (biri paylaşım başlattığında) kuruluyor, baştan boş yuva açmıyoruz.
   const getOrCreateScreenConnection = useCallback(
     (peerSocketId) => {
       let entry = peerConnectionsRef.current.get(peerSocketId)
@@ -323,8 +345,6 @@ function App() {
     [createSubConnection]
   )
 
-  // Eksik ANA bağlantıları (hata sonrası temizlenmiş olabilir) otomatik
-  // yeniden kuran kendi kendini toparlama mantığı.
   const ensureMainConnectionsForAllPeers = useCallback(() => {
     peers.forEach((peer) => {
       const entry = peerConnectionsRef.current.get(peer.socketId)
@@ -361,8 +381,6 @@ function App() {
     })
   }, [])
 
-  // YENİ: Ekran track'ini TÜM akranlara — her biri için gerekirse
-  // screenPc'yi SIFIRDAN kuruyor (ensureMainConnections'ın ekran karşılığı).
   const addTrackToScreenConnections = useCallback(
     (track, stream) => {
       peers.forEach((peer) => {
@@ -382,15 +400,10 @@ function App() {
     peerConnectionsRef.current.forEach((entry, peerSocketId) => {
       if (!entry.screenPc) return
       const sender = entry.screenPc.getSenders().find((s) => s.track === track)
-      if (sender) {
-        entry.screenPc.removeTrack(sender)
-      }
+      if (sender) entry.screenPc.removeTrack(sender)
       entry.screenPc.close()
       entry.screenPc = null
       console.log(`[screen] ${peerSocketId} - ekran bağlantısı kapatıldı`)
-
-      // SADECE bu kişinin ekran akışını temizliyoruz — diğer kişilerin
-      // (varsa) kendi ekran paylaşımlarına dokunmuyoruz.
       setRemoteStreams((prev) => {
         const peerEntry = prev[peerSocketId]
         if (!peerEntry) return prev
@@ -399,67 +412,128 @@ function App() {
     })
   }, [])
 
+  // YENİ: Sesten çık — metin kanalında KALMAYA devam ediyoruz, sadece
+  // WebRTC/medya bağlantılarını kapatıyoruz.
+  const leaveVoice = useCallback(() => {
+    socketRef.current?.emit('leave-voice')
+    stopLocalMedia()
+    cleanupPeerConnections()
+    setPeers([])
+    setIsMicOn(false)
+    setIsCameraOn(false)
+    setIsScreenSharing(false)
+    setEnlargedTile(null)
+    setInVoice(false)
+  }, [stopLocalMedia, cleanupPeerConnections])
+
+  // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım.
+  const joinVoice = useCallback(() => {
+    if (!socketRef.current) return
+    socketRef.current.emit('join-voice', { token: sessionTokenRef.current })
+    setInVoice(true)
+  }, [])
+
   const leaveChannel = useCallback(() => {
     cleanupSocket()
     stopLocalMedia()
     cleanupPeerConnections()
     setPeers([])
+    setMessages([])
+    setHasMoreHistory(true)
+    setOnlineMembers([])
+    setOfflineMembers([])
     setConnectionError(null)
     setMediaError(null)
     setIsMicOn(false)
     setIsCameraOn(false)
     setIsScreenSharing(false)
     setConnectionStatus('connected')
+    setInVoice(false)
+    setEnlargedTile(null)
     setActiveChannel(null)
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
+  // YENİ: Kanala (METİN) katılma — ses bağlantısı burada HİÇ kurulmuyor.
   const joinChannel = useCallback(
     (channelName, channelSecret) => {
       cleanupSocket()
       stopLocalMedia()
       cleanupPeerConnections()
       setPeers([])
+      setMessages([])
+      setHasMoreHistory(true)
+      setOnlineMembers([])
+      setOfflineMembers([])
       setConnectionError(null)
       setMediaError(null)
       setIsMicOn(false)
       setIsCameraOn(false)
       setIsScreenSharing(false)
       setConnectionStatus('connected')
+      setInVoice(false)
+      setEnlargedTile(null)
       setActiveChannel(channelName)
 
       const socket = io(SERVER_URL)
       socketRef.current = socket
 
       socket.on('connect', () => {
-        // "connect" olayı hem ilk bağlantıda hem de kopma sonrası
-        // YENİDEN bağlanmada tetikleniyor — ikisinde de odaya (tekrar)
-        // katılmamız lazım, Socket.io/sunucu bunu hatırlamıyor.
         setConnectionStatus('connected')
-        socket.emit('join-room', { roomId: channelName, displayName, secret: channelSecret })
+        socket.emit('join-channel', {
+          roomId: channelName,
+          token: sessionTokenRef.current,
+          secret: channelSecret,
+        })
       })
 
-      // YENİ: bağlantı koparsa (wifi kesintisi, sunucu yeniden başlaması
-      // vb.) kullanıcıya GÖRÜNÜR bir şekilde bildiriyoruz. Socket.io
-      // varsayılan olarak arka planda kendiliğinden yeniden bağlanmayı
-      // dener — biz sadece bunu görünür kılıyoruz.
       socket.on('disconnect', () => {
         setConnectionStatus('reconnecting')
       })
 
-      socket.on('existing-users', (users) => {
+      socket.on('join-error', (message) => {
+        setConnectionError(message || 'Kanala katılamadın.')
+        cleanupSocket()
+        setActiveChannel(null)
+      })
+
+      // YENİ: üye listesi (online + offline) — tek doğru kaynak.
+      socket.on('channel-members', ({ online, offline }) => {
+        setOnlineMembers(online || [])
+        setOfflineMembers(offline || [])
+      })
+
+      socket.on('message-history', (history) => {
+        setMessages(history)
+        setHasMoreHistory(history.length >= 50)
+        requestAnimationFrame(() => {
+          if (chatMessagesRef.current) {
+            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+          }
+        })
+      })
+
+      socket.on('new-message', (message) => {
+        setMessages((prev) => [...prev, message])
+        requestAnimationFrame(() => {
+          if (chatMessagesRef.current) {
+            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+          }
+        })
+      })
+
+      // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
+      // tetiklenmezler ama baştan hazır olmaları lazım. ----
+      socket.on('existing-voice-users', (users) => {
         setPeers(users)
       })
 
-      socket.on('user-joined', (user) => {
+      socket.on('voice-user-joined', (user) => {
         setPeers((prev) => [...prev, user])
-        // Yeni katılan için hemen ANA bağlantıyı kuruyoruz (kutucuk
-        // görünsün diye) — ekran bağlantısı tembel, gerekince kurulacak.
         getOrCreateMainConnection(user.socketId)
       })
 
-      socket.on('user-left', ({ socketId }) => {
+      socket.on('voice-user-left', ({ socketId }) => {
         setPeers((prev) => prev.filter((p) => p.socketId !== socketId))
-
         const entry = peerConnectionsRef.current.get(socketId)
         if (entry) {
           if (entry.mainPc) entry.mainPc.close()
@@ -475,13 +549,11 @@ function App() {
 
       socket.on('signal', async ({ from, data }) => {
         const connectionType = data.connectionType === 'screen' ? 'screen' : 'main'
-
         let entry = peerConnectionsRef.current.get(from)
         if (!entry) {
           entry = { mainPc: null, screenPc: null }
           peerConnectionsRef.current.set(from, entry)
         }
-
         const pc =
           connectionType === 'screen'
             ? entry.screenPc || getOrCreateScreenConnection(from)
@@ -518,23 +590,7 @@ function App() {
       })
 
       socket.on('user-state-update', ({ socketId, state }) => {
-        setPeers((prev) =>
-          prev.map((p) => (p.socketId === socketId ? { ...p, ...state } : p))
-        )
-      })
-
-      // YENİ (güvenlik): sunucu şifreyi reddederse, kanaldan çıkıp
-      // kullanıcıya net bir hata gösteriyoruz.
-      socket.on('join-error', (message) => {
-        setConnectionError(message || 'Odaya katılamadın.')
-        cleanupSocket()
-        setActiveChannel(null)
-      })
-
-      socket.on('connect_error', () => {
-        setConnectionError(
-          'Sunucuya bağlanılamadı. Sinyalleşme sunucusunun (server klasörü) çalıştığından emin ol.'
-        )
+        setPeers((prev) => prev.map((p) => (p.socketId === socketId ? { ...p, ...state } : p)))
       })
     },
     [
@@ -544,7 +600,6 @@ function App() {
       getOrCreateMainConnection,
       getOrCreateScreenConnection,
       syncReceiversToStream,
-      displayName,
     ]
   )
 
@@ -561,7 +616,6 @@ function App() {
 
   const toggleMic = useCallback(async () => {
     const existingAudioTrack = localMainStream?.getAudioTracks()[0]
-
     if (!existingAudioTrack) {
       try {
         const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -577,18 +631,14 @@ function App() {
       }
       return
     }
-
     const newEnabled = !existingAudioTrack.enabled
     existingAudioTrack.enabled = newEnabled
     setIsMicOn(newEnabled)
     socketRef.current?.emit('state-update', { muted: !newEnabled })
   }, [localMainStream, addTrackToMainConnections])
 
-  // YENİ: Kamera artık ekran paylaşımından TAMAMEN BAĞIMSIZ — ikisi
-  // aynı anda açık kalabilir.
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
-
     if (existingVideoTrack && isCameraOn) {
       removeTrackFromMainConnections(existingVideoTrack)
       existingVideoTrack.stop()
@@ -600,7 +650,6 @@ function App() {
       socketRef.current?.emit('state-update', { cameraOn: false })
       return
     }
-
     try {
       const camStream = await navigator.mediaDevices.getUserMedia({ video: true })
       const newVideoTrack = camStream.getVideoTracks()[0]
@@ -615,9 +664,6 @@ function App() {
     }
   }, [localMainStream, isCameraOn, addTrackToMainConnections, removeTrackFromMainConnections])
 
-  // YENİ: Ekran paylaşımı artık TAMAMEN KENDİ akışında/bağlantısında —
-  // kamerayı hatırlama/geri dönme mantığına hiç gerek yok, çünkü kamerayı
-  // hiç etkilemiyor.
   const stopScreenShare = useCallback(() => {
     const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0]
     if (screenTrack) {
@@ -633,9 +679,7 @@ function App() {
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true })
       const screenTrack = screenStream.getVideoTracks()[0]
-      screenTrack.onended = () => {
-        stopScreenShare()
-      }
+      screenTrack.onended = () => stopScreenShare()
       setLocalScreenStream(screenStream)
       setIsScreenSharing(true)
       addTrackToScreenConnections(screenTrack, screenStream)
@@ -648,11 +692,8 @@ function App() {
   }, [addTrackToScreenConnections, stopScreenShare])
 
   const toggleScreenShare = useCallback(() => {
-    if (isScreenSharing) {
-      stopScreenShare()
-    } else {
-      startScreenShare()
-    }
+    if (isScreenSharing) stopScreenShare()
+    else startScreenShare()
   }, [isScreenSharing, startScreenShare, stopScreenShare])
 
   const handleLogin = (e) => {
@@ -661,9 +702,6 @@ function App() {
     setIsLoggingIn(true)
     setLoginError(null)
 
-    // Giriş kontrolü için GEÇİCİ bir bağlantı — kanal bağlantılarından
-    // tamamen ayrı, sadece "bu kullanıcı adı/şifre doğru mu" sorusunu
-    // sorup cevabı alınca kapanıyor.
     const tempSocket = io(SERVER_URL)
     tempSocket.on('connect', () => {
       tempSocket.emit('login', { username: username.trim(), password }, (response) => {
@@ -671,9 +709,11 @@ function App() {
         setIsLoggingIn(false)
         if (response?.success) {
           setUsername(response.username)
+          setSessionToken(response.token)
           if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
             setIceServers(response.iceServers)
           }
+          setChannels(Array.isArray(response.channels) ? response.channels : [])
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -693,7 +733,39 @@ function App() {
       joinChannel(pendingChannel, channelPasswordInput)
     }
     setPendingChannel(null)
+    setShowChannelPassword(false)
     setChannelPasswordInput('')
+  }
+
+  const handleSendMessage = (e) => {
+    e.preventDefault()
+    const text = chatInput.trim()
+    if (!text || !socketRef.current) return
+    socketRef.current.emit('send-message', { token: sessionTokenRef.current, text })
+    setChatInput('')
+  }
+
+  const handleLoadOlderMessages = () => {
+    if (!socketRef.current || messages.length === 0 || isLoadingOlder) return
+    setIsLoadingOlder(true)
+    const container = chatMessagesRef.current
+    const previousScrollHeight = container ? container.scrollHeight : 0
+
+    socketRef.current.emit(
+      'load-older-messages',
+      { token: sessionTokenRef.current, channel: activeChannel, before: messages[0].createdAt },
+      (response) => {
+        const older = response?.messages || []
+        setMessages((prev) => [...older, ...prev])
+        setHasMoreHistory(older.length >= 50)
+        setIsLoadingOlder(false)
+        requestAnimationFrame(() => {
+          if (container) {
+            container.scrollTop = container.scrollHeight - previousScrollHeight
+          }
+        })
+      }
+    )
   }
 
   if (!loggedIn) {
@@ -709,12 +781,23 @@ function App() {
             placeholder="Kullanıcı adı"
             autoFocus
           />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Şifre"
-          />
+          <div className="password-field-wrapper">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Şifre"
+            />
+            <button
+              type="button"
+              className="password-toggle-button"
+              onClick={() => setShowPassword((prev) => !prev)}
+              tabIndex={-1}
+              title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
+            >
+              <EyeIcon visible={showPassword} />
+            </button>
+          </div>
           <button type="submit" disabled={isLoggingIn}>
             {isLoggingIn ? 'Giriş yapılıyor…' : 'Giriş Yap'}
           </button>
@@ -733,12 +816,11 @@ function App() {
         <h1 className="app-title">Sesli Sohbet</h1>
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
-          {CHANNELS.map((channel) => (
+          {channels.map((channel) => (
             <button
               key={channel}
               className={
-                'channel-button' +
-                (activeChannel === channel ? ' channel-button--active' : '')
+                'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
               }
               onClick={() => {
                 setPendingChannel(channel)
@@ -754,143 +836,223 @@ function App() {
       <main className="main-panel">
         {connectionError && <p className="error-text">{connectionError}</p>}
 
-        {!activeChannel && !connectionError && (
-          <p>Başlamak için soldan bir kanal seç.</p>
-        )}
+        {!activeChannel && !connectionError && <p>Başlamak için soldan bir kanal seç.</p>}
 
         {activeChannel && !connectionError && (
           <div className="channel-view">
             {connectionStatus === 'reconnecting' && (
-              <div className="reconnecting-banner">
-                🔄 Bağlantı koptu, yeniden bağlanılıyor…
-              </div>
+              <div className="reconnecting-banner">🔄 Bağlantı koptu, yeniden bağlanılıyor…</div>
             )}
-            <div className="peer-panel">
-              <div className="peer-panel-header">
+
+            <div className="channel-main">
+              <div className="channel-header">
                 <h2># {activeChannel}</h2>
-                <button className="leave-button" onClick={leaveChannel}>
-                  Ayrıl
-                </button>
-              </div>
-              <p>Odadakiler ({peers.length + 1}):</p>
-              <ul className="peer-list">
-                <li>
-                  {displayName} (sen) {!isMicOn && '🔇'} {!isCameraOn && '📷'}{' '}
-                  {isScreenSharing && '🖥️'}
-                </li>
-                {peers.map((p) => (
-                  <li key={p.socketId}>
-                    {p.displayName} {p.muted && '🔇'} {!p.cameraOn && '📷'}{' '}
-                    {p.sharingScreen && '🖥️'}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="video-grid">
-              <div className="local-media-panel">
-                {mediaError && <p className="error-text">{mediaError}</p>}
-
-                {isCameraOn ? (
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="local-video"
-                  />
-                ) : (
-                  <div className="camera-off-placeholder">
-                    <div className="avatar-circle">
-                      {displayName.charAt(0).toUpperCase()}
-                    </div>
-                  </div>
-                )}
-
-                <div className="media-controls">
-                  <button
-                    className={
-                      'control-button' + (isMicOn ? '' : ' control-button--off')
-                    }
-                    onClick={toggleMic}
-                    title={isMicOn ? 'Mikrofonu kapat' : 'Mikrofonu aç'}
-                  >
-                    {isMicOn ? '🎤' : '🔇'}
-                  </button>
-                  <button
-                    className={
-                      'control-button' + (isCameraOn ? '' : ' control-button--off')
-                    }
-                    onClick={toggleCamera}
-                    title={isCameraOn ? 'Kamerayı kapat' : 'Kamerayı aç'}
-                  >
-                    {isCameraOn ? '🎥' : '📷'}
-                  </button>
-                  <button
-                    className={
-                      'control-button' +
-                      (isScreenSharing ? '' : ' control-button--off')
-                    }
-                    onClick={toggleScreenShare}
-                    title={isScreenSharing ? 'Ekran paylaşımını durdur' : 'Ekranı paylaş'}
-                  >
-                    {isScreenSharing ? '🛑' : '🖥️'}
+                <div className="channel-header-actions">
+                  {!inVoice ? (
+                    <button className="join-voice-button" onClick={joinVoice}>
+                      📞 Sese Katıl
+                    </button>
+                  ) : (
+                    <button className="leave-voice-button" onClick={leaveVoice}>
+                      📞 Sesten Çık
+                    </button>
+                  )}
+                  <button className="leave-button" onClick={leaveChannel}>
+                    Kanaldan Ayrıl
                   </button>
                 </div>
               </div>
 
-              {/* YENİ: kendi ekran paylaşımın için AYRI kutucuk — sadece
-                  paylaşırken görünür. */}
-              {isScreenSharing && (
-                <div className="local-media-panel">
-                  <video
-                    ref={localScreenVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="local-video local-video--screen"
-                  />
-                  <span className="remote-video-label">Ekranın (sen)</span>
+              {inVoice && (
+                <div className={'video-grid' + (enlargedTile ? ' video-grid--has-enlarged' : '')}>
+                  {mediaError && <p className="error-text">{mediaError}</p>}
+
+                  <div
+                    className={
+                      'video-tile local-media-panel' +
+                      (enlargedTile === 'local-camera' ? ' video-tile--enlarged' : '')
+                    }
+                    onClick={() => toggleEnlarge('local-camera')}
+                  >
+                    {isCameraOn ? (
+                      <video
+                        ref={localVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="local-video"
+                      />
+                    ) : (
+                      <div className="camera-off-placeholder">
+                        <div className="avatar-circle">{displayName.charAt(0).toUpperCase()}</div>
+                      </div>
+                    )}
+                    <div className="media-controls" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className={'control-button' + (isMicOn ? '' : ' control-button--off')}
+                        onClick={toggleMic}
+                        title={isMicOn ? 'Mikrofonu kapat' : 'Mikrofonu aç'}
+                      >
+                        {isMicOn ? '🎤' : '🔇'}
+                      </button>
+                      <button
+                        className={'control-button' + (isCameraOn ? '' : ' control-button--off')}
+                        onClick={toggleCamera}
+                        title={isCameraOn ? 'Kamerayı kapat' : 'Kamerayı aç'}
+                      >
+                        {isCameraOn ? '🎥' : '📷'}
+                      </button>
+                      <button
+                        className={
+                          'control-button' + (isScreenSharing ? '' : ' control-button--off')
+                        }
+                        onClick={toggleScreenShare}
+                        title={isScreenSharing ? 'Ekran paylaşımını durdur' : 'Ekranı paylaş'}
+                      >
+                        {isScreenSharing ? '🛑' : '🖥️'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isScreenSharing && (
+                    <div
+                      className={
+                        'video-tile local-media-panel' +
+                        (enlargedTile === 'local-screen' ? ' video-tile--enlarged' : '')
+                      }
+                      onClick={() => toggleEnlarge('local-screen')}
+                    >
+                      <video
+                        ref={localScreenVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="local-video local-video--screen"
+                      />
+                      <span className="remote-video-label">Ekranın (sen)</span>
+                    </div>
+                  )}
+
+                  {Object.entries(remoteStreams).map(([socketId, streams]) => {
+                    const peer = peers.find((p) => p.socketId === socketId)
+                    const label = peer ? peer.username : '...'
+                    return (
+                      <div key={socketId} className="peer-tiles-group">
+                        {streams.mainStream && (
+                          <RemoteCameraTile
+                            stream={streams.mainStream}
+                            label={label}
+                            cameraOn={peer ? peer.cameraOn : false}
+                            micOn={peer ? !peer.muted : false}
+                            isEnlarged={enlargedTile === `${socketId}-camera`}
+                            onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
+                          />
+                        )}
+                        {peer?.sharingScreen && streams.screenStream && (
+                          <RemoteScreenTile
+                            stream={streams.screenStream}
+                            label={label}
+                            isEnlarged={enlargedTile === `${socketId}-screen`}
+                            onToggleEnlarge={() => toggleEnlarge(`${socketId}-screen`)}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 
-              {Object.entries(remoteStreams).map(([socketId, streams]) => {
-                const peer = peers.find((p) => p.socketId === socketId)
-                const label = peer ? peer.displayName : '...'
-                return (
-                  <div key={socketId} className="peer-tiles-group">
-                    {streams.mainStream && (
-                      <RemoteCameraTile
-                        stream={streams.mainStream}
-                        label={label}
-                        cameraOn={peer ? peer.cameraOn : false}
-                        micOn={peer ? !peer.muted : false}
-                      />
-                    )}
-                    {peer?.sharingScreen && streams.screenStream && (
-                      <RemoteScreenTile stream={streams.screenStream} label={label} />
-                    )}
-                  </div>
-                )
-              })}
+              <div className="chat-panel">
+                <div className="chat-messages" ref={chatMessagesRef}>
+                  {messages.length === 0 && (
+                    <p className="chat-empty-hint">Henüz mesaj yok, ilk mesajı sen at.</p>
+                  )}
+                  {messages.length > 0 && hasMoreHistory && (
+                    <button
+                      type="button"
+                      className="chat-load-older"
+                      onClick={handleLoadOlderMessages}
+                      disabled={isLoadingOlder}
+                    >
+                      {isLoadingOlder ? 'Yükleniyor…' : 'Daha eski mesajları göster'}
+                    </button>
+                  )}
+                  {messages.map((msg, i) => (
+                    <div key={i} className="chat-message">
+                      <span className="chat-message-author">{msg.username}</span>
+                      <span className="chat-message-text">{msg.text}</span>
+                    </div>
+                  ))}
+                </div>
+                <form className="chat-input-form" onSubmit={handleSendMessage}>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Mesaj yaz…"
+                    maxLength={2000}
+                  />
+                  <button type="submit">Gönder</button>
+                </form>
+              </div>
             </div>
+
+            {/* YENİ: Discord tarzı üye listesi — online (seste olanlar
+                işaretli) + offline (daha önce burada olmuş ama şu an
+                bağlı olmayanlar). */}
+            <aside className="member-list-panel">
+              <div className="member-list-section">
+                <h3>Çevrimiçi — {onlineMembers.length}</h3>
+                <ul>
+                  {onlineMembers.map((m) => (
+                    <li key={m.username} className="member-item member-item--online">
+                      <span className="member-status-dot member-status-dot--online" />
+                      {m.username} {m.inVoice && '🎙️'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              {offlineMembers.length > 0 && (
+                <div className="member-list-section">
+                  <h3>Çevrimdışı — {offlineMembers.length}</h3>
+                  <ul>
+                    {offlineMembers.map((m) => (
+                      <li key={m.username} className="member-item member-item--offline">
+                        <span className="member-status-dot member-status-dot--offline" />
+                        {m.username}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </aside>
           </div>
         )}
       </main>
 
-      {/* YENİ: Kanal şifresi sorma penceresi — bir kanala tıklayınca açılır. */}
       {pendingChannel && (
         <div className="screen-picker-overlay">
           <div className="screen-picker-modal channel-password-modal">
             <h2># {pendingChannel} şifresi</h2>
             <form onSubmit={handleChannelPasswordSubmit}>
-              <input
-                type="password"
-                value={channelPasswordInput}
-                onChange={(e) => setChannelPasswordInput(e.target.value)}
-                placeholder="Kanal şifresi"
-                autoFocus
-              />
+              <div className="password-field-wrapper">
+                <input
+                  type={showChannelPassword ? 'text' : 'password'}
+                  value={channelPasswordInput}
+                  onChange={(e) => setChannelPasswordInput(e.target.value)}
+                  placeholder="Kanal şifresi"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="password-toggle-button"
+                  onClick={() => setShowChannelPassword((prev) => !prev)}
+                  tabIndex={-1}
+                  title={showChannelPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                >
+                  <EyeIcon visible={showChannelPassword} />
+                </button>
+              </div>
               <div className="channel-password-actions">
                 <button type="submit">Katıl</button>
                 <button
@@ -898,6 +1060,7 @@ function App() {
                   className="screen-picker-cancel"
                   onClick={() => {
                     setPendingChannel(null)
+    setShowChannelPassword(false)
                     setChannelPasswordInput('')
                   }}
                 >

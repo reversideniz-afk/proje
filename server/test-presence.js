@@ -1,16 +1,15 @@
 // ============================================================
 // OTOMATİK PRESENCE TESTİ
 // ------------------------------------------------------------
-// Bu script, App.jsx'in kullanacağı socket.io-client mantığını
-// GERÇEK bir Electron penceresi açmadan iki sahte istemciyle test
-// eder. Sunucu kodunu her değiştirdiğimizde bu scripti tekrar
-// çalıştırarak "hala doğru çalışıyor mu" diye hızlıca kontrol
-// edebiliriz.
+// YENİ MİMARİ: Artık "metin kanalına girmek" (join-channel) ile
+// "sese girmek" (join-voice) AYRI iki adım. Bu test her ikisini de
+// sırayla yapıyor (WebRTC/mesh davranışını test etmek için sese de
+// girmemiz gerekiyor).
 //
 // Çalıştırmadan önce sunucunun ayakta olması gerekir:
-//   node server.js
+//   ALLOW_TEST_TOKENS=true node server.js
 // Sonra başka bir terminalde:
-//   node test-presence.js
+//   ALLOW_TEST_TOKENS=true node test-presence.js
 // ============================================================
 
 const { io } = require("socket.io-client");
@@ -31,53 +30,57 @@ function check(condition, message) {
   }
 }
 
-async function run() {
-  // --- Ali odaya giriyor ---
-  const clientA = io(SERVER_URL, { reconnection: false });
+// Yardımcı: bağlan + metin kanalına gir + sese gir (üçünü sırayla yapar).
+async function connectJoinChannelAndVoice(name, roomId) {
+  const client = io(SERVER_URL, { reconnection: false });
   await new Promise((resolve, reject) => {
-    clientA.on("connect", resolve);
-    clientA.on("connect_error", reject);
+    client.on("connect", resolve);
+    client.on("connect_error", reject);
   });
-  clientA.emit("join-room", { roomId: ROOM, displayName: "Ali" });
+  client.emit("join-channel", { roomId, token: `TEST_BYPASS:${name}` });
+  await new Promise((r) => setTimeout(r, 200));
+  client.emit("join-voice", { token: `TEST_BYPASS:${name}` });
+  await new Promise((r) => setTimeout(r, 200));
+  return client;
+}
 
-  // Sunucunun Ali'yi odaya eklemesi için kısa bekleme
-  await new Promise((r) => setTimeout(r, 300));
+async function run() {
+  // --- Ali kanala + sese giriyor ---
+  const clientA = await connectJoinChannelAndVoice("Ali", ROOM);
 
-  // --- Veli odaya giriyor, Ali'nin onu görüp görmediğini test ediyoruz ---
+  // --- Veli kanala + sese giriyor, Ali'nin onu görüp görmediğini test ediyoruz ---
   const clientB = io(SERVER_URL, { reconnection: false });
-
-  const existingUsersPromise = new Promise((resolve) => {
-    clientB.on("existing-users", resolve);
-  });
-  const aliSeesVeliJoinPromise = new Promise((resolve) => {
-    clientA.on("user-joined", resolve);
-  });
-
   await new Promise((resolve, reject) => {
     clientB.on("connect", resolve);
     clientB.on("connect_error", reject);
   });
-  clientB.emit("join-room", { roomId: ROOM, displayName: "Veli" });
+  clientB.emit("join-channel", { roomId: ROOM, token: "TEST_BYPASS:Veli" });
+  await new Promise((r) => setTimeout(r, 200));
 
-  const existingUsers = await existingUsersPromise;
+  const existingVoiceUsersPromise = new Promise((resolve) => {
+    clientB.on("existing-voice-users", resolve);
+  });
+  const aliSeesVeliJoinVoicePromise = new Promise((resolve) => {
+    clientA.on("voice-user-joined", resolve);
+  });
+  clientB.emit("join-voice", { token: "TEST_BYPASS:Veli" });
+
+  const existingVoiceUsers = await existingVoiceUsersPromise;
   check(
-    existingUsers.length === 1 && existingUsers[0].displayName === "Ali",
-    "Veli odaya girince, Ali'yi 'existing-users' listesinde görüyor"
+    existingVoiceUsers.length === 1 && existingVoiceUsers[0].username === "Ali",
+    "Veli sese girince, Ali'yi 'existing-voice-users' listesinde görüyor"
   );
 
-  const joinedEvent = await aliSeesVeliJoinPromise;
+  const joinedEvent = await aliSeesVeliJoinVoicePromise;
   check(
-    joinedEvent.displayName === "Veli",
-    "Ali, Veli'nin girişini 'user-joined' ile anlık görüyor"
+    joinedEvent.username === "Veli",
+    "Ali, Veli'nin sese girişini 'voice-user-joined' ile anlık görüyor"
   );
 
-  // --- YENİ: sinyal (WebRTC teklif/cevap/ICE) iletimini test ediyoruz ---
-  // Bu, App.jsx'teki createPeerConnection/offer-answer akışının
-  // tamamen dayandığı sunucu mekanizması.
+  // --- Sinyal (WebRTC teklif/cevap/ICE) iletimini test ediyoruz ---
   const veliReceivesSignalPromise = new Promise((resolve) => {
     clientB.on("signal", resolve);
   });
-
   const dummySignalData = { type: "offer", sdp: { fake: "test-sdp" } };
   clientA.emit("signal", { to: joinedEvent.socketId, data: dummySignalData });
 
@@ -85,7 +88,6 @@ async function run() {
     veliReceivesSignalPromise,
     new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
   ]);
-
   check(
     receivedSignal !== null &&
       receivedSignal.data.type === "offer" &&
@@ -93,50 +95,43 @@ async function run() {
     "Ali'nin gönderdiği sinyal (offer) mesajı Veli'ye doğru şekilde iletiliyor"
   );
 
-  // --- Veli ayrılıyor, Ali'nin haberdar olup olmadığını test ediyoruz ---
+  // --- Veli tamamen ayrılıyor (disconnect), Ali'nin haberdar olup olmadığını test ediyoruz ---
   const aliSeesVeliLeavePromise = new Promise((resolve) => {
-    clientA.on("user-left", resolve);
+    clientA.on("voice-user-left", resolve);
   });
-
   clientB.disconnect();
 
   const leftEvent = await Promise.race([
     aliSeesVeliLeavePromise,
     new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
   ]);
-
   check(
     leftEvent !== null && leftEvent.socketId === joinedEvent.socketId,
-    "Veli ayrılınca, Ali 'user-left' ile anlık haberdar oluyor"
+    "Veli ayrılınca, Ali 'voice-user-left' ile anlık haberdar oluyor"
   );
 
   clientA.disconnect();
 
-  // --- YENİ: mikrofon/kamera durum bildirimini test ediyoruz ---
-  // Bu, App.jsx'teki "kamerayı kapat -> karşı tarafa haber ver" akışının
-  // dayandığı tam mekanizma.
-  const clientC = io(SERVER_URL, { reconnection: false });
-  await new Promise((resolve, reject) => {
-    clientC.on("connect", resolve);
-    clientC.on("connect_error", reject);
-  });
-  clientC.emit("join-room", { roomId: ROOM, displayName: "Can" });
-  await new Promise((r) => setTimeout(r, 300));
+  // --- Mikrofon/kamera durum bildirimini test ediyoruz ---
+  const clientC = await connectJoinChannelAndVoice("Can", ROOM);
 
   const clientD = io(SERVER_URL, { reconnection: false });
-  const canSeesEfeJoinPromise = new Promise((resolve) => {
-    clientC.on("user-joined", resolve);
-  });
   await new Promise((resolve, reject) => {
     clientD.on("connect", resolve);
     clientD.on("connect_error", reject);
   });
-  clientD.emit("join-room", { roomId: ROOM, displayName: "Efe" });
-  const efeJoinedEvent = await canSeesEfeJoinPromise;
+  clientD.emit("join-channel", { roomId: ROOM, token: "TEST_BYPASS:Efe" });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const canSeesEfeJoinVoicePromise = new Promise((resolve) => {
+    clientC.on("voice-user-joined", resolve);
+  });
+  clientD.emit("join-voice", { token: "TEST_BYPASS:Efe" });
+  const efeJoinedEvent = await canSeesEfeJoinVoicePromise;
 
   check(
     efeJoinedEvent.cameraOn === false && efeJoinedEvent.muted === true,
-    "Yeni katılan kişi, varsayılan olarak mikrofon/kamera KAPALI bilgisiyle diğerlerine bildiriliyor"
+    "Sese yeni katılan kişi, varsayılan olarak mikrofon/kamera KAPALI bilgisiyle diğerlerine bildiriliyor"
   );
 
   const canSeesStateUpdatePromise = new Promise((resolve) => {
@@ -148,7 +143,6 @@ async function run() {
     canSeesStateUpdatePromise,
     new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
   ]);
-
   check(
     stateUpdate !== null &&
       stateUpdate.socketId === efeJoinedEvent.socketId &&
@@ -159,59 +153,54 @@ async function run() {
   clientC.disconnect();
   clientD.disconnect();
 
-  // --- YENİ: 3 kişilik mesh senaryosu ---
-  // Aşama 5'in dayandığı kural: "odada zaten olan HERKES, yeni gelene
-  // ayrı ayrı teklif gönderir". Bunu doğrulamak için 3 sahte istemciyle
-  // sunucunun herkese doğru bildirim yaptığını kontrol ediyoruz.
+  // --- 3 kişilik mesh senaryosu (sesteki herkesin birbirinden haberdar olması) ---
   const room2 = "test-oda-mesh";
-
-  const p1 = io(SERVER_URL, { reconnection: false });
-  await new Promise((resolve, reject) => {
-    p1.on("connect", resolve);
-    p1.on("connect_error", reject);
-  });
-  p1.emit("join-room", { roomId: room2, displayName: "Kişi1" });
-  await new Promise((r) => setTimeout(r, 200));
+  const p1 = await connectJoinChannelAndVoice("Kişi1", room2);
 
   const p2 = io(SERVER_URL, { reconnection: false });
-  const p1SeesP2JoinPromise = new Promise((resolve) => p1.on("user-joined", resolve));
   await new Promise((resolve, reject) => {
     p2.on("connect", resolve);
     p2.on("connect_error", reject);
   });
-  p2.emit("join-room", { roomId: room2, displayName: "Kişi2" });
+  p2.emit("join-channel", { roomId: room2, token: "TEST_BYPASS:Kişi2" });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const p1SeesP2JoinPromise = new Promise((resolve) => p1.on("voice-user-joined", resolve));
+  p2.emit("join-voice", { token: "TEST_BYPASS:Kişi2" });
   await p1SeesP2JoinPromise;
   await new Promise((r) => setTimeout(r, 200));
 
   // Üçüncü kişi katılıyor — HEM Kişi1 HEM Kişi2'nin haberdar olması lazım.
-  const p1SeesP3Promise = new Promise((resolve) => p1.on("user-joined", resolve));
-  const p2SeesP3Promise = new Promise((resolve) => p2.on("user-joined", resolve));
-
   const p3 = io(SERVER_URL, { reconnection: false });
   await new Promise((resolve, reject) => {
     p3.on("connect", resolve);
     p3.on("connect_error", reject);
   });
+  p3.emit("join-channel", { roomId: room2, token: "TEST_BYPASS:Kişi3" });
+  await new Promise((r) => setTimeout(r, 200));
 
-  const p3ExistingUsersPromise = new Promise((resolve) => p3.on("existing-users", resolve));
-  p3.emit("join-room", { roomId: room2, displayName: "Kişi3" });
+  const p1SeesP3Promise = new Promise((resolve) => p1.on("voice-user-joined", resolve));
+  const p2SeesP3Promise = new Promise((resolve) => p2.on("voice-user-joined", resolve));
+  const p3ExistingVoiceUsersPromise = new Promise((resolve) =>
+    p3.on("existing-voice-users", resolve)
+  );
+  p3.emit("join-voice", { token: "TEST_BYPASS:Kişi3" });
 
-  const p3ExistingUsers = await p3ExistingUsersPromise;
+  const p3ExistingVoiceUsers = await p3ExistingVoiceUsersPromise;
   check(
-    p3ExistingUsers.length === 2 &&
-      p3ExistingUsers.some((u) => u.displayName === "Kişi1") &&
-      p3ExistingUsers.some((u) => u.displayName === "Kişi2"),
-    "3. kişi odaya girince, önceki İKİ kişiyi de 'existing-users' listesinde görüyor"
+    p3ExistingVoiceUsers.length === 2 &&
+      p3ExistingVoiceUsers.some((u) => u.username === "Kişi1") &&
+      p3ExistingVoiceUsers.some((u) => u.username === "Kişi2"),
+    "3. kişi sese girince, önceki İKİ kişiyi de 'existing-voice-users' listesinde görüyor"
   );
 
   const [p1SawP3, p2SawP3] = await Promise.all([
     Promise.race([p1SeesP3Promise, new Promise((r) => setTimeout(() => r(null), 2000))]),
     Promise.race([p2SeesP3Promise, new Promise((r) => setTimeout(() => r(null), 2000))]),
   ]);
-
   check(
-    p1SawP3?.displayName === "Kişi3" && p2SawP3?.displayName === "Kişi3",
-    "3. kişi girince, önceki İKİ kişi de (Kişi1 VE Kişi2) 'user-joined' ile ayrı ayrı haberdar oluyor"
+    p1SawP3?.username === "Kişi3" && p2SawP3?.username === "Kişi3",
+    "3. kişi sese girince, önceki İKİ kişi de (Kişi1 VE Kişi2) 'voice-user-joined' ile ayrı ayrı haberdar oluyor"
   );
 
   p1.disconnect();
