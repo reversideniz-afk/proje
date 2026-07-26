@@ -93,7 +93,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     // bir yapıda olmalı, yoksa SDP uyumsuzluğu olur (bu projede daha
     // önce tam bu tür bir hatayla karşılaşmıştık). Bot'un görüntüsü
     // yok, o yüzden video'yu "inactive" bırakıyoruz.
-    pc.addTransceiver(track, { direction: "sendonly" });
+    const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
     pc.addTransceiver("video", { direction: "inactive" });
 
     pc.onicecandidate = (candidate) => {
@@ -105,12 +105,14 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       }
     };
 
-    state.peerConnections.set(realSocketId, { pc, track });
+    // ÖNEMLİ: writeRtp yerine artık transceiver.sender.sendRtp
+    // kullanıyoruz — bu, ham ses verisini (Opus payload) alıp doğru
+    // RTP paketleme (sıra numarası, zaman damgası, payload type)
+    // işini KENDİSİ otomatik yapıyor. İlk denemede writeRtp'ye ham
+    // veri vermek işe yaramamıştı (RTP başlığı eksik kalıyordu).
+    state.peerConnections.set(realSocketId, { pc, sender: transceiver.sender });
 
-    // Bu ana kadar bir şarkı zaten çalıyorsa, yeni bağlanan kişi de
-    // duysun diye aynı track'i bağlıyoruz (writeRtp zaten state.audioTrack
-    // üzerinden merkezi olarak besleniyor, bkz. playSong).
-    return { pc, track };
+    return { pc, sender: transceiver.sender };
   }
 
   // ---- Gerçek bir kullanıcıdan gelen sinyali (offer/answer/ice) işler. ----
@@ -224,10 +226,19 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
     state.currentProcess = { stream, demuxer };
 
+    // YENİ: hata dinleyicileri ekliyoruz — önceden bu yoktu, akışta
+    // bir sorun olduğunda sessizce hiçbir şey olmuyor gibi görünüyordu.
+    stream.on("error", (err) => {
+      console.error(`[bot/${channel}] YouTube akışı hatası:`, err.message);
+    });
+    demuxer.on("error", (err) => {
+      console.error(`[bot/${channel}] ses ayrıştırma hatası:`, err.message);
+    });
+
     demuxer.on("data", (opusPacket) => {
-      state.peerConnections.forEach(({ track }) => {
+      state.peerConnections.forEach(({ sender }) => {
         try {
-          track.writeRtp(opusPacket);
+          sender.sendRtp(opusPacket);
         } catch (err) {
           // Bir bağlantıda anlık bir sorun olsa bile diğerlerini etkilemesin.
         }
@@ -245,9 +256,18 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     });
   }
 
-  function stopSong(channel) {
+  function stopSong(channel, { announce = false } = {}) {
     const state = channelState.get(channel);
-    if (!state?.currentProcess) return;
+    if (!state?.currentProcess) {
+      if (announce) {
+        io.to(textRoomName(channel)).emit("new-message", {
+          username: BOT_NAME,
+          text: "Zaten çalan bir şey yok.",
+          createdAt: new Date(),
+        });
+      }
+      return;
+    }
     try {
       state.currentProcess.stream.destroy();
       state.currentProcess.demuxer.destroy();
@@ -255,6 +275,13 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       /* zaten kapanmış olabilir */
     }
     state.currentProcess = null;
+    if (announce) {
+      io.to(textRoomName(channel)).emit("new-message", {
+        username: BOT_NAME,
+        text: "⏹️ Durduruldu.",
+        createdAt: new Date(),
+      });
+    }
   }
 
   // ---- Sohbete yazılan bir komutu işler. "true" dönerse, bu mesaj
@@ -277,7 +304,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
         if (!query) return true;
         await playSong(channel, query);
       } else if (command === "!durdur" || command === "!dur") {
-        stopSong(channel);
+        stopSong(channel, { announce: true });
       } else {
         return false; // bilinmeyen komut, normal mesaj gibi davran
       }
