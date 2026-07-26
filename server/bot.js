@@ -54,7 +54,7 @@ if (process.env.YOUTUBE_COOKIES) {
       const path_ = c.path || "/";
       const secure = c.secure ? "TRUE" : "FALSE";
       const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 2147483647;
-      lines.push(["TRUE".padStart(1), domain, "TRUE", path_, secure, expiry, c.name, c.value].join("\t"));
+      lines.push([domain, "TRUE", path_, secure, expiry, c.name, c.value].join("\t"));
     });
     cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
     fs.writeFileSync(cookiesFilePath, lines.join("\n"));
