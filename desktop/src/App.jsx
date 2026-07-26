@@ -7,6 +7,18 @@ const SERVER_URL = 'https://proje-dh7l.onrender.com'
 // YENİ: TURN bilgileri koda GÖMÜLMÜYOR — girişten sonra sunucudan geliyor.
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
+// YENİ: bas-konuş için seçilen tuşu (event.code) okunabilir göstermek için.
+function formatKeyCode(code) {
+  if (!code) return ''
+  if (code.startsWith('Key')) return code.slice(3)
+  if (code.startsWith('Digit')) return code.slice(5)
+  if (code === 'Space') return 'Boşluk'
+  if (code === 'ControlLeft' || code === 'ControlRight') return 'Ctrl'
+  if (code === 'ShiftLeft' || code === 'ShiftRight') return 'Shift'
+  if (code === 'AltLeft' || code === 'AltRight') return 'Alt'
+  return code
+}
+
 function describeMediaError(err) {
   switch (err.name) {
     case 'NotAllowedError':
@@ -199,6 +211,11 @@ function App() {
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
   const [isMicOn, setIsMicOn] = useState(false)
+
+  // YENİ: Bas-konuş (push-to-talk) — uygulama odaktayken çalışan versiyon.
+  const [pttEnabled, setPttEnabled] = useState(false)
+  const [pttKey, setPttKey] = useState(null) // event.code, ör. 'KeyV'
+  const [isCapturingPttKey, setIsCapturingPttKey] = useState(false)
   const [isCameraOn, setIsCameraOn] = useState(false)
 
   // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
@@ -730,28 +747,92 @@ function App() {
     }
   }, [localScreenStream])
 
-  const toggleMic = useCallback(async () => {
-    const existingAudioTrack = localMainStream?.getAudioTracks()[0]
-    if (!existingAudioTrack) {
-      try {
-        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        const newAudioTrack = micStream.getAudioTracks()[0]
-        const otherTracks = localMainStream ? localMainStream.getTracks() : []
-        const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
-        setLocalMainStream(newLocalStream)
-        setIsMicOn(true)
-        addTrackToMainConnections(newAudioTrack, newLocalStream)
-        socketRef.current?.emit('state-update', { muted: false })
-      } catch (err) {
-        setMediaError(describeMediaError(err))
+  // YENİ: mikrofonu DOĞRUDAN bir duruma getiren fonksiyon (toggle değil,
+  // "aç" ya da "kapat" diye kesin bir komut) — hem normal buton hem de
+  // bas-konuş bunu kullanıyor, mantık tek bir yerde.
+  const setMicActive = useCallback(
+    async (active) => {
+      const existingAudioTrack = localMainStream?.getAudioTracks()[0]
+      if (!existingAudioTrack) {
+        if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
+        try {
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          const newAudioTrack = micStream.getAudioTracks()[0]
+          const otherTracks = localMainStream ? localMainStream.getTracks() : []
+          const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
+          setLocalMainStream(newLocalStream)
+          setIsMicOn(true)
+          addTrackToMainConnections(newAudioTrack, newLocalStream)
+          socketRef.current?.emit('state-update', { muted: false })
+        } catch (err) {
+          setMediaError(describeMediaError(err))
+        }
+        return
       }
-      return
+      existingAudioTrack.enabled = active
+      setIsMicOn(active)
+      socketRef.current?.emit('state-update', { muted: !active })
+    },
+    [localMainStream, addTrackToMainConnections]
+  )
+
+  const toggleMic = useCallback(() => {
+    setMicActive(!isMicOn)
+  }, [isMicOn, setMicActive])
+
+  // YENİ: Bas-konuş ayarlama — butona basınca bir sonraki tuşu bekliyoruz.
+  const handleTogglePtt = () => {
+    if (pttEnabled) {
+      setPttEnabled(false)
+      setPttKey(null)
+      setMicActive(false)
+    } else {
+      setIsCapturingPttKey(true)
     }
-    const newEnabled = !existingAudioTrack.enabled
-    existingAudioTrack.enabled = newEnabled
-    setIsMicOn(newEnabled)
-    socketRef.current?.emit('state-update', { muted: !newEnabled })
-  }, [localMainStream, addTrackToMainConnections])
+  }
+
+  // Bir sonraki tuş basışını "bas-konuş tuşu" olarak yakala.
+  useEffect(() => {
+    if (!isCapturingPttKey) return
+    const handleKeydown = (e) => {
+      e.preventDefault()
+      setPttKey(e.code)
+      setPttEnabled(true)
+      setIsCapturingPttKey(false)
+      setMicActive(false) // başlangıçta kapalı — tuşa basınca açılacak
+    }
+    window.addEventListener('keydown', handleKeydown, { once: true })
+    return () => window.removeEventListener('keydown', handleKeydown)
+  }, [isCapturingPttKey, setMicActive])
+
+  // Bas-konuş AKTİFKEN: tuş basılıyken mikrofon açık, bırakınca kapalı.
+  // NOT: sohbet kutusuna yazarken tetiklenmesin diye input/textarea
+  // üzerindeyken bu dinleyiciyi devre dışı bırakıyoruz.
+  useEffect(() => {
+    if (!pttEnabled || !inVoice || !pttKey) return
+
+    const isTypingTarget = (e) =>
+      e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'
+
+    const handleKeydown = (e) => {
+      if (isTypingTarget(e)) return
+      if (e.code === pttKey && !e.repeat) {
+        setMicActive(true)
+      }
+    }
+    const handleKeyup = (e) => {
+      if (isTypingTarget(e)) return
+      if (e.code === pttKey) {
+        setMicActive(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeydown)
+    window.addEventListener('keyup', handleKeyup)
+    return () => {
+      window.removeEventListener('keydown', handleKeydown)
+      window.removeEventListener('keyup', handleKeyup)
+    }
+  }, [pttEnabled, pttKey, inVoice, setMicActive])
 
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
@@ -1006,8 +1087,15 @@ function App() {
                     <div className="media-controls" onClick={(e) => e.stopPropagation()}>
                       <button
                         className={'control-button' + (isMicOn ? '' : ' control-button--off')}
-                        onClick={toggleMic}
-                        title={isMicOn ? 'Mikrofonu kapat' : 'Mikrofonu aç'}
+                        onClick={pttEnabled ? undefined : toggleMic}
+                        disabled={pttEnabled}
+                        title={
+                          pttEnabled
+                            ? `Bas-konuş açık (${formatKeyCode(pttKey)}) — konuşmak için tuşu basılı tut`
+                            : isMicOn
+                              ? 'Mikrofonu kapat'
+                              : 'Mikrofonu aç'
+                        }
                       >
                         {isMicOn ? '🎤' : '🔇'}
                       </button>
@@ -1027,7 +1115,24 @@ function App() {
                       >
                         {isScreenSharing ? '🛑' : '🖥️'}
                       </button>
+                      {/* YENİ: Bas-konuş ayarla/kapat. */}
+                      <button
+                        className={
+                          'control-button' + (pttEnabled ? ' control-button--ptt-active' : '')
+                        }
+                        onClick={handleTogglePtt}
+                        title={
+                          pttEnabled
+                            ? `Bas-konuş: ${formatKeyCode(pttKey)} — kapatmak için tıkla`
+                            : 'Bas-konuş ayarla'
+                        }
+                      >
+                        🎯
+                      </button>
                     </div>
+                    {isCapturingPttKey && (
+                      <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
+                    )}
                   </div>
 
                   {isScreenSharing && (

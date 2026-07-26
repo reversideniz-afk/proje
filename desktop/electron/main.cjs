@@ -59,9 +59,8 @@ function createWindow() {
     // Geliştirme modunda: Vite'ın çalıştırdığı canlı geliştirme sunucusuna
     // bağlanıyoruz (kod her değiştiğinde pencere otomatik yenilenir).
     win.loadURL("http://localhost:5173");
-    // Geliştirirken tarayıcı konsolunu da (DevTools) otomatik açalım,
-    // hata ayıklarken işine yarayacak.
-    win.webContents.openDevTools();
+    // NOT: DevTools artık otomatik AÇILMIYOR — gerektiğinde Ctrl+Shift+I
+    // ile manuel açabilirsin, ama varsayılan olarak kapalı, daha temiz.
   } else {
     // Üretim modunda (paketlenmiş uygulama): Vite'ın derlediği statik
     // dosyaları (dist/index.html) doğrudan dosya sisteminden yüklüyoruz.

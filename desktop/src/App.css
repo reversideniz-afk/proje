@@ -792,3 +792,20 @@
   color: var(--text-primary);
   margin-top: 4px;
 }
+
+.control-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.control-button--ptt-active {
+  background: var(--accent);
+  color: #1c1a19;
+}
+
+.ptt-capture-hint {
+  font-size: 12px;
+  color: var(--accent);
+  text-align: center;
+  margin: 4px 0 0 0;
+}
