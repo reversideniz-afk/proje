@@ -310,6 +310,30 @@ function App() {
   const localScreenVideoRef = useRef(null)
 
   const localMainStreamRef = useRef(null)
+
+  // YENİ: Bot müziğini mikrofonla "karıştırmak" için paylaşılan ses
+  // altyapısı. Böylece müzik, mikrofonla AYNI giden hatta gidiyor —
+  // mikrofonu yazılımdan kapatınca müzik de otomatik kesiliyor
+  // (donanım/kulaklık düğmesiyle kapatmak bunu etkilemiyor, çünkü
+  // yazılım hâlâ "mikrofon açık" sanıyor — istenen davranış tam bu).
+  const audioMixContextRef = useRef(null)
+  const mixDestinationRef = useRef(null)
+  const musicAudioElRef = useRef(null)
+  const musicSourceNodeRef = useRef(null)
+
+  const getOrCreateAudioMix = useCallback(() => {
+    if (!audioMixContextRef.current) {
+      audioMixContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    if (audioMixContextRef.current.state === 'suspended') {
+      audioMixContextRef.current.resume()
+    }
+    if (!mixDestinationRef.current) {
+      mixDestinationRef.current = audioMixContextRef.current.createMediaStreamDestination()
+    }
+    return { ctx: audioMixContextRef.current, destination: mixDestinationRef.current }
+  }, [])
+
   useEffect(() => {
     localMainStreamRef.current = localMainStream
   }, [localMainStream])
@@ -552,6 +576,10 @@ function App() {
     setEnlargedTile(null)
     setInVoice(false)
     setVolumeMenuFor(null)
+    // YENİ: o an müzik çalıyorsa (bu kişi üzerinden), onu da durdur.
+    if (musicAudioElRef.current) {
+      musicAudioElRef.current.pause()
+    }
     // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
     // girişte sıfırdan, temiz kurulacaklar).
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
@@ -654,6 +682,33 @@ function App() {
         })
       })
 
+      // YENİ: Müzik botu — "!çal" komutunu BEN yazdıysam (ve sesteysem),
+      // sunucu bana "şu adresi çal" diyor. Müziği kendi <audio>
+      // elemanımla çalıp, karışım hattına bağlayarak mikrofonuma
+      // "karıştırıyorum" — böylece diğerleri bunu benim ses
+      // bağlantımdan (zaten çalışan, güvenilir yoldan) duyuyor.
+      socket.on('bot-play', ({ streamUrl }) => {
+        const { ctx, destination } = getOrCreateAudioMix()
+        if (!musicAudioElRef.current) {
+          const audioEl = new Audio()
+          audioEl.crossOrigin = 'anonymous'
+          const source = ctx.createMediaElementSource(audioEl)
+          source.connect(destination)
+          musicAudioElRef.current = audioEl
+          musicSourceNodeRef.current = source
+        }
+        musicAudioElRef.current.src = `${SERVER_URL}${streamUrl}`
+        musicAudioElRef.current.play().catch((err) => {
+          console.error('[bot müziği] çalınamadı:', err)
+        })
+      })
+
+      socket.on('bot-stop', () => {
+        if (musicAudioElRef.current) {
+          musicAudioElRef.current.pause()
+        }
+      })
+
       // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
       // tetiklenmezler ama baştan hazır olmaları lazım. ----
       socket.on('existing-voice-users', (users) => {
@@ -752,28 +807,35 @@ function App() {
   // bas-konuş bunu kullanıyor, mantık tek bir yerde.
   const setMicActive = useCallback(
     async (active) => {
-      const existingAudioTrack = localMainStream?.getAudioTracks()[0]
-      if (!existingAudioTrack) {
+      const existingMixedTrack = localMainStream?.getAudioTracks()[0]
+      if (!existingMixedTrack) {
         if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          const newAudioTrack = micStream.getAudioTracks()[0]
+          // YENİ: mikrofonu DOĞRUDAN göndermek yerine, paylaşılan
+          // karışım hattından geçiriyoruz — bot müziği de aynı hatta
+          // karışacak (bkz. 'bot-play' dinleyicisi).
+          const { ctx, destination } = getOrCreateAudioMix()
+          const micSourceNode = ctx.createMediaStreamSource(micStream)
+          micSourceNode.connect(destination)
+          const mixedTrack = destination.stream.getAudioTracks()[0]
+
           const otherTracks = localMainStream ? localMainStream.getTracks() : []
-          const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
+          const newLocalStream = new MediaStream([...otherTracks, mixedTrack])
           setLocalMainStream(newLocalStream)
           setIsMicOn(true)
-          addTrackToMainConnections(newAudioTrack, newLocalStream)
+          addTrackToMainConnections(mixedTrack, newLocalStream)
           socketRef.current?.emit('state-update', { muted: false })
         } catch (err) {
           setMediaError(describeMediaError(err))
         }
         return
       }
-      existingAudioTrack.enabled = active
+      existingMixedTrack.enabled = active
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
     },
-    [localMainStream, addTrackToMainConnections]
+    [localMainStream, addTrackToMainConnections, getOrCreateAudioMix]
   )
 
   const toggleMic = useCallback(() => {

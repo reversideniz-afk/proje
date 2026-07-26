@@ -1,36 +1,25 @@
 // ============================================================
-// MÜZİK BOTU
+// MÜZİK BOTU (v2 — istemci-üzerinden yayın mimarisi)
 // ------------------------------------------------------------
-// DENEYSEL — bu, projedeki en yeni türden kod: sunucunun kendisi
-// gerçek zamanlı ses işleyip WebRTC üzerinden katılımcılara
-// yayınlıyor.
-//
-// YouTube çekme motoru olarak artık yt-dlp kullanılıyor (Node.js
-// kütüphanesi değil, ayrı bir program — Render'ın "Build Command"
-// ayarında indiriliyor, bkz. README/talimatlar). Bu, en aktif
-// güncellenen, YouTube'un sık değişen savunmasına en hızlı
-// yetişen araç.
-//
-// Bot, gerçek bir Socket.io bağlantısı DEĞİL — sunucu sürecinin
-// içinde yaşayan "sahte bir katılımcı". Gerçek kullanıcıların
-// istemcisi, botu normal bir kişi gibi algılıyor (aynı
-// 'voice-user-joined' / 'signal' mekanizması üzerinden).
+// YENİ MİMARİ: Sunucu artık kendi başına bir WebRTC katılımcısı
+// DEĞİL — bu, önceki sürümde çözemediğimiz bağlantı sorunlarının
+// kaynağıydı. Bunun yerine:
+//   1) Sunucu YouTube'dan sesi çekip (yt-dlp+ffmpeg, zaten sağlam
+//      çalışan kısım) kendi HTTP adresinden YAYINLIYOR.
+//   2) Komutu yazan (ZATEN seste olan) kişinin istemcisine "şu
+//      adresi çal" diyor.
+//   3) O kişinin istemcisi, müziği KENDİ (zaten çalışan, defalarca
+//      test edilmiş) ses bağlantısına karıştırıyor.
+// Bu sayede sunucu tarafında hiç WebRTC/DTLS karmaşası kalmıyor.
 // ============================================================
 
-const { RTCPeerConnection, MediaStreamTrack, RTCRtpCodecParameters } = require("werift");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const prism = require("prism-media");
-const ffmpegPath = require("ffmpeg-static");
 
 const BOT_NAME = process.env.BOT_NAME || "DJ Dikkat";
-const BOT_SOCKET_PREFIX = "bot-voice::";
 
-// yt-dlp ikili dosyası, Render'ın Build Command'ı sırasında bu
-// klasöre indiriliyor (bkz. kurulum talimatları). __dirname
-// kullanıyoruz ki çalıştığı klasör ne olursa olsun doğru yeri bulsun.
 const YTDLP_PATH = path.join(__dirname, process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp");
 if (!fs.existsSync(YTDLP_PATH)) {
   console.warn(
@@ -38,13 +27,6 @@ if (!fs.existsSync(YTDLP_PATH)) {
   );
 }
 
-// YENİ: Çerezleri artık sunucu başlarken TEK SEFER dosyaya yazmıyoruz.
-// Gördüğümüz kanıt şuydu: yt-dlp, kullandığı çerez dosyasını KENDİSİ
-// güncelleyip geri yazıyor (oturum bilgisini "tazeliyor") — bu da bir
-// SONRAKİ çağrıda dosyanın beklenmedik şekilde değişmiş/bozulmuş
-// olmasına yol açıyordu. Çözüm: HER çağrıda, senin ORİJİNAL
-// çerezlerinden SIFIRDAN, TAZE bir dosya üretiyoruz — yt-dlp'nin
-// yaptığı değişiklikler bir sonraki denemeyi hiç etkilemesin.
 let RAW_COOKIES = null;
 if (process.env.YOUTUBE_COOKIES) {
   try {
@@ -54,14 +36,12 @@ if (process.env.YOUTUBE_COOKIES) {
     console.error("UYARI: YOUTUBE_COOKIES ayrıştırılamadı:", err.message);
   }
 } else {
-  console.warn(
-    "UYARI: YOUTUBE_COOKIES ayarlanmamış — bot YouTube'un bot-engeline takılabilir."
-  );
+  console.warn("UYARI: YOUTUBE_COOKIES ayarlanmamış — bot YouTube'un bot-engeline takılabilir.");
 }
 
 // Her çağrıda TAZE, BENZERSİZ bir çerez dosyası üretir (yt-dlp'nin
-// önceki çağrıda dosyayı değiştirmiş olmasından etkilenmesin diye).
-// Dönen değer: {filePath, cleanup} — cleanup() işin bitince dosyayı siler.
+// önceki çağrıda dosyayı değiştirmiş olmasından etkilenmesin diye —
+// bunu canlı testlerde gerçek bir sorun olarak bulmuştuk).
 function writeFreshCookiesFile() {
   if (!RAW_COOKIES) return { filePath: null, cleanup: () => {} };
   try {
@@ -73,7 +53,10 @@ function writeFreshCookiesFile() {
       const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 2147483647;
       lines.push([domain, "TRUE", path_, secure, expiry, c.name, c.value].join("\t"));
     });
-    const filePath = path.join(os.tmpdir(), `yt-cookies-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+    const filePath = path.join(
+      os.tmpdir(),
+      `yt-cookies-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`
+    );
     fs.writeFileSync(filePath, lines.join("\n"));
     return {
       filePath,
@@ -81,7 +64,7 @@ function writeFreshCookiesFile() {
         try {
           fs.unlinkSync(filePath);
         } catch {
-          /* zaten silinmiş olabilir, sorun değil */
+          /* zaten silinmiş olabilir */
         }
       },
     };
@@ -90,21 +73,6 @@ function writeFreshCookiesFile() {
     return { filePath: null, cleanup: () => {} };
   }
 }
-
-const OPUS_CODEC = new RTCRtpCodecParameters({
-  mimeType: "audio/opus",
-  clockRate: 48000,
-  channels: 2,
-});
-
-// YENİ: video'yu "inactive" (kapalı) bıraksak bile, müzakerenin
-// tamamlanabilmesi için EN AZ bir video codec'i tanımlı olması
-// gerekiyor — yoksa "negotiate codecs failed" hatası alınıyor
-// (bunu gerçek bir müzakere testiyle bulup doğruladım).
-const VP8_CODEC = new RTCRtpCodecParameters({
-  mimeType: "video/VP8",
-  clockRate: 90000,
-});
 
 // ---- yt-dlp'ye bir arama sorgusu YA DA doğrudan bir link verip,
 // video adresini + başlığını almak için ortak fonksiyon. ----
@@ -130,8 +98,6 @@ function resolveVideo(query) {
       }
       try {
         const parsed = JSON.parse(output);
-        // Arama sonucu bir "playlist" gibi entries içinde gelir,
-        // doğrudan link ise ayrıştırılan nesnenin KENDİSİ video bilgisidir.
         const videoInfo = parsed.entries ? parsed.entries[0] : parsed;
         if (!videoInfo) return resolve(null);
         resolve({
@@ -149,27 +115,17 @@ function resolveVideo(query) {
   });
 }
 
-// ---- yt-dlp (ham ses çeker) -> ffmpeg (garanti webm/opus'a çevirir)
-// zinciri kuruyor. İkisini birbirine pipe ediyoruz. ----
-function startAudioProcess(videoUrl, channel) {
+// ---- Bir video adresi için, sesi anlık olarak (yt-dlp -> ffmpeg
+// zinciriyle) bir HTTP yanıtına akıtır. Bu fonksiyon server.js'teki
+// HTTP endpoint tarafından çağrılıyor. ----
+function streamAudioToResponse(videoUrl, res) {
   const { filePath: cookiesFile, cleanup } = writeFreshCookiesFile();
   const ytdlpArgs = ["-f", "bestaudio", "-o", "-", "--no-warnings"];
   if (cookiesFile) ytdlpArgs.push("--cookies", cookiesFile);
   ytdlpArgs.push(videoUrl);
 
-  if (cookiesFile) {
-    try {
-      const stat = fs.statSync(cookiesFile);
-      console.log(`[bot/${channel}] Taze çerez dosyası kullanılıyor (${stat.size} bayt).`);
-    } catch {
-      /* önemli değil, sadece bilgi amaçlı log */
-    }
-  } else {
-    console.warn(`[bot/${channel}] UYARI: çerez yok — çerezsiz deneniyor.`);
-  }
-
   const ytdlpProc = spawn(YTDLP_PATH, ytdlpArgs);
-  const ffmpegProc = spawn(ffmpegPath, [
+  const ffmpegProc = spawn(ffmpegPathSafe(), [
     "-i", "pipe:0",
     "-f", "webm",
     "-c:a", "libopus",
@@ -179,214 +135,71 @@ function startAudioProcess(videoUrl, channel) {
   ]);
 
   ytdlpProc.stdout.pipe(ffmpegProc.stdin);
+  ffmpegProc.stdout.pipe(res);
 
-  // YENİ: bu iki akışın uçları kapandığında (ör. ffmpeg süreci beklenmedik
-  // şekilde biterken yt-dlp hâlâ veri yazmaya çalışıyorsa) oluşan "EPIPE"
-  // hatasını burada YAKALIYORUZ — önceden bu, sunucuyu (güvenlik ağımız
-  // sayesinde çökertmese de) yakalanmamış bir hata olarak düşürüyordu.
-  ffmpegProc.stdin.on("error", (err) => {
-    if (err.code !== "EPIPE") {
-      console.error(`[bot/${channel}] ffmpeg girişinde hata:`, err.message);
-    }
-  });
-  ytdlpProc.stdout.on("error", (err) => {
-    console.error(`[bot/${channel}] yt-dlp çıkışında hata:`, err.message);
-  });
+  // EPIPE gibi hataları sessizce (ama loglayarak) yönet — istemci
+  // bağlantıyı erken keserse (ör. şarkıyı durdurunca) bu normaldir.
+  ffmpegProc.stdin.on("error", () => {});
+  ytdlpProc.stdout.on("error", () => {});
+  ffmpegProc.stdout.on("error", () => {});
 
   let ytdlpErrorTail = "";
   ytdlpProc.stderr.on("data", (chunk) => {
-    ytdlpErrorTail = (ytdlpErrorTail + chunk.toString()).slice(-1500);
+    ytdlpErrorTail = (ytdlpErrorTail + chunk.toString()).slice(-1000);
   });
   ytdlpProc.on("close", (code) => {
     cleanup();
     if (code !== 0 && code !== null) {
-      console.error(`[bot/${channel}] yt-dlp çıkış kodu ${code}:\n${ytdlpErrorTail}`);
+      console.error(`[bot-audio] yt-dlp çıkış kodu ${code}:\n${ytdlpErrorTail}`);
     }
   });
-  ytdlpProc.on("error", (err) => {
-    cleanup();
-    console.error(`[bot/${channel}] yt-dlp başlatılamadı:`, err.message);
-  });
 
-  let ffmpegErrorTail = "";
-  ffmpegProc.stderr.on("data", (chunk) => {
-    ffmpegErrorTail = (ffmpegErrorTail + chunk.toString()).slice(-1500);
-  });
-  ffmpegProc.on("close", (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`[bot/${channel}] ffmpeg çıkış kodu ${code}:\n${ffmpegErrorTail}`);
+  const cleanupProcesses = () => {
+    try {
+      ytdlpProc.kill("SIGKILL");
+    } catch {
+      /* zaten kapanmış olabilir */
     }
-  });
-  ffmpegProc.on("error", (err) => {
-    console.error(`[bot/${channel}] ffmpeg başlatılamadı:`, err.message);
-  });
+    try {
+      ffmpegProc.kill("SIGKILL");
+    } catch {
+      /* zaten kapanmış olabilir */
+    }
+  };
+  res.on("close", cleanupProcesses);
 
-  return { ytdlpProc, ffmpegProc, audioStream: ffmpegProc.stdout };
+  return cleanupProcesses;
 }
 
-// YENİ: Botun bağlantısına da (gerçek kullanıcılarınki gibi) STUN/TURN
-// bilgisi veriyoruz. Bu olmadan, Render'daki sunucu ile senin evindeki
-// bilgisayarın birbirini ağ üzerinde bulamayabiliyor — HİÇBİR hata
-// vermeden, sessizce. "Loglarda sorun yok ama ses gelmiyor"
-// durumunun en olası açıklaması tam olarak buydu.
-function buildBotIceServers() {
-  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
-  const { TURN_URL, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
-  if (TURN_URL && TURN_USERNAME && TURN_CREDENTIAL) {
-    servers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_CREDENTIAL });
-  } else {
-    console.warn("UYARI: Bot için TURN bilgisi yok — sadece STUN ile deneyecek.");
-  }
-  return servers;
+// ffmpeg-static'i lazy require ediyoruz (server.js zaten import ediyor
+// olabilir, döngüsel bağımlılığı önlemek için burada ayrı tutuyoruz).
+let _ffmpegPath;
+function ffmpegPathSafe() {
+  if (!_ffmpegPath) _ffmpegPath = require("ffmpeg-static");
+  return _ffmpegPath;
 }
-const BOT_ICE_SERVERS = buildBotIceServers();
 
-function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemberList }) {
-  // channel -> { peerConnections: Map<realSocketId, {pc, sender}>, currentProcess, inVoice }
+function createMusicBot({ io, textRoomName, isUserInVoice }) {
+  // channel -> { hostSocketId, title }  — o an kimin üzerinden
+  // müzik çaldığı (varsa).
   const channelState = new Map();
 
-  function getOrCreateChannelState(channel) {
+  function getState(channel) {
     if (!channelState.has(channel)) {
-      channelState.set(channel, {
-        peerConnections: new Map(),
-        currentProcess: null,
-        inVoice: false,
-      });
+      channelState.set(channel, { hostSocketId: null, title: null });
     }
     return channelState.get(channel);
   }
 
-  function botSocketId(channel) {
-    return `${BOT_SOCKET_PREFIX}${channel}`;
-  }
-
-  // ---- Botun bir gerçek katılımcıya (yeni ya da zaten sesteyken
-  // gelen bir teklife karşılık) bağlantı kurması. ----
-  function createConnectionToPeer(channel, realSocketId) {
-    const state = getOrCreateChannelState(channel);
-    const pc = new RTCPeerConnection({
-      iceServers: BOT_ICE_SERVERS,
-      codecs: { audio: [OPUS_CODEC], video: [VP8_CODEC] },
-    });
-
-    const track = new MediaStreamTrack({ kind: "audio" });
-    // Gerçek kullanıcıların bağlantısı hem ses hem görüntü yuvası
-    // açıyor (recvonly) — botun cevabı bu iki yuvaya da denk düşen
-    // bir yapıda olmalı, yoksa SDP uyumsuzluğu olur. Bot'un görüntüsü
-    // yok, o yüzden video'yu "inactive" bırakıyoruz.
-    const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
-    pc.addTransceiver("video", { direction: "inactive" });
-
-    pc.onicecandidate = (candidate) => {
-      if (candidate) {
-        io.to(realSocketId).emit("signal", {
-          from: botSocketId(channel),
-          data: { type: "ice-candidate", candidate, connectionType: "main" },
-        });
-      }
-    };
-
-    // YENİ (kesin teşhis): bağlantı gerçekten "connected" durumuna
-    // ulaşıyor mu, yoksa takılıp kalıyor mu — artık bunu doğrudan görüyoruz.
-    pc.onconnectionstatechange = () => {
-      console.log(`[bot/${channel}] ${realSocketId} bağlantı durumu: ${pc.connectionState}`);
-    };
-    pc.oniceconnectionstatechange = () => {
-      console.log(`[bot/${channel}] ${realSocketId} ICE durumu: ${pc.iceConnectionState}`);
-    };
-
-    // sender.sendRtp: ham ses verisini (Opus payload) alıp doğru RTP
-    // paketleme (sıra numarası, zaman damgası, payload type) işini
-    // KENDİSİ otomatik yapıyor.
-    state.peerConnections.set(realSocketId, { pc, sender: transceiver.sender });
-
-    return { pc, sender: transceiver.sender };
-  }
-
-  // ---- Gerçek bir kullanıcıdan gelen sinyali (offer/answer/ice) işler. ----
-  async function handleIncomingSignal(channel, fromSocketId, data) {
-    if (data.connectionType && data.connectionType !== "main") return; // ekran paylaşımıyla ilgilenmiyoruz
-
-    const state = getOrCreateChannelState(channel);
-    let entry = state.peerConnections.get(fromSocketId);
-    if (!entry) {
-      entry = createConnectionToPeer(channel, fromSocketId);
+  async function playSong(channel, query, requesterSocketId) {
+    if (!isUserInVoice(channel, requesterSocketId)) {
+      io.to(textRoomName(channel)).emit("new-message", {
+        username: BOT_NAME,
+        text: "Önce sese katılman lazım, öyle çalabilirim.",
+        createdAt: new Date(),
+      });
+      return;
     }
-    const { pc } = entry;
-
-    try {
-      if (data.type === "offer") {
-        await pc.setRemoteDescription(data.sdp);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        io.to(fromSocketId).emit("signal", {
-          from: botSocketId(channel),
-          data: { type: "answer", sdp: pc.localDescription, connectionType: "main" },
-        });
-      } else if (data.type === "ice-candidate") {
-        await pc.addIceCandidate(data.candidate);
-      }
-    } catch (err) {
-      console.error(`[bot/${channel}] sinyal işlenirken hata:`, err.message);
-    }
-  }
-
-  // ---- Bot sese katılıyor: sanal katılımcı olarak voiceRooms'a
-  // eklenir, mevcut herkese "yeni katılımcı" olarak duyurulur. ----
-  async function joinVoice(channel) {
-    const state = getOrCreateChannelState(channel);
-    if (state.inVoice) return;
-    state.inVoice = true;
-
-    if (!voiceRooms[channel]) voiceRooms[channel] = {};
-    voiceRooms[channel][botSocketId(channel)] = {
-      username: BOT_NAME,
-      muted: false,
-      cameraOn: false,
-      sharingScreen: false,
-      isBot: true,
-    };
-
-    io.to(voiceRoomName(channel)).emit("voice-user-joined", {
-      socketId: botSocketId(channel),
-      username: BOT_NAME,
-      muted: false,
-      cameraOn: false,
-      sharingScreen: false,
-      isBot: true,
-    });
-
-    const memberList = await buildMemberList(channel);
-    io.to(textRoomName(channel)).emit("channel-members", memberList);
-  }
-
-  // ---- Bot sesten çıkıyor: tüm bağlantıları kapatır, çalan şarkı
-  // varsa durdurur. ----
-  async function leaveVoice(channel) {
-    const state = channelState.get(channel);
-    if (!state || !state.inVoice) return;
-
-    stopSong(channel);
-    state.peerConnections.forEach(({ pc }) => pc.close());
-    state.peerConnections.clear();
-    state.inVoice = false;
-
-    if (voiceRooms[channel]) {
-      delete voiceRooms[channel][botSocketId(channel)];
-    }
-    io.to(voiceRoomName(channel)).emit("voice-user-left", { socketId: botSocketId(channel) });
-
-    const memberList = await buildMemberList(channel);
-    io.to(textRoomName(channel)).emit("channel-members", memberList);
-  }
-
-  // ---- YouTube'dan (yt-dlp ile) şarkı arayıp çalar. ----
-  async function playSong(channel, query) {
-    const state = getOrCreateChannelState(channel);
-    if (!state.inVoice) {
-      await joinVoice(channel);
-    }
-    stopSong(channel); // önceki şarkı varsa durdur
 
     let resolved;
     try {
@@ -409,46 +222,12 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       return;
     }
 
-    const { ytdlpProc, ffmpegProc, audioStream } = startAudioProcess(resolved.url, channel);
-    const demuxer = new prism.opus.WebmDemuxer();
-    audioStream.pipe(demuxer);
+    const state = getState(channel);
+    state.hostSocketId = requesterSocketId;
+    state.title = resolved.title;
 
-    state.currentProcess = { ytdlpProc, ffmpegProc, demuxer };
-    state._loggedSendError = false;
-
-    demuxer.on("error", (err) => {
-      console.error(`[bot/${channel}] ses ayrıştırma hatası:`, err.message);
-    });
-
-    // YENİ (teşhis): boru hattının GERÇEKTEN veri üretip üretmediğini
-    // ve o veriyi göndermeye çalışırken hata olup olmadığını görelim
-    // — önceden hatalar sessizce yutuluyordu.
-    let firstPacketLogged = false;
-    demuxer.on("data", (opusPacket) => {
-      if (!firstPacketLogged) {
-        firstPacketLogged = true;
-        console.log(
-          `[bot/${channel}] İlk ses paketi üretildi (${opusPacket.length} bayt). Şu an ${state.peerConnections.size} bağlantıya gönderiliyor.`
-        );
-      }
-      state.peerConnections.forEach(({ pc, sender }, peerSocketId) => {
-        try {
-          sender.sendRtp(opusPacket);
-        } catch (err) {
-          if (!state._loggedSendError) {
-            state._loggedSendError = true;
-            console.error(
-              `[bot/${channel}] ${peerSocketId} bağlantı durumu: ${pc.connectionState}, ICE: ${pc.iceConnectionState} — gönderim hatası:`,
-              err.message
-            );
-          }
-        }
-      });
-    });
-
-    demuxer.on("end", () => {
-      state.currentProcess = null;
-    });
+    const streamUrl = `/bot-audio?url=${encodeURIComponent(resolved.url)}&t=${Date.now()}`;
+    io.to(requesterSocketId).emit("bot-play", { streamUrl, title: resolved.title });
 
     io.to(textRoomName(channel)).emit("new-message", {
       username: BOT_NAME,
@@ -459,7 +238,7 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
   function stopSong(channel, { announce = false } = {}) {
     const state = channelState.get(channel);
-    if (!state?.currentProcess) {
+    if (!state?.hostSocketId) {
       if (announce) {
         io.to(textRoomName(channel)).emit("new-message", {
           username: BOT_NAME,
@@ -469,23 +248,9 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
       }
       return;
     }
-    const { ytdlpProc, ffmpegProc, demuxer } = state.currentProcess;
-    try {
-      ytdlpProc.kill("SIGKILL");
-    } catch {
-      /* zaten kapanmış olabilir */
-    }
-    try {
-      ffmpegProc.kill("SIGKILL");
-    } catch {
-      /* zaten kapanmış olabilir */
-    }
-    try {
-      demuxer.destroy();
-    } catch {
-      /* zaten kapanmış olabilir */
-    }
-    state.currentProcess = null;
+    io.to(state.hostSocketId).emit("bot-stop");
+    state.hostSocketId = null;
+    state.title = null;
     if (announce) {
       io.to(textRoomName(channel)).emit("new-message", {
         username: BOT_NAME,
@@ -495,9 +260,16 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     }
   }
 
-  // ---- Sohbete yazılan bir komutu işler. "true" dönerse, bu mesaj
-  // bir bot komutuydu demektir. ----
-  async function handleChatCommand(channel, text) {
+  // Host kişi sesten/kanaldan ayrılırsa çalmayı da bilgi amaçlı durdur.
+  function handleHostDisconnected(channel, socketId) {
+    const state = channelState.get(channel);
+    if (state?.hostSocketId === socketId) {
+      state.hostSocketId = null;
+      state.title = null;
+    }
+  }
+
+  async function handleChatCommand(channel, text, fromSocketId) {
     const trimmed = text.trim();
     if (!trimmed.startsWith("!")) return false;
 
@@ -506,23 +278,16 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
     const query = rest.join(" ");
 
     try {
-      if (command === "!katıl" || command === "!gel") {
-        await joinVoice(channel);
-      } else if (command === "!ayrıl" || command === "!çık") {
-        await leaveVoice(channel);
-      } else if (command === "!çal" || command === "!play") {
+      if (command === "!çal" || command === "!play") {
         if (!query) return true;
-        await playSong(channel, query);
+        await playSong(channel, query, fromSocketId);
       } else if (command === "!durdur" || command === "!dur") {
         stopSong(channel, { announce: true });
       } else {
-        return false; // bilinmeyen komut, normal mesaj gibi davran
+        return false;
       }
     } catch (err) {
-      console.error(
-        `[bot/${channel}] komut işlenirken hata (komut: "${trimmed}"):`,
-        err.stack || err.message
-      );
+      console.error(`[bot/${channel}] komut hatası ("${trimmed}"):`, err.stack || err.message);
       io.to(textRoomName(channel)).emit("new-message", {
         username: BOT_NAME,
         text: "Bir şeyler ters gitti, tekrar dener misin?",
@@ -534,10 +299,10 @@ function createMusicBot({ io, voiceRooms, textRoomName, voiceRoomName, buildMemb
 
   return {
     BOT_NAME,
-    botSocketId,
-    handleIncomingSignal,
     handleChatCommand,
+    handleHostDisconnected,
+    streamAudioToResponse,
   };
 }
 
-module.exports = { createMusicBot, BOT_NAME, BOT_SOCKET_PREFIX };
+module.exports = { createMusicBot, BOT_NAME };

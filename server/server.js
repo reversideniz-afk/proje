@@ -18,7 +18,7 @@ const http = require("http");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const bcrypt = require("bcryptjs");
-const { createMusicBot, BOT_SOCKET_PREFIX } = require("./bot");
+const { createMusicBot } = require("./bot");
 
 // YENİ (sağlamlık): Kodda gözden kaçan bir hata olsa bile (ör. beklenmedik
 // bir veri tipi), sunucunun TÜMDEN çökmesini istemiyoruz — herkesin
@@ -129,14 +129,6 @@ async function buildMemberList(channel) {
     inVoice: Object.values(voiceRooms[channel] || {}).some((v) => v.username === u.username),
   }));
 
-  // YENİ: Bot, her kanala otomatik "eklenmiş" görünür — kendi bir
-  // socket bağlantısı olmasa bile, listede daima çevrimiçi.
-  online.push({
-    username: musicBot.BOT_NAME,
-    inVoice: Object.values(voiceRooms[channel] || {}).some((v) => v.isBot),
-    isBot: true,
-  });
-
   const onlineUsernames = new Set(online.map((m) => m.username));
 
   let offline = [];
@@ -151,15 +143,29 @@ async function buildMemberList(channel) {
   return { online, offline };
 }
 
-// YENİ: Müzik botu — io/oda yapıları hazır olduktan sonra kuruluyor,
-// bu fonksiyonlara referans veriyoruz ki bot.js kendi bağlantılarını/
-// duyurularını aynı altyapı üzerinden yapabilsin.
-const musicBot = createMusicBot({
-  io,
-  voiceRooms,
-  textRoomName,
-  voiceRoomName,
-  buildMemberList,
+// YENİ: bir kişinin belirli bir kanalda seste olup olmadığını
+// kontrol eden basit yardımcı — müzik botu, "!çal" yazan kişinin
+// gerçekten seste olup olmadığını buradan soruyor.
+function isUserInVoice(channel, socketId) {
+  return !!(voiceRooms[channel] && voiceRooms[channel][socketId]);
+}
+
+// YENİ: Müzik botu — artık kendi WebRTC bağlantısı KURMUYOR (bu,
+// önceki mimaride çözemediğimiz sorunların kaynağıydı). Bunun
+// yerine, komutu yazan kişinin İSTEMCİSİNE "şu adresi çal" diyor —
+// o kişi zaten sesteyse, müzik onun ZATEN ÇALIŞAN bağlantısından gider.
+const musicBot = createMusicBot({ io, textRoomName, isUserInVoice });
+
+// YENİ: Botun YouTube'dan çektiği sesi HTTP üzerinden yayınladığı
+// adres — istemciler burayı bir <audio> elemanıyla doğrudan çalabilir.
+app.get("/bot-audio", (req, res) => {
+  const videoUrl = req.query.url;
+  if (!videoUrl || typeof videoUrl !== "string") {
+    return res.status(400).end();
+  }
+  res.setHeader("Content-Type", "audio/webm");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  musicBot.streamAudioToResponse(videoUrl, res);
 });
 
 io.on("connection", (socket) => {
@@ -297,6 +303,7 @@ io.on("connection", (socket) => {
     }
     socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
     socket.leave(voiceRoomName(roomId));
+    musicBot.handleHostDisconnected(roomId, socket.id);
 
     const memberList = await buildMemberList(roomId);
     io.to(textRoomName(roomId)).emit("channel-members", memberList);
@@ -332,7 +339,7 @@ io.on("connection", (socket) => {
     // Mesajın kendisi zaten normal şekilde kaydedildi/yayınlandı (komutu
     // kimin, ne zaman yazdığı sohbette görünsün diye) — bot buna EK
     // olarak tepki veriyor.
-    musicBot.handleChatCommand(currentTextRoom, trimmedText).catch((err) => {
+    musicBot.handleChatCommand(currentTextRoom, trimmedText, socket.id).catch((err) => {
       console.error("Bot komutu işlenirken hata:", err.message);
     });
   });
@@ -365,13 +372,6 @@ io.on("connection", (socket) => {
 
   // ---- WebRTC sinyal mesajlarını ilet (offer / answer / ice candidate) ----
   socket.on("signal", ({ to, data }) => {
-    // YENİ: hedef bot ise, sunucudaki normal yönlendirme yerine
-    // doğrudan bot modülüne veriyoruz (bot gerçek bir socket değil).
-    if (typeof to === "string" && to.startsWith(BOT_SOCKET_PREFIX)) {
-      const channel = to.slice(BOT_SOCKET_PREFIX.length);
-      musicBot.handleIncomingSignal(channel, socket.id, data);
-      return;
-    }
     io.to(to).emit("signal", { from: socket.id, data });
   });
 
@@ -394,6 +394,7 @@ io.on("connection", (socket) => {
         if (Object.keys(voiceRooms[roomId]).length === 0) delete voiceRooms[roomId];
       }
       socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
+      musicBot.handleHostDisconnected(roomId, socket.id);
     }
     if (currentTextRoom) {
       const roomId = currentTextRoom;
