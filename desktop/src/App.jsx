@@ -21,6 +21,103 @@ function formatKeyCode(code) {
   return code
 }
 
+// YENİ: Global bas-konuş için — tarayıcının kullandığı tuş kodunu
+// (event.code, ör. "KeyF"), node-global-key-listener kütüphanesinin
+// kendi isimlendirmesine (ör. "F") çeviriyoruz. Bu eşleştirmeyi
+// kütüphanenin KENDİ Windows tuş haritasından (tahmin etmeden,
+// doğrudan kaynağından) çıkardım.
+const DOM_CODE_TO_GLOBAL_KEY_NAME = {
+  Space: 'SPACE',
+  Tab: 'TAB',
+  ShiftLeft: 'LSHIFT',
+  ShiftRight: 'RSHIFT',
+  ControlLeft: 'LCONTROL',
+  ControlRight: 'RCONTROL',
+  AltLeft: 'LALT',
+  AltRight: 'RALT',
+  CapsLock: 'CAPSLOCK',
+  Escape: 'ESCAPE',
+  Backspace: 'BACK',
+  Enter: 'RETURN',
+  Home: 'HOME',
+  End: 'END',
+  PageUp: 'PRIOR',
+  PageDown: 'NEXT',
+  Insert: 'INSERT',
+  Delete: 'DELETE',
+  ArrowLeft: 'LEFT',
+  ArrowUp: 'UP',
+  ArrowRight: 'RIGHT',
+  ArrowDown: 'DOWN',
+  MetaLeft: 'LWIN',
+  MetaRight: 'RWIN',
+  Semicolon: 'OEM_1',
+  Equal: 'OEM_PLUS',
+  Comma: 'OEM_COMMA',
+  Minus: 'OEM_MINUS',
+  Period: 'OEM_PERIOD',
+  Slash: 'OEM_2',
+  Backquote: 'OEM_3',
+  BracketLeft: 'OEM_4',
+  Backslash: 'OEM_5',
+  BracketRight: 'OEM_6',
+  Quote: 'OEM_7',
+}
+
+function domCodeToGlobalKeyName(code) {
+  if (!code) return null
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3)
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5)
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code
+  return DOM_CODE_TO_GLOBAL_KEY_NAME[code] || null
+}
+
+// YENİ: Mesaj saatini okunabilir göstermek için.
+function formatMessageTime(dateStr) {
+  try {
+    return new Date(dateStr).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
+
+// YENİ: Birisi @kullanıcıadı ile bahsedildiğinde çalınan kısa, nazik
+// bir "ping" sesi — dışarıdan bir ses dosyası eklemeye gerek kalmasın
+// diye programatik olarak (Web Audio API ile) üretiliyor.
+function playMentionSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const oscillator = ctx.createOscillator()
+    const gainNode = ctx.createGain()
+    oscillator.connect(gainNode)
+    gainNode.connect(ctx.destination)
+    oscillator.frequency.value = 880
+    gainNode.gain.setValueAtTime(0.15, ctx.currentTime)
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    oscillator.start()
+    oscillator.stop(ctx.currentTime + 0.3)
+  } catch {
+    // Ses opsiyonel bir özellik — başarısız olursa sessizce geç.
+  }
+}
+
+// YENİ: Mesaj metnindeki @kullanıcıadı bahsetmelerini vurgulu göster.
+// Beni (myUsername) bahsedenler ayrıca özel renkte.
+function renderMessageTextWithMentions(text, myUsername) {
+  const parts = text.split(/(@[\wÇĞİÖŞÜçğıöşü]+)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('@')) {
+      const isMe = myUsername && part.slice(1).toLowerCase() === myUsername.toLowerCase()
+      return (
+        <span key={i} className={'mention' + (isMe ? ' mention--me' : '')}>
+          {part}
+        </span>
+      )
+    }
+    return part
+  })
+}
+
 function describeMediaError(err) {
   switch (err.name) {
     case 'NotAllowedError':
@@ -295,6 +392,11 @@ function App() {
   const [pttEnabled, setPttEnabled] = useState(false)
   const [pttKey, setPttKey] = useState(null) // event.code, ör. 'KeyV'
   const [isCapturingPttKey, setIsCapturingPttKey] = useState(false)
+  // YENİ: Global bas-konuş — açıksa, uygulama odakta olmasa bile
+  // (ör. oyun oynarken) tuş çalışır. Sadece pttEnabled+pttKey varken
+  // anlamlı.
+  const [pttGlobal, setPttGlobal] = useState(false)
+  const [pttGlobalError, setPttGlobalError] = useState(null)
   const [isCameraOn, setIsCameraOn] = useState(false)
 
   // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
@@ -732,6 +834,15 @@ function App() {
 
       socket.on('new-message', (message) => {
         setMessages((prev) => [...prev, message])
+        // YENİ: Beni @kullanıcıadımla bahsettiyse ve şu an pencere
+        // görünür/odakta değilse, nazik bir ses çal.
+        if (
+          displayName &&
+          message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`) &&
+          document.hidden
+        ) {
+          playMentionSound()
+        }
         requestAnimationFrame(() => {
           if (chatMessagesRef.current) {
             chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
@@ -904,6 +1015,7 @@ function App() {
     if (pttEnabled) {
       setPttEnabled(false)
       setPttKey(null)
+      setPttGlobal(false)
       setMicActive(false)
     } else {
       setIsCapturingPttKey(true)
@@ -952,6 +1064,51 @@ function App() {
       window.removeEventListener('keyup', handleKeyup)
     }
   }, [pttEnabled, pttKey, inVoice, setMicActive])
+
+  // YENİ: Global bas-konuş — pttGlobal açıksa, ana sürece "şu tuşu
+  // (global isimlendirmeyle) izle" diyoruz. Kapalıysa ya da şartlar
+  // sağlanmıyorsa (sesle ilgili değilsek, kanal yoksa vs.) "izleme"
+  // (null) diyoruz.
+  useEffect(() => {
+    if (!window.electronAPI?.setGlobalPttKey) return
+    const globalKeyName =
+      pttEnabled && pttGlobal && pttKey ? domCodeToGlobalKeyName(pttKey) : null
+    window.electronAPI.setGlobalPttKey(globalKeyName)
+    if (pttEnabled && pttGlobal && pttKey && !globalKeyName) {
+      setPttGlobalError('Bu tuş global modda henüz desteklenmiyor, başka bir tuş dene.')
+    } else {
+      setPttGlobalError(null)
+    }
+  }, [pttEnabled, pttGlobal, pttKey])
+
+  // YENİ: Ana süreçten gelen global tuş basma/bırakma olaylarını
+  // dinleyip mikrofonu buna göre açıp kapatıyoruz. Uygulama odakta
+  // OLMASA bile çalışır — bu yüzden inVoice/pttGlobal kontrolünü
+  // burada, olay geldiği anda yapıyoruz (eski değerlere takılmasın
+  // diye ref kullanmak yerine, bu effect zaten ilgili state'ler
+  // değiştikçe yeniden kuruluyor).
+  useEffect(() => {
+    if (!window.electronAPI?.onGlobalPttKeyDown) return
+    if (!pttEnabled || !pttGlobal || !inVoice) return
+
+    const unsubDown = window.electronAPI.onGlobalPttKeyDown(() => setMicActive(true))
+    const unsubUp = window.electronAPI.onGlobalPttKeyUp(() => setMicActive(false))
+    return () => {
+      unsubDown?.()
+      unsubUp?.()
+    }
+  }, [pttEnabled, pttGlobal, inVoice, setMicActive])
+
+  // Global dinleyici kurulumunda bir hata olursa (ör. işletim
+  // sistemi izin vermezse), kullanıcıya haber ver.
+  useEffect(() => {
+    if (!window.electronAPI?.onGlobalPttError) return
+    return window.electronAPI.onGlobalPttError((message) => {
+      setPttGlobalError(`Global bas-konuş kurulamadı: ${message}`)
+      setPttGlobal(false)
+    })
+  }, [])
+
 
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
@@ -1399,6 +1556,19 @@ function App() {
                     {isCapturingPttKey && (
                       <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
                     )}
+                    {/* YENİ: Global bas-konuş anahtarı — sadece bir tuş
+                        ayarlanmışken anlamlı/görünür. */}
+                    {pttEnabled && !isCapturingPttKey && (
+                      <label className="ptt-global-toggle">
+                        <input
+                          type="checkbox"
+                          checked={pttGlobal}
+                          onChange={(e) => setPttGlobal(e.target.checked)}
+                        />
+                        🌐 Uygulama arka plandayken de çalışsın
+                      </label>
+                    )}
+                    {pttGlobalError && <p className="ptt-global-error">{pttGlobalError}</p>}
                   </div>
 
                   {isScreenSharing && (
@@ -1493,7 +1663,18 @@ function App() {
                     ) : (
                       <div key={item.id || `text-${i}`} className="chat-message chat-message--text-wrap">
                         <span className="chat-message-author">{item.username}</span>
-                        <span className="chat-message-text">{item.text}</span>
+                        <span className="chat-message-time">{formatMessageTime(item.createdAt)}</span>
+                        <button
+                          type="button"
+                          className="chat-message-copy"
+                          title="Metni kopyala"
+                          onClick={() => navigator.clipboard?.writeText(item.text)}
+                        >
+                          📋
+                        </button>
+                        <span className="chat-message-text">
+                          {renderMessageTextWithMentions(item.text, displayName)}
+                        </span>
                         {item.id && (
                           <div className="chat-reactions">
                             {Object.entries(

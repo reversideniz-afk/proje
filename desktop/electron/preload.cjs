@@ -32,5 +32,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // renderer-seviyesinde zoom kontrolü sağlayan modülü.
   setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
   getZoomFactor: () => webFrame.getZoomFactor(),
+
+  // YENİ: Global bas-konuş — uygulama odakta olmasa bile çalışıyor.
+  setGlobalPttKey: (keyName) => {
+    ipcRenderer.send("ptt-global-set-key", keyName);
+  },
+  onGlobalPttKeyDown: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("ptt-global-key-down", listener);
+    return () => ipcRenderer.removeListener("ptt-global-key-down", listener);
+  },
+  onGlobalPttKeyUp: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("ptt-global-key-up", listener);
+    return () => ipcRenderer.removeListener("ptt-global-key-up", listener);
+  },
+  onGlobalPttError: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on("ptt-global-error", listener);
+    return () => ipcRenderer.removeListener("ptt-global-error", listener);
+  },
 });
 

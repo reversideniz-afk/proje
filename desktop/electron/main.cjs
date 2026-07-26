@@ -23,6 +23,11 @@
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
 const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu } = require("electron");
 const path = require("path");
+// YENİ: Global bas-konuş için — uygulama odakta OLMASA bile (ör. oyun
+// oynarken) tuş basma/bırakma olaylarını işletim sistemi seviyesinde
+// yakalayabiliyor. Bu, projedeki İLK derlenmiş (native) bağımlılık —
+// paketleme (electron-builder) sırasında dikkatle test edilmeli.
+const { GlobalKeyboardListener } = require("node-global-key-listener");
 
 // app.isPackaged: uygulama .exe/.dmg olarak paketlenip paketlenmediğini
 // söylüyor. Paketlenmemişse (yani "npm run dev" ile geliştirme modundaysak)
@@ -155,3 +160,45 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+// ============================================================
+// YENİ: Global bas-konuş
+// ------------------------------------------------------------
+// React tarafı, hangi tuşu (node-global-key-listener'ın kendi isim
+// biçiminde, ör. "F", "SPACE") izleyeceğimizi buraya bildiriyor.
+// Dinleyiciyi TEMBEL (lazy) kuruyoruz — kişi bu özelliği hiç
+// açmazsa, işletim sistemi seviyesinde bir kanca (hook) hiç
+// kurulmuyor.
+// ============================================================
+let globalKeyListener = null;
+let currentGlobalPttKeyName = null;
+
+function ensureGlobalKeyListenerStarted() {
+  if (globalKeyListener) return;
+  try {
+    globalKeyListener = new GlobalKeyboardListener();
+    globalKeyListener.addListener((e) => {
+      if (!currentGlobalPttKeyName || e.name !== currentGlobalPttKeyName) return;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send(
+        e.state === "DOWN" ? "ptt-global-key-down" : "ptt-global-key-up"
+      );
+      // Bilerek "true" DÖNMÜYORUZ — bu, tuşun diğer uygulamalarda
+      // (ör. bir oyunda) NORMAL işlevini de görmeye devam etmesi
+      // için önemli. Sadece dinliyoruz, tuşu "çalmıyoruz".
+    });
+  } catch (err) {
+    console.error("Global tuş dinleyicisi başlatılamadı:", err.message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("ptt-global-error", err.message);
+    }
+  }
+}
+
+ipcMain.on("ptt-global-set-key", (event, keyName) => {
+  currentGlobalPttKeyName = keyName || null;
+  if (currentGlobalPttKeyName) {
+    ensureGlobalKeyListenerStarted();
+  }
+});
+
