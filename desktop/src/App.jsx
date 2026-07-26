@@ -688,19 +688,40 @@ function App() {
       // "karıştırıyorum" — böylece diğerleri bunu benim ses
       // bağlantımdan (zaten çalışan, güvenilir yoldan) duyuyor.
       socket.on('bot-play', ({ streamUrl }) => {
-        const { ctx, destination } = getOrCreateAudioMix()
-        if (!musicAudioElRef.current) {
-          const audioEl = new Audio()
-          audioEl.crossOrigin = 'anonymous'
-          const source = ctx.createMediaElementSource(audioEl)
-          source.connect(destination)
-          musicAudioElRef.current = audioEl
-          musicSourceNodeRef.current = source
+        const fullUrl = `${SERVER_URL}${streamUrl}`
+        console.log('[bot müziği] Çalma isteği alındı:', fullUrl)
+        try {
+          const { ctx, destination } = getOrCreateAudioMix()
+          console.log('[bot müziği] AudioContext durumu:', ctx.state)
+          if (!musicAudioElRef.current) {
+            const audioEl = new Audio()
+            audioEl.crossOrigin = 'anonymous'
+            audioEl.addEventListener('playing', () => {
+              console.log('[bot müziği] ✅ Gerçekten çalmaya BAŞLADI.')
+            })
+            audioEl.addEventListener('error', () => {
+              console.error(
+                '[bot müziği] <audio> elemanı hata verdi:',
+                audioEl.error?.code,
+                audioEl.error?.message
+              )
+            })
+            const source = ctx.createMediaElementSource(audioEl)
+            source.connect(destination)
+            musicAudioElRef.current = audioEl
+            musicSourceNodeRef.current = source
+            console.log('[bot müziği] <audio> elemanı ve karışım bağlantısı ilk kez kuruldu.')
+          }
+          musicAudioElRef.current.src = fullUrl
+          musicAudioElRef.current
+            .play()
+            .then(() => console.log('[bot müziği] play() başarıyla çağrıldı (tarayıcı reddetmedi).'))
+            .catch((err) => {
+              console.error('[bot müziği] play() REDDEDİLDİ:', err.name, err.message)
+            })
+        } catch (err) {
+          console.error('[bot müziği] kurulum sırasında hata:', err)
         }
-        musicAudioElRef.current.src = `${SERVER_URL}${streamUrl}`
-        musicAudioElRef.current.play().catch((err) => {
-          console.error('[bot müziği] çalınamadı:', err)
-        })
       })
 
       socket.on('bot-stop', () => {
