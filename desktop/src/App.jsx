@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
+import logoUrl from './assets/logo.png'
 
 const SERVER_URL = 'https://proje-dh7l.onrender.com'
 // YENİ: Mesaj tepkileri için hızlı seçim listesi.
@@ -1414,6 +1415,7 @@ function App() {
   if (!loggedIn) {
     return (
       <div className="name-entry">
+        <img src={logoUrl} alt="Disco" className="app-logo app-logo--login" />
         <h1>Disco</h1>
         <p>Hesabınla giriş yap:</p>
         <form onSubmit={handleLogin}>
@@ -1465,7 +1467,10 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="channel-sidebar">
-        <h1 className="app-title">Disco</h1>
+        <div className="sidebar-brand">
+          <img src={logoUrl} alt="Disco" className="app-logo app-logo--sidebar" />
+          <h1 className="app-title">Disco</h1>
+        </div>
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
           {channels.map((channel) => {
