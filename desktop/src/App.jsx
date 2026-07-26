@@ -25,7 +25,19 @@ function describeMediaError(err) {
 
 // Karşı tarafın kamera görüntüsü (ya da kamerası kapalıysa avatar).
 // YENİ: tıklanınca büyütülüyor (isEnlarged/onToggleEnlarge).
-function RemoteCameraTile({ stream, label, cameraOn, micOn, isEnlarged, onToggleEnlarge }) {
+function RemoteCameraTile({
+  stream,
+  label,
+  cameraOn,
+  micOn,
+  isEnlarged,
+  onToggleEnlarge,
+  volume,
+  onVolumeChange,
+  showVolumeMenu,
+  onOpenVolumeMenu,
+  onCloseVolumeMenu,
+}) {
   const videoRef = useRef(null)
   const audioRef = useRef(null)
 
@@ -46,18 +58,46 @@ function RemoteCameraTile({ stream, label, cameraOn, micOn, isEnlarged, onToggle
     <div
       className={'video-tile remote-video-wrapper' + (isEnlarged ? ' video-tile--enlarged' : '')}
       onClick={onToggleEnlarge}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onOpenVolumeMenu()
+      }}
     >
       {cameraOn ? (
-        <video ref={videoRef} autoPlay playsInline className="remote-video" />
+        // YENİ: gerçek ses artık Web Audio üzerinden (kişi bazlı ses
+        // seviyesi için) çalıyor — bu elemanın kendi sesini kapatıyoruz
+        // (muted) ki aynı ses iki kere duyulmasın.
+        <video ref={videoRef} autoPlay playsInline muted className="remote-video" />
       ) : (
         <div className="camera-off-placeholder">
           <div className="avatar-circle">{label.charAt(0).toUpperCase()}</div>
-          <audio ref={audioRef} autoPlay />
+          <audio ref={audioRef} autoPlay muted />
         </div>
       )}
       <span className="remote-video-label">
         {label} {!micOn && '🔇'}
       </span>
+
+      {/* YENİ: sağ tık ile açılan, kişiye özel ses seviyesi kaydırıcısı. */}
+      {showVolumeMenu && (
+        <div className="volume-popup" onClick={(e) => e.stopPropagation()}>
+          <div className="volume-popup-header">
+            <span>{label} — ses seviyesi</span>
+            <button className="volume-popup-close" onClick={onCloseVolumeMenu}>
+              ✕
+            </button>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="200"
+            value={volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+          />
+          <div className="volume-popup-value">{volume}%</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -176,6 +216,76 @@ function App() {
   const toggleEnlarge = (tileId) => {
     setEnlargedTile((prev) => (prev === tileId ? null : tileId))
   }
+
+  // YENİ: kişi bazlı ses seviyesi (Discord'daki gibi, %0-%200 arası —
+  // normal HTML ses elemanlarının %100 sınırını Web Audio API ile aşıyoruz).
+  const [peerVolumes, setPeerVolumes] = useState({}) // { peerSocketId: 0-200 }
+  const [volumeMenuFor, setVolumeMenuFor] = useState(null) // hangi kişinin kaydırıcısı açık
+  const audioContextRef = useRef(null)
+  const gainNodesRef = useRef(new Map()) // peerSocketId -> GainNode
+  const connectedAudioTracksRef = useRef(new Map()) // peerSocketId -> hangi track'e bağlandık
+
+  const getAudioContext = useCallback(() => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume()
+    }
+    return audioContextRef.current
+  }, [])
+
+  // Her uzak ses akışı için (ya da akış değiştiğinde) bir kazanç (gain)
+  // düğümü kuruyoruz — bu, kişi bazlı ses seviyesinin gerçek mekanizması.
+  useEffect(() => {
+    Object.entries(remoteStreams).forEach(([peerSocketId, streams]) => {
+      const audioTrack = streams.mainStream?.getAudioTracks()[0]
+      if (!audioTrack) return
+      if (connectedAudioTracksRef.current.get(peerSocketId) === audioTrack) return
+
+      try {
+        const ctx = getAudioContext()
+        const singleTrackStream = new MediaStream([audioTrack])
+        const source = ctx.createMediaStreamSource(singleTrackStream)
+        const gainNode = ctx.createGain()
+        const currentVolume = peerVolumes[peerSocketId] ?? 100
+        gainNode.gain.value = currentVolume / 100
+        source.connect(gainNode).connect(ctx.destination)
+
+        // Eskiden bu kişi için bağlı bir düğüm varsa (ör. track değişti),
+        // eskisini temizleyelim ki sesler üst üste binmesin.
+        const oldGainNode = gainNodesRef.current.get(peerSocketId)
+        if (oldGainNode) {
+          try {
+            oldGainNode.disconnect()
+          } catch {
+            /* zaten kopmuş olabilir, sorun değil */
+          }
+        }
+
+        gainNodesRef.current.set(peerSocketId, gainNode)
+        connectedAudioTracksRef.current.set(peerSocketId, audioTrack)
+      } catch (err) {
+        console.error(`[ses seviyesi] ${peerSocketId} için kurulamadı:`, err)
+      }
+    })
+
+    // Artık remoteStreams'te olmayan kişilerin düğümlerini temizle.
+    gainNodesRef.current.forEach((gainNode, peerSocketId) => {
+      if (!remoteStreams[peerSocketId]?.mainStream) {
+        gainNode.disconnect()
+        gainNodesRef.current.delete(peerSocketId)
+        connectedAudioTracksRef.current.delete(peerSocketId)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteStreams, getAudioContext])
+
+  const setPeerVolume = useCallback((peerSocketId, percent) => {
+    setPeerVolumes((prev) => ({ ...prev, [peerSocketId]: percent }))
+    const gainNode = gainNodesRef.current.get(peerSocketId)
+    if (gainNode) gainNode.gain.value = percent / 100
+  }, [])
 
   const socketRef = useRef(null)
   const localVideoRef = useRef(null)
@@ -424,6 +534,12 @@ function App() {
     setIsScreenSharing(false)
     setEnlargedTile(null)
     setInVoice(false)
+    setVolumeMenuFor(null)
+    // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
+    // girişte sıfırdan, temiz kurulacaklar).
+    gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
+    gainNodesRef.current.clear()
+    connectedAudioTracksRef.current.clear()
   }, [stopLocalMedia, cleanupPeerConnections])
 
   // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım.
@@ -946,6 +1062,11 @@ function App() {
                             micOn={peer ? !peer.muted : false}
                             isEnlarged={enlargedTile === `${socketId}-camera`}
                             onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
+                            volume={peerVolumes[socketId] ?? 100}
+                            onVolumeChange={(percent) => setPeerVolume(socketId, percent)}
+                            showVolumeMenu={volumeMenuFor === socketId}
+                            onOpenVolumeMenu={() => setVolumeMenuFor(socketId)}
+                            onCloseVolumeMenu={() => setVolumeMenuFor(null)}
                           />
                         )}
                         {peer?.sharingScreen && streams.screenStream && (

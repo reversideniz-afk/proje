@@ -1,10 +1,15 @@
 // ============================================================
-// HESAP EKLEME SCRİPTİ
+// HESAP EKLEME / ŞİFRE DEĞİŞTİRME SCRİPTİ
 // ------------------------------------------------------------
 // Bu, herkesin kullandığı bir şey DEĞİL — sadece SEN, kendi
-// bilgisayarında, yeni bir arkadaşına hesap açmak istediğinde
-// çalıştırıyorsun. Uygulamanın kendisinde "kayıt ol" ekranı YOK,
-// bilerek — herkese açık bir kayıt formu güvenlik açığı olurdu.
+// bilgisayarında çalıştırıyorsun. Uygulamanın kendisinde "kayıt ol"
+// ekranı YOK, bilerek — herkese açık bir kayıt formu güvenlik açığı
+// olurdu.
+//
+// AYNI KOMUT hem yeni hesap açar HEM de var olan birinin şifresini
+// değiştirir — kullanıcı adı zaten VARSA şifresini günceller, YOKSA
+// yeni hesap oluşturur. Kendi şifreni değiştirmek istersen de aynı
+// komutu kendi kullanıcı adınla çalıştırman yeterli.
 //
 // KULLANIM:
 //   1) Bu klasörde bir ".env" dosyası oluştur (yoksa), içine:
@@ -34,17 +39,17 @@ async function main() {
     process.exit(1);
   }
 
-  const existing = await User.findOne({ username });
-  if (existing) {
-    console.error(`"${username}" adında bir kullanıcı zaten var.`);
-    process.exit(1);
-  }
-
-  // 10 = "salt round" sayısı — bcrypt'in standart, güvenli varsayılanı.
   const passwordHash = await bcrypt.hash(password, 10);
-  await User.create({ username, passwordHash });
+  const existing = await User.findOne({ username });
 
-  console.log(`✅ Kullanıcı "${username}" başarıyla eklendi.`);
+  if (existing) {
+    existing.passwordHash = passwordHash;
+    await existing.save();
+    console.log(`🔄 "${username}" zaten vardı — şifresi güncellendi.`);
+  } else {
+    await User.create({ username, passwordHash });
+    console.log(`✅ Kullanıcı "${username}" başarıyla eklendi.`);
+  }
   process.exit(0);
 }
 
