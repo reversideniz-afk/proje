@@ -138,6 +138,7 @@ function RemoteCameraTile({
   isEnlarged,
   onToggleEnlarge,
   onOpenVolumeMenu,
+  ping,
 }) {
   const videoRef = useRef(null)
   const audioRef = useRef(null)
@@ -154,6 +155,10 @@ function RemoteCameraTile({
       activeRef.current.srcObject = stream
     }
   }, [cameraOn, micOn, stream])
+
+  // YENİ: ping değerine göre renk — düşükse yeşilimsi, yüksekse turuncu/kırmızımsı.
+  const pingClass =
+    typeof ping !== 'number' ? '' : ping < 100 ? 'ping-good' : ping < 250 ? 'ping-ok' : 'ping-bad'
 
   return (
     <div
@@ -179,6 +184,9 @@ function RemoteCameraTile({
       <span className="remote-video-label">
         {label} {!micOn && '🔇'}
       </span>
+      {typeof ping === 'number' && (
+        <span className={'ping-badge ' + pingClass}>{ping} ms</span>
+      )}
     </div>
   )
 }
@@ -305,11 +313,9 @@ function App() {
     iceServersRef.current = iceServers
   }, [iceServers])
 
-  // YENİ: kanal listesi artık sunucudan geliyor (koda gömülü değil).
+  // YENİ: kanal listesi artık sunucudan geliyor (koda gömülü değil) —
+  // ve artık SADECE erişimi olan kanallar geliyor (rol tabanlı erişim).
   const [channels, setChannels] = useState([])
-  // YENİ: bu kişinin daha önce üye olduğu kanallar — bu kanallara
-  // girerken şifre sorulmuyor.
-  const [memberChannels, setMemberChannels] = useState([])
 
   // --- Kanal (metin) durumu ---
   const [activeChannel, setActiveChannel] = useState(null)
@@ -317,9 +323,6 @@ function App() {
   useEffect(() => {
     activeChannelRef.current = activeChannel
   }, [activeChannel])
-  const [pendingChannel, setPendingChannel] = useState(null)
-  const [channelPasswordInput, setChannelPasswordInput] = useState('')
-  const [showChannelPassword, setShowChannelPassword] = useState(false)
   const [connectionError, setConnectionError] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState('connected')
 
@@ -443,6 +446,11 @@ function App() {
     return audioContextRef.current
   }, [])
 
+  // YENİ: Sağırlaştır — Discord'daki gibi, herkesin sesini tek tuşla
+  // kapatıp, tekrar bastığında herkesi KENDİ ayarladığın ses seviyesine
+  // geri getiriyor (0'a sıfırlamıyor, gerçek tercihini unutmuyor).
+  const [isDeafened, setIsDeafened] = useState(false)
+
   // Her uzak ses akışı için (ya da akış değiştiğinde) bir kazanç (gain)
   // düğümü kuruyoruz — bu, kişi bazlı ses seviyesinin gerçek mekanizması.
   useEffect(() => {
@@ -459,7 +467,9 @@ function App() {
         // YENİ: ses seviyesini artık kullanıcı adından buluyoruz.
         const username = peers.find((p) => p.socketId === peerSocketId)?.username
         const currentVolume = (username && peerVolumes[username]) ?? 100
-        gainNode.gain.value = currentVolume / 100
+        // Sağırlaştırılmış durumdayken YENİ birine bağlanırsak (ör. az
+        // önce sese giren biri), onun sesi de baştan susturulmalı.
+        gainNode.gain.value = isDeafened ? 0 : currentVolume / 100
         source.connect(gainNode).connect(ctx.destination)
 
         // Eskiden bu kişi için bağlı bir düğüm varsa (ör. track değişti),
@@ -489,7 +499,7 @@ function App() {
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteStreams, getAudioContext, peers])
+  }, [remoteStreams, getAudioContext, peers, isDeafened])
 
   // YENİ: artık kullanıcı adına göre ayarlıyoruz — o kişi şu an sesteyse
   // canlı ses seviyesini de anında güncelliyoruz, sesteyken olmasa bile
@@ -522,6 +532,39 @@ function App() {
 
   // peerConnectionsRef: Map<peerSocketId, { mainPc, screenPc }>
   const peerConnectionsRef = useRef(new Map())
+
+  // YENİ: Ping göstergesi — her bağlantının GERÇEK gidiş-dönüş süresini
+  // (RTT), WebRTC'nin kendi istatistik API'sinden periyodik olarak
+  // okuyoruz. Mesh mimarisinde herkesle AYRI bir bağlantı olduğu için,
+  // kişi başına ayrı bir ping değeri anlamlı oluyor.
+  const [peerPings, setPeerPings] = useState({}) // { peerSocketId: ms }
+  useEffect(() => {
+    if (!inVoice) {
+      setPeerPings({})
+      return
+    }
+    const interval = setInterval(async () => {
+      const updates = {}
+      for (const [peerSocketId, entry] of peerConnectionsRef.current.entries()) {
+        const pc = entry.mainPc
+        if (!pc) continue
+        try {
+          const stats = await pc.getStats()
+          stats.forEach((report) => {
+            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+              if (typeof report.currentRoundTripTime === 'number') {
+                updates[peerSocketId] = Math.round(report.currentRoundTripTime * 1000)
+              }
+            }
+          })
+        } catch {
+          // Bağlantı henüz tam kurulmamış olabilir — bir sonraki turda tekrar dener.
+        }
+      }
+      setPeerPings((prev) => ({ ...prev, ...updates }))
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [inVoice])
 
   useEffect(() => {
     if (!window.electronAPI?.onScreenSources) return
@@ -666,6 +709,10 @@ function App() {
         const pc = createSubConnection(peerSocketId, 'screen')
         const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0]
         if (screenTrack) pc.addTrack(screenTrack, localScreenStreamRef.current)
+        // YENİ: paylaşım zaten sistem sesiyle devam ediyorsa, YENİ katılan
+        // bir kişiye kurulan bağlantıya da o sesi ekliyoruz.
+        const screenAudioTrack = localScreenStreamRef.current?.getAudioTracks()[0]
+        if (screenAudioTrack) pc.addTrack(screenAudioTrack, localScreenStreamRef.current)
         entry.screenPc = pc
       }
       return entry.screenPc
@@ -753,6 +800,7 @@ function App() {
     setEnlargedTile(null)
     setInVoice(false)
     setVolumePopup(null)
+    setIsDeafened(false)
     // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
     // girişte sıfırdan, temiz kurulacaklar).
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
@@ -791,7 +839,7 @@ function App() {
 
   // YENİ: Kanala (METİN) katılma — ses bağlantısı burada HİÇ kurulmuyor.
   const joinChannel = useCallback(
-    (channelName, channelSecret) => {
+    (channelName) => {
       cleanupSocket()
       stopLocalMedia()
       cleanupPeerConnections()
@@ -821,7 +869,6 @@ function App() {
         socket.emit('join-channel', {
           roomId: channelName,
           token: sessionTokenRef.current,
-          secret: channelSecret,
         })
       })
 
@@ -1046,8 +1093,42 @@ function App() {
   )
 
   const toggleMic = useCallback(() => {
+    // YENİ: sağırken mikrofonu AÇMAYA çalışırsan, "duymuyorum ama
+    // konuşabiliyorum" gibi tuhaf bir duruma düşmeyelim diye sağırlığı
+    // da otomatik kaldırıyoruz (Discord'daki davranışın aynısı).
+    if (isDeafened && !isMicOn) {
+      setIsDeafened(false)
+      gainNodesRef.current.forEach((gainNode, peerSocketId) => {
+        const username = peers.find((p) => p.socketId === peerSocketId)?.username
+        const volume = (username && peerVolumes[username]) ?? 100
+        gainNode.gain.value = volume / 100
+      })
+    }
     setMicActive(!isMicOn)
-  }, [isMicOn, setMicActive])
+  }, [isMicOn, setMicActive, isDeafened, peers, peerVolumes])
+
+  // YENİ: Sağırlaştır/aç — herkesin sesini aynı anda kapatıp açıyor.
+  // Açarken, kişilerin ayarladığın 0-200 ses seviyesi tercihine (bkz.
+  // peerVolumes) geri dönüyor, hepsini %100'e sıfırlamıyor.
+  const toggleDeafen = useCallback(() => {
+    setIsDeafened((prev) => {
+      const next = !prev
+      if (next) {
+        gainNodesRef.current.forEach((gainNode) => {
+          gainNode.gain.value = 0
+        })
+        // Duymuyorsan konuşmana da gerek yok — mikrofonu da kapat.
+        if (isMicOn) setMicActive(false)
+      } else {
+        gainNodesRef.current.forEach((gainNode, peerSocketId) => {
+          const username = peers.find((p) => p.socketId === peerSocketId)?.username
+          const volume = (username && peerVolumes[username]) ?? 100
+          gainNode.gain.value = volume / 100
+        })
+      }
+      return next
+    })
+  }, [isMicOn, setMicActive, peers, peerVolumes])
 
   // YENİ: Bas-konuş ayarlama — butona basınca bir sonraki tuşu bekliyoruz.
   const handleTogglePtt = () => {
@@ -1143,12 +1224,24 @@ function App() {
 
   const startScreenShare = useCallback(async () => {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+      // YENİ: video:true'nun yanına audio:true eklemek, Electron'a "sistem
+      // sesini de yakala" sinyali veriyor (asıl izin main.cjs'teki
+      // 'loopback' ayarından geliyor).
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+      })
       const screenTrack = screenStream.getVideoTracks()[0]
       screenTrack.onended = () => stopScreenShare()
       setLocalScreenStream(screenStream)
       setIsScreenSharing(true)
       addTrackToScreenConnections(screenTrack, screenStream)
+      // Sistem sesi yakalanabildiyse (her zaman garanti değil, kaynağa
+      // göre değişebilir), onu da ayrıca gönderiyoruz.
+      const screenAudioTrack = screenStream.getAudioTracks()[0]
+      if (screenAudioTrack) {
+        addTrackToScreenConnections(screenAudioTrack, screenStream)
+      }
       socketRef.current?.emit('state-update', { sharingScreen: true })
       playScreenShareSound()
     } catch (err) {
@@ -1181,7 +1274,6 @@ function App() {
             setIceServers(response.iceServers)
           }
           setChannels(Array.isArray(response.channels) ? response.channels : [])
-          setMemberChannels(Array.isArray(response.memberChannels) ? response.memberChannels : [])
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -1193,21 +1285,6 @@ function App() {
       setLoginError('Sunucuya bağlanılamadı.')
       tempSocket.disconnect()
     })
-  }
-
-  const handleChannelPasswordSubmit = (e) => {
-    e.preventDefault()
-    if (pendingChannel) {
-      joinChannel(pendingChannel, channelPasswordInput)
-      // İyimser güncelleme: doğru şifreyse (asıl kontrol sunucuda,
-      // burası sadece kilit ikonunu güncelliyor) bir daha sormasın.
-      setMemberChannels((prev) =>
-        prev.includes(pendingChannel) ? prev : [...prev, pendingChannel]
-      )
-    }
-    setPendingChannel(null)
-    setShowChannelPassword(false)
-    setChannelPasswordInput('')
   }
 
   const handleSendMessage = (e) => {
@@ -1474,7 +1551,6 @@ function App() {
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
           {channels.map((channel) => {
-            const isMember = memberChannels.includes(channel)
             const hasUnread = unreadChannels.includes(channel)
             return (
               <button
@@ -1482,17 +1558,9 @@ function App() {
                 className={
                   'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
                 }
-                onClick={() => {
-                  if (isMember) {
-                    // YENİ: zaten üyeysen şifre sorulmadan direkt gir.
-                    joinChannel(channel, null)
-                  } else {
-                    setPendingChannel(channel)
-                    setChannelPasswordInput('')
-                  }
-                }}
+                onClick={() => joinChannel(channel)}
               >
-                # {channel} {!isMember && <span className="channel-lock">🔒</span>}
+                # {channel}
                 {hasUnread && <span className="channel-unread-dot" />}
               </button>
             )
@@ -1578,6 +1646,13 @@ function App() {
                         {isMicOn ? '🎤' : '🔇'}
                       </button>
                       <button
+                        className={'control-button' + (isDeafened ? ' control-button--off' : '')}
+                        onClick={toggleDeafen}
+                        title={isDeafened ? 'Sağırlığı kaldır' : 'Sağırlaştır (herkesi sustur)'}
+                      >
+                        {isDeafened ? '🔇' : '🎧'}
+                      </button>
+                      <button
                         className={'control-button' + (isCameraOn ? '' : ' control-button--off')}
                         onClick={toggleCamera}
                         title={isCameraOn ? 'Kamerayı kapat' : 'Kamerayı aç'}
@@ -1646,6 +1721,7 @@ function App() {
                             isEnlarged={enlargedTile === `${socketId}-camera`}
                             onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
                             onOpenVolumeMenu={(e) => label && openVolumePopup(label, e)}
+                            ping={peerPings[socketId]}
                           />
                         )}
                         {peer?.sharingScreen && streams.screenStream && (
@@ -1889,48 +1965,6 @@ function App() {
           </div>
         )}
       </main>
-
-      {pendingChannel && (
-        <div className="screen-picker-overlay">
-          <div className="screen-picker-modal channel-password-modal">
-            <h2># {pendingChannel} şifresi</h2>
-            <form onSubmit={handleChannelPasswordSubmit}>
-              <div className="password-field-wrapper">
-                <input
-                  type={showChannelPassword ? 'text' : 'password'}
-                  value={channelPasswordInput}
-                  onChange={(e) => setChannelPasswordInput(e.target.value)}
-                  placeholder="Kanal şifresi"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  className="password-toggle-button"
-                  onClick={() => setShowChannelPassword((prev) => !prev)}
-                  tabIndex={-1}
-                  title={showChannelPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
-                >
-                  <EyeIcon visible={showChannelPassword} />
-                </button>
-              </div>
-              <div className="channel-password-actions">
-                <button type="submit">Katıl</button>
-                <button
-                  type="button"
-                  className="screen-picker-cancel"
-                  onClick={() => {
-                    setPendingChannel(null)
-    setShowChannelPassword(false)
-                    setChannelPasswordInput('')
-                  }}
-                >
-                  İptal
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {screenSourceOptions && (
         <div className="screen-picker-overlay">

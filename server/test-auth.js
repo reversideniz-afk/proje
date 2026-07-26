@@ -46,39 +46,52 @@ async function testBcrypt() {
   check(wrongMatch === false, "bcrypt.compare: yanlış şifre eşleşmiyor");
 }
 
-async function testChannelSecrets() {
+// ============================================================
+// YENİ: Rol tabanlı kanal erişimi testi
+// ------------------------------------------------------------
+// NOT: Rol kontrolü artık MongoDB'den kullanıcının rollerini okuyor
+// (TEST_BYPASS token'ları bile bu kısmı atlamıyor) — sandbox'ımda
+// gerçek DB olmadığı için "doğru role sahip olunca girebilme" kısmını
+// tam test edemiyorum (bunu sen, gerçek bir role sahip bir hesapla
+// canlıda doğrulayacaksın). Ama şunu KESİN olarak doğrulayabiliyorum:
+// DB'den rol bilgisi ALINAMADIĞINDA (ya da kişinin uygun rolü
+// yokken), kısıtlı bir kanala giriş GÜVENLİ TARAFTA HATA VERİYOR
+// (izin vermiyor) — "belirsizlikte erişimi aç" değil, "belirsizlikte
+// erişimi kapat" davranışı, ki güvenlik açısından doğru olan budur.
+// ============================================================
+async function testRoleBasedAccess() {
   const client = io(SERVER_URL, { reconnection: false });
   await new Promise((resolve, reject) => {
     client.on("connect", resolve);
     client.on("connect_error", reject);
   });
 
-  // Yanlış kanal şifresi
-  const joinErrorPromise = new Promise((resolve) => client.on("join-error", resolve));
-  client.emit("join-channel", { roomId: "Genel", token: "TEST_BYPASS:Test", secret: "yanlis" });
-  const joinError = await Promise.race([
-    joinErrorPromise,
+  // Kısıtlaması OLMAYAN bir kanal (Genel) — herkese açık olmalı.
+  const openMembersPromise = new Promise((resolve) => client.on("channel-members", resolve));
+  client.emit("join-channel", { roomId: "Genel", token: "TEST_BYPASS:RolTest1" });
+  const openResult = await Promise.race([
+    openMembersPromise,
     new Promise((r) => setTimeout(() => r(null), 2000)),
   ]);
-  check(joinError !== null, "Yanlış KANAL şifresiyle giriş reddediliyor");
+  check(openResult !== null, "Rol kısıtlaması OLMAYAN bir kanala herkes girebiliyor");
 
-  // Doğru kanal şifresi
+  // Rol kısıtlaması OLAN bir kanal — bu kullanıcının (DB'de kaydı/rolü
+  // olmadığı için) erişimi reddedilmeli.
   const client2 = io(SERVER_URL, { reconnection: false });
   await new Promise((resolve, reject) => {
     client2.on("connect", resolve);
     client2.on("connect_error", reject);
   });
-  const membersPromise = new Promise((resolve) => client2.on("channel-members", resolve));
-  client2.emit("join-channel", {
-    roomId: "Genel",
-    token: "TEST_BYPASS:Test2",
-    secret: process.env.CHANNEL_1_SECRET,
-  });
-  const members = await Promise.race([
-    membersPromise,
+  const joinErrorPromise = new Promise((resolve) => client2.on("join-error", resolve));
+  client2.emit("join-channel", { roomId: "test-restricted", token: "TEST_BYPASS:RolTest2" });
+  const joinError = await Promise.race([
+    joinErrorPromise,
     new Promise((r) => setTimeout(() => r(null), 2000)),
   ]);
-  check(members !== null, "Doğru KANAL şifresiyle giriş kabul ediliyor");
+  check(
+    joinError !== null,
+    "Rol kısıtlaması OLAN bir kanala, uygun rolü olmayan biri GİREMİYOR (güvenli taraf)"
+  );
 
   client.disconnect();
   client2.disconnect();
@@ -108,7 +121,7 @@ async function testLoginWithoutDatabase() {
 
 async function run() {
   await testBcrypt();
-  await testChannelSecrets();
+  await testRoleBasedAccess();
   await testLoginWithoutDatabase();
 
   console.log(`\n${passed} geçti, ${failed} kaldı.`);

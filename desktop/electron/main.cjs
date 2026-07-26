@@ -125,7 +125,10 @@ app.whenReady().then(() => {
         ipcMain.once("screen-source-selected", (event, sourceId) => {
           const chosen = sources.find((s) => s.id === sourceId);
           if (chosen) {
-            callback({ video: chosen });
+            // YENİ: "loopback" — seçilen ekranın/pencerenin görüntüsüyle
+            // BİRLİKTE, bilgisayarın sistem sesini de (video oynatıyorsan
+            // onun sesi, oyun sesi vb.) yakalıyoruz.
+            callback({ video: chosen, audio: "loopback" });
           } else {
             // sourceId null ise (kullanıcı "İptal" dedi) ya da eşleşme
             // yoksa, paylaşımı reddediyoruz.

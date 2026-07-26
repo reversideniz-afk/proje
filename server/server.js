@@ -45,31 +45,45 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
-// YENİ: Kanallar artık koda YAZILMIYOR — Render'ın Environment
-// panelinden CHANNEL_1_NAME / CHANNEL_1_SECRET, CHANNEL_2_NAME /
-// CHANNEL_2_SECRET ... şeklinde tanımlanıyor. İsim değiştirmek, kanal
-// eklemek/çıkarmak artık SADECE bir ortam değişkeni işi — kod
-// değişikliği ya da yeniden paketleme gerekmiyor.
+// YENİ: Kanallar artık ŞİFRE ile değil, ROL (etiket) ile korunuyor —
+// Discord'daki rol mantığı gibi. Render'ın Environment panelinden
+// CHANNEL_1_NAME / CHANNEL_1_ROLES (virgülle ayrılmış, ör.
+// "Yönetici,Arkadaş") şeklinde tanımlanıyor. Bir kanalın CHANNEL_N_ROLES
+// alanı BOŞSA, o kanal HERKESE açık demektir (bilerek — bir kanalı
+// yanlışlıkla erişilemez bırakmamak için).
 function loadChannelsConfig() {
   const channels = [];
   for (let i = 1; i <= 20; i++) {
     const name = process.env[`CHANNEL_${i}_NAME`];
     if (!name) continue;
-    channels.push({ name, secret: process.env[`CHANNEL_${i}_SECRET`] || null });
+    const rolesRaw = process.env[`CHANNEL_${i}_ROLES`] || "";
+    const allowedRoles = rolesRaw
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+    channels.push({ name, allowedRoles });
   }
   return channels;
 }
 const CHANNELS_CONFIG = loadChannelsConfig();
 if (CHANNELS_CONFIG.length === 0) {
   console.warn(
-    "UYARI: Hiç kanal tanımlanmamış! Render'da CHANNEL_1_NAME, CHANNEL_1_SECRET vb. ekle."
+    "UYARI: Hiç kanal tanımlanmamış! Render'da CHANNEL_1_NAME, CHANNEL_1_ROLES vb. ekle."
   );
 }
 CHANNELS_CONFIG.forEach((c) => {
-  if (!c.secret) {
-    console.warn(`UYARI: "${c.name}" kanalı için şifre ayarlanmamış — şifresiz girilebilir!`);
+  if (c.allowedRoles.length === 0) {
+    console.warn(`UYARI: "${c.name}" kanalı için rol kısıtlaması yok — HERKESE açık!`);
   }
 });
+
+// Bir kullanıcının rollerinden en az biri, kanalın izinli rolleri
+// arasında mı diye bakan ortak yardımcı fonksiyon.
+function userCanAccessChannel(userRoles, channelConfig) {
+  if (!channelConfig) return false;
+  if (channelConfig.allowedRoles.length === 0) return true; // kısıtlama yok = herkese açık
+  return channelConfig.allowedRoles.some((role) => userRoles.includes(role));
+}
 
 // Veritabanına bağlan (kişisel hesaplar için).
 connectDB();
@@ -185,23 +199,20 @@ io.on("connection", (socket) => {
       const token = crypto.randomUUID();
       sessionTokens.set(token, user.username);
 
-      // YENİ: bu kullanıcının daha önce üye olduğu kanalları da
-      // gönderiyoruz — istemci bu kanallar için şifre sormayacak.
-      let memberChannels = [];
-      try {
-        const memberships = await ChannelMember.find({ username: user.username }).lean();
-        memberChannels = memberships.map((m) => m.channel);
-      } catch (err) {
-        console.error("Üyelikler alınırken hata:", err.message);
-      }
+      // YENİ: Artık "üye olunan kanallar" değil, "ROLÜNE göre erişimi
+      // olan kanallar" gönderiyoruz — istemci sadece bunları gösterecek,
+      // şifre sorma diye bir şey yok artık.
+      const userRoles = user.roles || [];
+      const accessibleChannels = CHANNELS_CONFIG.filter((c) =>
+        userCanAccessChannel(userRoles, c)
+      ).map((c) => c.name);
 
       callback({
         success: true,
         username: user.username,
         token,
         iceServers: buildIceServers(),
-        channels: CHANNELS_CONFIG.map((c) => c.name),
-        memberChannels,
+        channels: accessibleChannels,
       });
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
@@ -210,7 +221,7 @@ io.on("connection", (socket) => {
   });
 
   // ---- YENİ: Metin kanalına katılma (SES BAĞLANTISI KURMAZ) ----
-  socket.on("join-channel", async ({ roomId, token, secret }) => {
+  socket.on("join-channel", async ({ roomId, token }) => {
     const username = resolveUsername(token);
     if (typeof roomId !== "string" || !roomId || !username) {
       socket.emit("join-error", "Önce giriş yapman gerekiyor.");
@@ -222,19 +233,17 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // YENİ: Bu kişi bu kanalın DAHA ÖNCE zaten üyesi olmuşsa (bir kere
-    // doğru şifreyle girmişse), şifreyi tekrar sormuyoruz — sadece HİÇ
-    // üye olmadığı bir kanala girerken şifre isteniyor.
-    let isExistingMember = false;
+    // YENİ: Şifre yerine ROL kontrolü — kullanıcının rollerinden en az
+    // biri, kanalın izinli rolleri arasında olmalı.
+    let userRoles = [];
     try {
-      const existingMembership = await ChannelMember.findOne({ channel: roomId, username });
-      isExistingMember = !!existingMembership;
+      const user = await User.findOne({ username }).lean();
+      userRoles = user?.roles || [];
     } catch (err) {
-      console.error("Üyelik kontrolü sırasında hata:", err.message);
+      console.error("Kullanıcı rolleri alınırken hata:", err.message);
     }
-
-    if (!isExistingMember && channelConfig.secret && secret !== channelConfig.secret) {
-      socket.emit("join-error", "Yanlış kanal şifresi.");
+    if (!userCanAccessChannel(userRoles, channelConfig)) {
+      socket.emit("join-error", "Bu kanala erişim yetkin yok.");
       return;
     }
 
@@ -243,7 +252,8 @@ io.on("connection", (socket) => {
     if (!textRooms[roomId]) textRooms[roomId] = {};
     textRooms[roomId][socket.id] = { username };
 
-    // Kalıcı üyelik kaydı (çevrimdışı listesinde görünebilmek için).
+    // Kalıcı üyelik kaydı — artık ERİŞİM için değil, sadece "çevrimdışı
+    // üyeler" listesinde görünebilmek için (kim bu kanalı hiç açmış).
     try {
       await ChannelMember.findOneAndUpdate(
         { channel: roomId, username },
@@ -254,17 +264,14 @@ io.on("connection", (socket) => {
       console.error("Kanal üyeliği kaydedilirken hata:", err.message);
     }
 
-    // YENİ: Bu kişiyi, ÜYE OLDUĞU TÜM kanalların "bildirim" odalarına
-    // da katıyoruz — böylece o an başka bir kanaldayken bile, üye
-    // olduğu diğer kanallarda yeni mesaj gelirse haberdar olabiliyor
-    // (okunmamış işareti için). Kilitli/üye olmadığı kanallar için bu
-    // hiç çalışmıyor — bilerek, sadece üyelere özel.
-    try {
-      const allMemberships = await ChannelMember.find({ username }).lean();
-      allMemberships.forEach((m) => socket.join(`member-notify:${m.channel}`));
-    } catch (err) {
-      console.error("Bildirim odalarına katılırken hata:", err.message);
-    }
+    // YENİ: Bu kişiyi, ROLÜNE GÖRE ERİŞİMİ OLAN TÜM kanalların "bildirim"
+    // odalarına katıyoruz — böylece o an başka bir kanaldayken bile,
+    // erişimi olan diğer kanallarda yeni mesaj gelirse haberdar olabiliyor.
+    CHANNELS_CONFIG.forEach((c) => {
+      if (userCanAccessChannel(userRoles, c)) {
+        socket.join(`member-notify:${c.name}`);
+      }
+    });
 
     // Diğer metin-kanalı üyelerine bildir.
     socket.to(textRoomName(roomId)).emit("member-online", { username });

@@ -559,49 +559,6 @@
   background: var(--bg-panel-hover);
 }
 
-.channel-password-modal {
-  max-width: 320px;
-}
-
-.channel-password-modal form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.channel-password-modal input {
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-input);
-  color: var(--text-primary);
-}
-
-.channel-password-modal input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.channel-password-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.channel-password-actions button[type='submit'] {
-  flex: 1;
-  padding: 8px 14px;
-  border-radius: 6px;
-  border: none;
-  background: var(--accent);
-  color: #1c1a19;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.channel-password-actions button[type='submit']:hover {
-  background: var(--accent-hover);
-}
-
 /* ------------------------------------------------------------
    Bağlantı durumu göstergesi
 ------------------------------------------------------------ */
@@ -870,12 +827,6 @@
   user-select: none;
 }
 
-.channel-lock {
-  font-size: 10px;
-  opacity: 0.6;
-  margin-left: 2px;
-}
-
 .chat-message--photo {
   display: flex;
   flex-direction: column;
@@ -1093,4 +1044,23 @@
   width: 32px;
   height: 32px;
   flex-shrink: 0;
+}
+
+.ping-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #9ee6a8;
+}
+
+.ping-badge.ping-ok {
+  color: #f2c46d;
+}
+
+.ping-badge.ping-bad {
+  color: #e8776f;
 }

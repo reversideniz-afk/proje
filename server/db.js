@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema({
   // yönlü şifrelenmiş hali) saklanıyor. Veritabanına biri sızsa bile
   // eline gerçek şifreler geçmez.
   passwordHash: { type: String, required: true },
+  // YENİ: Discord'daki rol mantığı gibi — her kullanıcının bir ya da
+  // daha fazla etiketi (rolü) olabilir (ör. "Yönetici", "Arkadaş").
+  // Kanallar artık şifreyle değil, bu rollere göre erişime açılıyor.
+  roles: { type: [String], default: [] },
 });
 
 // mongoose.models.User kontrolü: bu dosya birden fazla yerden
