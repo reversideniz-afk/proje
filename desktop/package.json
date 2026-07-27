@@ -25,7 +25,7 @@
       "output": "release"
     },
     "win": {
-      "target": "portable"
+      "target": "zip"
     }
   },
   "dependencies": {
