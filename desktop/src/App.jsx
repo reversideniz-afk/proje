@@ -361,6 +361,62 @@ function App() {
   const [localMainStream, setLocalMainStream] = useState(null)
   const [isMicOn, setIsMicOn] = useState(false)
 
+  // YENİ: Ses giriş/çıkış cihazı seçimi — hangi mikrofonu/hoparlörü
+  // kullanacağını seçebilesin diye. Seçim kalıcı (uygulamayı kapatıp
+  // açsan bile hatırlanır).
+  const [audioInputs, setAudioInputs] = useState([])
+  const [audioOutputs, setAudioOutputs] = useState([])
+  const [selectedAudioInput, setSelectedAudioInput] = useState(
+    () => window.localStorage?.getItem('audioInputId') || ''
+  )
+  const [selectedAudioOutput, setSelectedAudioOutput] = useState(
+    () => window.localStorage?.getItem('audioOutputId') || ''
+  )
+  const [showDeviceSettings, setShowDeviceSettings] = useState(false)
+  const [outputDeviceError, setOutputDeviceError] = useState(null)
+
+  const refreshAudioDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      setAudioInputs(devices.filter((d) => d.kind === 'audioinput'))
+      setAudioOutputs(devices.filter((d) => d.kind === 'audiooutput'))
+    } catch {
+      // Cihaz listesi alınamazsa sessizce geç — seçim kutusu boş kalır.
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshAudioDevices()
+    // Cihaz etiketleri (isimleri), mikrofon izni verilene kadar genelde
+    // BOŞ görünür (tarayıcı gizliliği) — izin verildikten sonra ve bir
+    // cihaz takılıp çıkarıldığında listeyi tazeliyoruz.
+    navigator.mediaDevices.addEventListener('devicechange', refreshAudioDevices)
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshAudioDevices)
+  }, [refreshAudioDevices])
+
+  useEffect(() => {
+    window.localStorage?.setItem('audioInputId', selectedAudioInput)
+  }, [selectedAudioInput])
+
+  useEffect(() => {
+    window.localStorage?.setItem('audioOutputId', selectedAudioOutput)
+  }, [selectedAudioOutput])
+
+  // Seçilen çıkış (hoparlör) cihazını, ses çaldığımız AudioContext'e
+  // uygula. setSinkId() henüz her ortamda desteklenmeyebilir — o
+  // durumda kullanıcıya nazikçe haber veriyoruz, uygulama çökmüyor.
+  useEffect(() => {
+    const ctx = audioContextRef.current
+    if (!ctx || !selectedAudioOutput) return
+    if (typeof ctx.setSinkId !== 'function') {
+      setOutputDeviceError('Bu cihazda çıkış seçimi desteklenmiyor gibi görünüyor.')
+      return
+    }
+    ctx.setSinkId(selectedAudioOutput).catch((err) => {
+      setOutputDeviceError(`Çıkış cihazı ayarlanamadı: ${err.message}`)
+    })
+  }, [selectedAudioOutput, isMicOn, inVoice])
+
   // YENİ: Bas-konuş (push-to-talk) — uygulama odaktayken çalışan versiyon.
   const [pttEnabled, setPttEnabled] = useState(false)
   const [pttKey, setPttKey] = useState(null) // event.code, ör. 'KeyV'
@@ -1084,7 +1140,9 @@ function App() {
         if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
         try {
           console.log('[mikrofon] getUserMedia çağrılıyor...')
-          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          const micStream = await navigator.mediaDevices.getUserMedia({
+            audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true,
+          })
           const newAudioTrack = micStream.getAudioTracks()[0]
           console.log(
             '[mikrofon] Track alındı — enabled:',
@@ -1116,23 +1174,37 @@ function App() {
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
     },
-    [localMainStream, addTrackToMainConnections]
+    [localMainStream, addTrackToMainConnections, selectedAudioInput]
   )
 
+  // YENİ: Herkesin sesini, kayıtlı tercihine (peerVolumes) göre geri
+  // getiren ortak fonksiyon — hem "sağırlığı kapat" hem de "PTT ile
+  // mikrofonu açarken sağırlığı otomatik temizle" bunu kullanıyor,
+  // ikisi de AYNI mantığı çalıştırsın diye (önceden PTT bu adımı hiç
+  // yapmıyordu — bu yüzden PTT kullanınca ses gelmemeye devam
+  // edebiliyordu, sağırlık sessizce takılı kalıyordu).
+  const restoreAllPeerVolumes = useCallback(() => {
+    gainNodesRef.current.forEach((gainNode, peerSocketId) => {
+      const username = peers.find((p) => p.socketId === peerSocketId)?.username
+      const volume = (username && peerVolumes[username]) ?? 100
+      gainNode.gain.value = volume / 100
+    })
+  }, [peers, peerVolumes])
+
+  const clearDeafenIfActive = useCallback(() => {
+    setIsDeafened((prev) => {
+      if (!prev) return prev
+      restoreAllPeerVolumes()
+      return false
+    })
+  }, [restoreAllPeerVolumes])
+
   const toggleMic = useCallback(() => {
-    // YENİ: sağırken mikrofonu AÇMAYA çalışırsan, "duymuyorum ama
-    // konuşabiliyorum" gibi tuhaf bir duruma düşmeyelim diye sağırlığı
-    // da otomatik kaldırıyoruz (Discord'daki davranışın aynısı).
-    if (isDeafened && !isMicOn) {
-      setIsDeafened(false)
-      gainNodesRef.current.forEach((gainNode, peerSocketId) => {
-        const username = peers.find((p) => p.socketId === peerSocketId)?.username
-        const volume = (username && peerVolumes[username]) ?? 100
-        gainNode.gain.value = volume / 100
-      })
-    }
+    // sağırken mikrofonu AÇMAYA çalışırsan, "duymuyorum ama konuşabiliyorum"
+    // gibi tuhaf bir duruma düşmeyelim diye sağırlığı da otomatik kaldırıyoruz.
+    if (!isMicOn) clearDeafenIfActive()
     setMicActive(!isMicOn)
-  }, [isMicOn, setMicActive, isDeafened, peers, peerVolumes])
+  }, [isMicOn, setMicActive, clearDeafenIfActive])
 
   // YENİ: Sağırlaştır/aç — herkesin sesini aynı anda kapatıp açıyor.
   // Açarken, kişilerin ayarladığın 0-200 ses seviyesi tercihine (bkz.
@@ -1147,15 +1219,11 @@ function App() {
         // Duymuyorsan konuşmana da gerek yok — mikrofonu da kapat.
         if (isMicOn) setMicActive(false)
       } else {
-        gainNodesRef.current.forEach((gainNode, peerSocketId) => {
-          const username = peers.find((p) => p.socketId === peerSocketId)?.username
-          const volume = (username && peerVolumes[username]) ?? 100
-          gainNode.gain.value = volume / 100
-        })
+        restoreAllPeerVolumes()
       }
       return next
     })
-  }, [isMicOn, setMicActive, peers, peerVolumes])
+  }, [isMicOn, setMicActive, restoreAllPeerVolumes])
 
   // YENİ: Bas-konuş ayarlama — butona basınca bir sonraki tuşu bekliyoruz.
   const handleTogglePtt = () => {
@@ -1194,6 +1262,7 @@ function App() {
     const handleKeydown = (e) => {
       if (isTypingTarget(e)) return
       if (e.code === pttKey && !e.repeat) {
+        clearDeafenIfActive()
         setMicActive(true)
       }
     }
@@ -1209,7 +1278,7 @@ function App() {
       window.removeEventListener('keydown', handleKeydown)
       window.removeEventListener('keyup', handleKeyup)
     }
-  }, [pttEnabled, pttKey, inVoice, setMicActive])
+  }, [pttEnabled, pttKey, inVoice, setMicActive, clearDeafenIfActive])
 
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
@@ -1709,9 +1778,57 @@ function App() {
                       >
                         🎯
                       </button>
+                      {/* YENİ: Ses giriş/çıkış cihazı seçimi. */}
+                      <button
+                        className="control-button"
+                        onClick={() => setShowDeviceSettings((prev) => !prev)}
+                        title="Ses cihazlarını seç"
+                      >
+                        ⚙️
+                      </button>
                     </div>
                     {isCapturingPttKey && (
                       <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
+                    )}
+                    {showDeviceSettings && (
+                      <div className="device-settings-panel">
+                        <label>
+                          🎤 Mikrofon
+                          <select
+                            value={selectedAudioInput}
+                            onChange={(e) => setSelectedAudioInput(e.target.value)}
+                          >
+                            <option value="">Varsayılan</option>
+                            {audioInputs.map((d) => (
+                              <option key={d.deviceId} value={d.deviceId}>
+                                {d.label || 'Mikrofon'}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          🔊 Hoparlör
+                          <select
+                            value={selectedAudioOutput}
+                            onChange={(e) => setSelectedAudioOutput(e.target.value)}
+                          >
+                            <option value="">Varsayılan</option>
+                            {audioOutputs.map((d) => (
+                              <option key={d.deviceId} value={d.deviceId}>
+                                {d.label || 'Hoparlör'}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {selectedAudioInput && (
+                          <p className="device-settings-hint">
+                            Mikrofon değişikliği bir sonraki mikrofon açışında uygulanır.
+                          </p>
+                        )}
+                        {outputDeviceError && (
+                          <p className="device-settings-error">{outputDeviceError}</p>
+                        )}
+                      </div>
                     )}
                   </div>
 
