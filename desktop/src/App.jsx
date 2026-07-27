@@ -556,6 +556,17 @@ function App() {
                 updates[peerSocketId] = Math.round(report.currentRoundTripTime * 1000)
               }
             }
+            // YENİ (teşhis): ses verisi GERÇEKTEN gidiyor/geliyor mu?
+            if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+              console.log(
+                `[ses teşhis] ${peerSocketId} GÖNDERİLEN ses: ${report.bytesSent} bayt, ${report.packetsSent} paket`
+              )
+            }
+            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+              console.log(
+                `[ses teşhis] ${peerSocketId} ALINAN ses: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
+              )
+            }
           })
         } catch {
           // Bağlantı henüz tam kurulmamış olabilir — bir sonraki turda tekrar dener.
@@ -1072,15 +1083,31 @@ function App() {
       if (!existingAudioTrack) {
         if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
         try {
+          console.log('[mikrofon] getUserMedia çağrılıyor...')
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
           const newAudioTrack = micStream.getAudioTracks()[0]
+          console.log(
+            '[mikrofon] Track alındı — enabled:',
+            newAudioTrack.enabled,
+            'readyState:',
+            newAudioTrack.readyState,
+            'muted:',
+            newAudioTrack.muted,
+            'label:',
+            newAudioTrack.label
+          )
           const otherTracks = localMainStream ? localMainStream.getTracks() : []
           const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
           setLocalMainStream(newLocalStream)
           setIsMicOn(true)
           addTrackToMainConnections(newAudioTrack, newLocalStream)
+          console.log(
+            '[mikrofon] Şu an açık bağlantı sayısı:',
+            peerConnectionsRef.current.size
+          )
           socketRef.current?.emit('state-update', { muted: false })
         } catch (err) {
+          console.error('[mikrofon] getUserMedia HATASI:', err.name, err.message)
           setMediaError(describeMediaError(err))
         }
         return

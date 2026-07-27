@@ -55,6 +55,17 @@ function createWindow() {
 
   mainWindow = win;
 
+  // DÜZELTME: Menu.setApplicationMenu(null) (aşağıda), menüye bağlı
+  // varsayılan Ctrl+Shift+I kısayolunu da beraberinde götürüyormuş —
+  // önceki yorumumuzda "hâlâ çalışıyor" demişiz ama yanılmışız. Bunu
+  // menüden TAMAMEN bağımsız, doğrudan bir tuş dinleyicisiyle
+  // düzeltiyoruz — artık menü gizli olsa bile kesin çalışır.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.control && input.shift && input.key.toLowerCase() === "i") {
+      win.webContents.toggleDevTools();
+    }
+  });
+
   if (isDev) {
     // Geliştirme modunda: Vite'ın çalıştırdığı canlı geliştirme sunucusuna
     // bağlanıyoruz (kod her değiştiğinde pencere otomatik yenilenir).
@@ -73,8 +84,8 @@ function createWindow() {
 app.whenReady().then(() => {
   // YENİ: "File Edit View Window" gibi geliştirici görünümlü üst menü
   // çubuğunu tamamen kaldırıyoruz — gerçek bir uygulama gibi hissettirsin
-  // diye. Not: DevTools'u manuel açmak istersen (Ctrl+Shift+I) klavye
-  // kısayolu hâlâ çalışıyor, sadece görünen menü kayboldu.
+  // diye. DevTools'u manuel açmak (Ctrl+Shift+I) için gereken kısayol,
+  // yukarıda ayrıca (menüden bağımsız olarak) tanımlandı.
   Menu.setApplicationMenu(null);
 
   // YENİ: Electron'un "sor sormaz her şeyi onayla" varsayılanını
