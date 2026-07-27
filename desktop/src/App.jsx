@@ -708,6 +708,16 @@ function App() {
     (peerSocketId, connectionType) => {
       const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
 
+      // Perfect Negotiation: her iki uç da bu bağlantı için AYNI sonuca
+      // bağımsız olarak varmalı ki biri "polite" biri "impolite" olsun.
+      // Socket ID'leri string olarak karşılaştırıyoruz — karşı taraf aynı
+      // karşılaştırmayı ters sırada yaptığı için sonuç simetrik olarak
+      // farklı çıkıyor (biri true, diğeri false).
+      pc.polite = (socketRef.current?.id ?? '') < peerSocketId
+      pc.makingOffer = false
+      pc.ignoreOffer = false
+      pc.isSettingRemoteAnswerPending = false
+
       pc.ontrack = () => {
         syncReceiversToStream(pc, peerSocketId, connectionType)
       }
@@ -724,8 +734,8 @@ function App() {
       }
       pc.onnegotiationneeded = async () => {
         if (pc.makingOffer) return
-        pc.makingOffer = true
         try {
+          pc.makingOffer = true
           const offer = await pc.createOffer()
           await pc.setLocalDescription(offer)
           socketRef.current?.emit('signal', {
@@ -1077,6 +1087,25 @@ function App() {
 
         try {
           if (data.type === 'offer') {
+            // Perfect Negotiation: aynı anda iki taraf da teklif göndermiş
+            // olabilir (glare) — biz de kendi teklifimizi gönderiyorsak ya
+            // da zaten "stable" olmayan bir durumdaysak bu bir çakışmadır.
+            // "Kibar" (polite) taraf kendi teklifinden vazgeçip karşı
+            // tarafınkini kabul eder; "kaba" (impolite) taraf ise kendi
+            // teklifinde ısrar edip geleni yok sayar.
+            const offerCollision =
+              pc.makingOffer ||
+              (!pc.isSettingRemoteAnswerPending && pc.signalingState !== 'stable')
+            pc.ignoreOffer = !pc.polite && offerCollision
+            if (pc.ignoreOffer) {
+              console.warn(
+                `[signal] ${from}/${connectionType} - çakışan teklif yok sayıldı (impolite taraf)`
+              )
+              return
+            }
+            // Not: pc.polite true iken burada setRemoteDescription çağrılması,
+            // signalingState "have-local-offer" ise tarayıcı tarafından
+            // otomatik olarak rollback yapılmasını sağlar (spec gereği).
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
             const answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
@@ -1086,10 +1115,18 @@ function App() {
             })
             syncReceiversToStream(pc, from, connectionType)
           } else if (data.type === 'answer') {
+            pc.isSettingRemoteAnswerPending = true
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
+            pc.isSettingRemoteAnswerPending = false
             syncReceiversToStream(pc, from, connectionType)
           } else if (data.type === 'ice-candidate') {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+            } catch (err) {
+              // Kibar tarafın az önce yok saydığı bir teklife ait aday
+              // gelmiş olabilir — bu durumda hata beklenen bir şeydir.
+              if (!pc.ignoreOffer) throw err
+            }
           }
         } catch (err) {
           console.error(`[signal] ${from}/${connectionType} - hata (bağlantı sıfırlanıyor):`, err)
