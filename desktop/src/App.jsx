@@ -632,7 +632,12 @@ function App() {
     audioContextReadyRef.current.then(() => {
       if (cancelled) return
       Object.entries(remoteStreams).forEach(([peerSocketId, streams]) => {
-        const audioTrack = streams.mainStream?.getAudioTracks()[0]
+        // Ek güvence: birden fazla ses track'i varsa (ör. renegotiation'ın
+        // tam ortasında, syncReceiversToStream henüz temizlik yapmadan
+        // önceki bir an), her zaman CANLI (muted olmayan) olanı tercih et —
+        // [0] körü körüne eski/sessiz bir track'i seçebilirdi.
+        const audioTracks = streams.mainStream?.getAudioTracks() ?? []
+        const audioTrack = audioTracks.find((t) => !t.muted) ?? audioTracks[0]
         if (!audioTrack) return
         if (connectedAudioTracksRef.current.get(peerSocketId) === audioTrack) return
 
@@ -885,13 +890,33 @@ function App() {
     }
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
+  // DÜZELTME (BULUNAN ASIL SES BUGI): bu fonksiyon adının aksine daha
+  // önce SADECE ekliyordu, hiç ÇIKARMIYORDU. Bir alıcının (receiver)
+  // track'i renegotiation sırasında YENİ bir track nesnesiyle
+  // değiştiğinde (ör. biri mikrofonu ilk kez açtığında), ESKİ (hiçbir
+  // zaman canlı veri taşımamış, sonsuza dek sessiz) track hâlâ
+  // MediaStream'in İÇİNDE kalıyordu — ve İLK eklenen o olduğu için
+  // `getAudioTracks()[0]` HER ZAMAN o eski/sessiz track'i döndürüyordu,
+  // gerçek/canlı track ikinci sıraya düşüp hiç kullanılmıyordu. Bu da
+  // tam olarak gözlemlenen belirtiyi açıklıyor: WebRTC istatistiklerinde
+  // bytesReceived artıyor (ses paketleri GERÇEKTEN geliyor) ama Web Audio
+  // grafiğindeki analiz hep 0 gösteriyordu (yanlış/eski track'i dinliyorduk).
+  // Artık MediaStream'i pc.getReceivers()'ın GÜNCEL haliyle tam senkronize
+  // ediyoruz: artık orada olmayan track'leri çıkarıyoruz, yenilerini ekliyoruz.
   const syncReceiversToStream = useCallback((pc, peerSocketId, connectionType) => {
     const streamKey = connectionType === 'screen' ? 'screenStream' : 'mainStream'
     const receivers = pc.getReceivers()
+    const liveTracks = new Set(receivers.map((r) => r.track).filter(Boolean))
     setRemoteStreams((prev) => {
       const peerEntry = prev[peerSocketId] || {}
       const existing = peerEntry[streamKey] || new MediaStream()
       let changed = false
+      existing.getTracks().forEach((track) => {
+        if (!liveTracks.has(track)) {
+          existing.removeTrack(track)
+          changed = true
+        }
+      })
       receivers.forEach((receiver) => {
         if (receiver.track && !existing.getTracks().includes(receiver.track)) {
           existing.addTrack(receiver.track)
