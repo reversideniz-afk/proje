@@ -192,7 +192,11 @@ function RemoteCameraTile({
 }
 
 // Karşı tarafın EKRAN paylaşımı — kameradan ayrı, kendi kutucuğu.
-function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge }) {
+// NOT: bu kutucuğun sesi (varsa) mikrofon sesi gibi Web Audio üzerinden
+// DEĞİL, doğrudan bu <video> elemanı üzerinden çalıyor — bu yüzden
+// kullanıcının seçtiği çıkış cihazını (outputDeviceId) ayrıca burada da
+// setSinkId ile uygulamamız gerekiyor, yoksa hep sistem varsayılanına gider.
+function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge, outputDeviceId }) {
   const videoRef = useRef(null)
 
   useEffect(() => {
@@ -201,6 +205,15 @@ function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge }) {
       videoRef.current.srcObject = stream
     }
   }, [stream])
+
+  useEffect(() => {
+    if (!videoRef.current || !outputDeviceId) return
+    if (typeof videoRef.current.setSinkId !== 'function') return
+    videoRef.current.setSinkId(outputDeviceId).catch(() => {
+      // Sessizce geç — bu sadece "tercih edilen çıkışa" yönlendirme,
+      // başarısız olursa tarayıcı zaten varsayılan çıkışta kalır.
+    })
+  }, [outputDeviceId, stream])
 
   return (
     <div
@@ -374,6 +387,12 @@ function App() {
   )
   const [showDeviceSettings, setShowDeviceSettings] = useState(false)
   const [outputDeviceError, setOutputDeviceError] = useState(null)
+  // AudioContext bir REF içinde yaşıyor (bkz. audioContextRef, aşağıda) —
+  // yani oluşturulduğu an React bunu "state değişti" diye algılamıyor.
+  // Seçili çıkış cihazını context'in gerçek yaratılış anında da
+  // uygulayabilmek için (bkz. getAudioContext) güncel değeri bu ref'te
+  // tutuyoruz.
+  const selectedAudioOutputRef = useRef(selectedAudioOutput)
 
   const refreshAudioDevices = useCallback(async () => {
     try {
@@ -400,11 +419,22 @@ function App() {
 
   useEffect(() => {
     window.localStorage?.setItem('audioOutputId', selectedAudioOutput)
+    selectedAudioOutputRef.current = selectedAudioOutput
   }, [selectedAudioOutput])
 
   // Seçilen çıkış (hoparlör) cihazını, ses çaldığımız AudioContext'e
   // uygula. setSinkId() henüz her ortamda desteklenmeyebilir — o
   // durumda kullanıcıya nazikçe haber veriyoruz, uygulama çökmüyor.
+  // DÜZELTME: audioContextRef bir REF olduğu için, context'in gerçekte
+  // İLK oluşturulduğu an (bkz. getAudioContext — ilk uzak ses geldiğinde
+  // tembel/lazy olarak kuruluyor) bu efekt bunu FARK ETMİYORDU: kullanıcı
+  // çıkış cihazını uygulamaya girer girmez (henüz kimse konuşmadan önce)
+  // seçmiş olsun, context o an hâlâ null olduğu için setSinkId hiç
+  // çağrılmıyor ve context sonradan kurulduğunda bu efekt bir daha ASLA
+  // yeniden çalışmıyordu (dependency listesinde context'in kendisi yok) —
+  // seçim sessizce hiç uygulanmamış oluyordu. getAudioContext artık
+  // context'i kurar kurmaz seçili cihazı uyguluyor; bu efekt ise
+  // kullanıcı SOHBET SIRASINDA cihaz değiştirirse devreye giriyor.
   useEffect(() => {
     const ctx = audioContextRef.current
     if (!ctx || !selectedAudioOutput) return
@@ -495,6 +525,16 @@ function App() {
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      // Context YENİ kuruldu — kullanıcı daha önce (henüz kimse konuşmadan)
+      // bir çıkış cihazı seçmiş olabilir. O seçimi hemen burada uyguluyoruz,
+      // yoksa bir daha hiç uygulanma fırsatı olmuyordu (bkz. yukarıdaki
+      // "DÜZELTME" notu).
+      const sinkId = selectedAudioOutputRef.current
+      if (sinkId && typeof audioContextRef.current.setSinkId === 'function') {
+        audioContextRef.current.setSinkId(sinkId).catch((err) => {
+          setOutputDeviceError(`Çıkış cihazı ayarlanamadı: ${err.message}`)
+        })
+      }
     }
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume()
@@ -603,29 +643,57 @@ function App() {
       const updates = {}
       for (const [peerSocketId, entry] of peerConnectionsRef.current.entries()) {
         const pc = entry.mainPc
-        if (!pc) continue
-        try {
-          const stats = await pc.getStats()
-          stats.forEach((report) => {
-            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-              if (typeof report.currentRoundTripTime === 'number') {
-                updates[peerSocketId] = Math.round(report.currentRoundTripTime * 1000)
+        if (pc) {
+          try {
+            const stats = await pc.getStats()
+            stats.forEach((report) => {
+              if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                if (typeof report.currentRoundTripTime === 'number') {
+                  updates[peerSocketId] = Math.round(report.currentRoundTripTime * 1000)
+                }
               }
-            }
-            // YENİ (teşhis): ses verisi GERÇEKTEN gidiyor/geliyor mu?
-            if (report.type === 'outbound-rtp' && report.kind === 'audio') {
-              console.log(
-                `[ses teşhis] ${peerSocketId} GÖNDERİLEN ses: ${report.bytesSent} bayt, ${report.packetsSent} paket`
-              )
-            }
-            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-              console.log(
-                `[ses teşhis] ${peerSocketId} ALINAN ses: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
-              )
-            }
-          })
-        } catch {
-          // Bağlantı henüz tam kurulmamış olabilir — bir sonraki turda tekrar dener.
+              // YENİ (teşhis): ses verisi GERÇEKTEN gidiyor/geliyor mu?
+              if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+                console.log(
+                  `[ses teşhis] ${peerSocketId} GÖNDERİLEN ses: ${report.bytesSent} bayt, ${report.packetsSent} paket`
+                )
+              }
+              if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                console.log(
+                  `[ses teşhis] ${peerSocketId} ALINAN ses: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
+                )
+              }
+            })
+          } catch {
+            // Bağlantı henüz tam kurulmamış olabilir — bir sonraki turda tekrar dener.
+          }
+        }
+
+        // YENİ (teşhis): ekran paylaşımının sesi de AYRI bir bağlantı
+        // (screenPc) üzerinden gidiyor — mikrofon sesi akıyor olsa bile
+        // bu, hiç kontrol edilmiyordu. Ekran paylaşımının sesi gitmiyorsa
+        // bytesSent/bytesReceived'in 0'da takılı kalıp kalmadığına bak:
+        // 0'da kalıyorsa sorun YAKALAMA'da (sistem sesi hiç alınamıyor),
+        // artıyorsa sorun ÇALMA tarafında.
+        const screenPc = entry.screenPc
+        if (screenPc) {
+          try {
+            const screenStats = await screenPc.getStats()
+            screenStats.forEach((report) => {
+              if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+                console.log(
+                  `[ekran ses teşhis] ${peerSocketId} GÖNDERİLEN ekran sesi: ${report.bytesSent} bayt, ${report.packetsSent} paket`
+                )
+              }
+              if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                console.log(
+                  `[ekran ses teşhis] ${peerSocketId} ALINAN ekran sesi: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
+                )
+              }
+            })
+          } catch {
+            // screenPc henüz kurulma aşamasında olabilir.
+          }
         }
       }
       setPeerPings((prev) => ({ ...prev, ...updates }))
@@ -1372,6 +1440,16 @@ function App() {
       // Sistem sesi yakalanabildiyse (her zaman garanti değil, kaynağa
       // göre değişebilir), onu da ayrıca gönderiyoruz.
       const screenAudioTrack = screenStream.getAudioTracks()[0]
+      // YENİ (teşhis): sistem sesi hiç YAKALANAMADIYSA (Windows'ta loopback
+      // her zaman garanti değil), bunu en baştan burada görmemiz lazım —
+      // yoksa "ses gitmiyor" şikayeti gelince nereden başlayacağımızı
+      // bilemiyoruz (yakalama mı, iletim mi, çalma mı?).
+      console.log(
+        '[ekran sesi] sistem sesi track’i:',
+        screenAudioTrack
+          ? `VAR — enabled:${screenAudioTrack.enabled}, readyState:${screenAudioTrack.readyState}, muted:${screenAudioTrack.muted}, label:${screenAudioTrack.label}`
+          : 'YOK (bu ekran/pencere kaynağından sistem sesi yakalanamadı)'
+      )
       if (screenAudioTrack) {
         addTrackToScreenConnections(screenAudioTrack, screenStream)
       }
@@ -1911,6 +1989,7 @@ function App() {
                             label={label}
                             isEnlarged={enlargedTile === `${socketId}-screen`}
                             onToggleEnlarge={() => toggleEnlarge(`${socketId}-screen`)}
+                            outputDeviceId={selectedAudioOutput}
                           />
                         )}
                       </div>
