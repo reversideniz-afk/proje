@@ -413,6 +413,29 @@ function App() {
     return () => navigator.mediaDevices.removeEventListener('devicechange', refreshAudioDevices)
   }, [refreshAudioDevices])
 
+  // DÜZELTME: localStorage'da eskiden kaydedilmiş bir çıkış cihazı ID'si,
+  // artık bu makinede GERÇEKTEN var olan cihazlardan biri olmayabilir
+  // (sürücü güncellemesi, sanal ses cihazı yeniden kurulumu — ör.
+  // SteelSeries Sonar gibi sanal ses araçları ID'leri değiştirebiliyor).
+  // Böyle "hayalet" bir ID'ye setSinkId çağırmak ya sessizce başarısız
+  // olur ya da var olmayan bir cihaza "başarılı" şekilde bağlanıp sesi
+  // hiçbir yere çalmaz. Liste geldiğinde seçili ID artık listede yoksa,
+  // otomatik olarak varsayılana dönüyoruz.
+  useEffect(() => {
+    if (!selectedAudioOutput || audioOutputs.length === 0) return
+    const stillExists = audioOutputs.some((d) => d.deviceId === selectedAudioOutput)
+    if (!stillExists) {
+      console.warn(
+        '[ses çıkışı] Kayıtlı çıkış cihazı artık bu bilgisayarda yok, varsayılana dönülüyor:',
+        selectedAudioOutput
+      )
+      setSelectedAudioOutput('')
+      setOutputDeviceError(
+        'Daha önce seçtiğin çıkış cihazı artık bulunamadı, varsayılan cihaza dönüldü.'
+      )
+    }
+  }, [audioOutputs, selectedAudioOutput])
+
   useEffect(() => {
     window.localStorage?.setItem('audioInputId', selectedAudioInput)
   }, [selectedAudioInput])
@@ -519,28 +542,78 @@ function App() {
   }, [volumePopup])
 
   const audioContextRef = useRef(null)
+  // DÜZELTME: setSinkId()/resume() birer PROMISE — context'i kurar kurmaz
+  // grafiğe (source->gain->destination) düğüm bağlamaya başlarsak, bu
+  // async işlemler henüz TAMAMLANMADAN düğümler bağlanmış olabiliyordu.
+  // Bazı Chromium sürümlerinde çıkış cihazı geçişi ("sink") devam ederken
+  // yapılan bağlantılar SESSİZCE hiç ses üretmiyor (yeni sink'e taşınmıyor)
+  // — oysa geçiş bittikten SONRA yapılan bir bağlantı (ör. test tonu, daha
+  // sonra tıklanıyor) sorunsuz çalışıyor. Artık grafiğe düğüm bağlamadan
+  // önce BU promise'i bekliyoruz.
+  const audioContextReadyRef = useRef(Promise.resolve())
   const gainNodesRef = useRef(new Map()) // peerSocketId -> GainNode
+  const analysersRef = useRef(new Map()) // peerSocketId -> AnalyserNode (teşhis)
   const connectedAudioTracksRef = useRef(new Map()) // peerSocketId -> hangi track'e bağlandık
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      audioContextRef.current = ctx
       // Context YENİ kuruldu — kullanıcı daha önce (henüz kimse konuşmadan)
       // bir çıkış cihazı seçmiş olabilir. O seçimi hemen burada uyguluyoruz,
       // yoksa bir daha hiç uygulanma fırsatı olmuyordu (bkz. yukarıdaki
-      // "DÜZELTME" notu).
+      // "DÜZELTME" notu) — ama bunu TAMAMLANMASINI beklememiz gerekiyor,
+      // o yüzden bir promise'e sarıp saklıyoruz.
       const sinkId = selectedAudioOutputRef.current
-      if (sinkId && typeof audioContextRef.current.setSinkId === 'function') {
-        audioContextRef.current.setSinkId(sinkId).catch((err) => {
-          setOutputDeviceError(`Çıkış cihazı ayarlanamadı: ${err.message}`)
-        })
-      }
-    }
-    if (audioContextRef.current.state === 'suspended') {
+      audioContextReadyRef.current = (async () => {
+        if (sinkId && typeof ctx.setSinkId === 'function') {
+          try {
+            await ctx.setSinkId(sinkId)
+          } catch (err) {
+            setOutputDeviceError(`Çıkış cihazı ayarlanamadı: ${err.message}`)
+          }
+        }
+        if (ctx.state === 'suspended') {
+          try {
+            await ctx.resume()
+          } catch {
+            /* kullanıcı etkileşimi olmadan resume reddedilmiş olabilir, bir sonraki denemede düzelir */
+          }
+        }
+      })()
+    } else if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume()
     }
     return audioContextRef.current
   }, [])
+
+  // YENİ (teşhis + kullanıcı için): sesli sohbette kullanılan TAM OLARAK
+  // AYNI AudioContext/çıkış cihazı üzerinden bir test tonu çalıyor. Bunu
+  // duyabiliyorsan sorun bu uygulamanın ses çıkışı YÖNLENDİRMESİNDE değil
+  // demektir (karşı taraftan gelen sesin neden çalınmadığına bakmamız
+  // gerekir); duyamıyorsan sorun kesinlikle çıkış cihazı seçiminde/işletim
+  // sistemi tarafında demektir — hangi cihaza (id + etiket) ve hangi
+  // AudioContext durumuna (running/suspended) çaldığımızı konsola basıyoruz.
+  const playTestTone = useCallback(() => {
+    const ctx = getAudioContext()
+    console.log(
+      '[ses testi] AudioContext durumu:',
+      ctx.state,
+      '— hedeflenen çıkış cihazı:',
+      selectedAudioOutputRef.current || '(varsayılan)',
+      '— tarayıcının bildirdiği aktif sinkId:',
+      ctx.sinkId ?? '(bu tarayıcı sinkId bildirmiyor)'
+    )
+    const oscillator = ctx.createOscillator()
+    const gain = ctx.createGain()
+    oscillator.frequency.value = 440
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.05)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6)
+    oscillator.connect(gain).connect(ctx.destination)
+    oscillator.start()
+    oscillator.stop(ctx.currentTime + 0.6)
+  }, [getAudioContext])
 
   // YENİ: Sağırlaştır — Discord'daki gibi, herkesin sesini tek tuşla
   // kapatıp, tekrar bastığında herkesi KENDİ ayarladığın ses seviyesine
@@ -550,40 +623,69 @@ function App() {
   // Her uzak ses akışı için (ya da akış değiştiğinde) bir kazanç (gain)
   // düğümü kuruyoruz — bu, kişi bazlı ses seviyesinin gerçek mekanizması.
   useEffect(() => {
-    Object.entries(remoteStreams).forEach(([peerSocketId, streams]) => {
-      const audioTrack = streams.mainStream?.getAudioTracks()[0]
-      if (!audioTrack) return
-      if (connectedAudioTracksRef.current.get(peerSocketId) === audioTrack) return
+    let cancelled = false
+    const ctx = getAudioContext()
 
-      try {
-        const ctx = getAudioContext()
-        const singleTrackStream = new MediaStream([audioTrack])
-        const source = ctx.createMediaStreamSource(singleTrackStream)
-        const gainNode = ctx.createGain()
-        // YENİ: ses seviyesini artık kullanıcı adından buluyoruz.
-        const username = peers.find((p) => p.socketId === peerSocketId)?.username
-        const currentVolume = (username && peerVolumes[username]) ?? 100
-        // Sağırlaştırılmış durumdayken YENİ birine bağlanırsak (ör. az
-        // önce sese giren biri), onun sesi de baştan susturulmalı.
-        gainNode.gain.value = isDeafened ? 0 : currentVolume / 100
-        source.connect(gainNode).connect(ctx.destination)
+    // DÜZELTME: context'in kurulması (özellikle setSinkId/resume) ASYNC —
+    // grafiğe düğüm bağlamadan önce bunun bitmesini bekliyoruz (bkz.
+    // getAudioContext üzerindeki not).
+    audioContextReadyRef.current.then(() => {
+      if (cancelled) return
+      Object.entries(remoteStreams).forEach(([peerSocketId, streams]) => {
+        const audioTrack = streams.mainStream?.getAudioTracks()[0]
+        if (!audioTrack) return
+        if (connectedAudioTracksRef.current.get(peerSocketId) === audioTrack) return
 
-        // Eskiden bu kişi için bağlı bir düğüm varsa (ör. track değişti),
-        // eskisini temizleyelim ki sesler üst üste binmesin.
-        const oldGainNode = gainNodesRef.current.get(peerSocketId)
-        if (oldGainNode) {
-          try {
-            oldGainNode.disconnect()
-          } catch {
-            /* zaten kopmuş olabilir, sorun değil */
+        try {
+          const singleTrackStream = new MediaStream([audioTrack])
+          const source = ctx.createMediaStreamSource(singleTrackStream)
+          const gainNode = ctx.createGain()
+          // YENİ: ses seviyesini artık kullanıcı adından buluyoruz.
+          const username = peers.find((p) => p.socketId === peerSocketId)?.username
+          const currentVolume = (username && peerVolumes[username]) ?? 100
+          // Sağırlaştırılmış durumdayken YENİ birine bağlanırsak (ör. az
+          // önce sese giren biri), onun sesi de baştan susturulmalı.
+          gainNode.gain.value = isDeafened ? 0 : currentVolume / 100
+          source.connect(gainNode).connect(ctx.destination)
+
+          // YENİ (teşhis): bu düğümden GERÇEKTEN sinyal geçiyor mu, yoksa
+          // bağlantı kurulmuş ama gelen ses "sessiz" mi — bunu periyodik
+          // istatistik döngüsünde (aşağıda) ölçüp konsola basabilmek için
+          // bir AnalyserNode da takıyoruz (ana çıkışı etkilemiyor, sadece
+          // "dinliyor").
+          const analyser = ctx.createAnalyser()
+          analyser.fftSize = 512
+          gainNode.connect(analyser)
+          const oldAnalyser = analysersRef.current.get(peerSocketId)
+          if (oldAnalyser) {
+            try {
+              oldAnalyser.disconnect()
+            } catch {
+              /* zaten kopmuş olabilir */
+            }
           }
-        }
+          analysersRef.current.set(peerSocketId, analyser)
 
-        gainNodesRef.current.set(peerSocketId, gainNode)
-        connectedAudioTracksRef.current.set(peerSocketId, audioTrack)
-      } catch (err) {
-        console.error(`[ses seviyesi] ${peerSocketId} için kurulamadı:`, err)
-      }
+          // Eskiden bu kişi için bağlı bir düğüm varsa (ör. track değişti),
+          // eskisini temizleyelim ki sesler üst üste binmesin.
+          const oldGainNode = gainNodesRef.current.get(peerSocketId)
+          if (oldGainNode) {
+            try {
+              oldGainNode.disconnect()
+            } catch {
+              /* zaten kopmuş olabilir, sorun değil */
+            }
+          }
+
+          gainNodesRef.current.set(peerSocketId, gainNode)
+          connectedAudioTracksRef.current.set(peerSocketId, audioTrack)
+          console.log(
+            `[ses seviyesi] ${peerSocketId} için bağlandı — ctx.state: ${ctx.state}, gain: ${gainNode.gain.value}`
+          )
+        } catch (err) {
+          console.error(`[ses seviyesi] ${peerSocketId} için kurulamadı:`, err)
+        }
+      })
     })
 
     // Artık remoteStreams'te olmayan kişilerin düğümlerini temizle.
@@ -592,8 +694,17 @@ function App() {
         gainNode.disconnect()
         gainNodesRef.current.delete(peerSocketId)
         connectedAudioTracksRef.current.delete(peerSocketId)
+        const analyser = analysersRef.current.get(peerSocketId)
+        if (analyser) {
+          analyser.disconnect()
+          analysersRef.current.delete(peerSocketId)
+        }
       }
     })
+
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remoteStreams, getAudioContext, peers, isDeafened])
 
@@ -694,6 +805,26 @@ function App() {
           } catch {
             // screenPc henüz kurulma aşamasında olabilir.
           }
+        }
+
+        // YENİ (teşhis): mikrofon sesi için kurduğumuz Web Audio grafiğinde
+        // (AnalyserNode) GERÇEKTEN sinyal var mı? bytesReceived artıyor
+        // olsa bile, bu grafikte 0 çıkıyorsa sorun kesinlikle GainNode
+        // bağlantısı/AudioContext tarafında demektir; burada da 0 çıkıp bir
+        // de duyulmuyorsa ve bytesReceived artıyorsa, gelen ses GERÇEKTEN
+        // sessiz olabilir (karşı taraf konuşurken bile).
+        const analyser = analysersRef.current.get(peerSocketId)
+        if (analyser) {
+          const data = new Uint8Array(analyser.frequencyBinCount)
+          analyser.getByteTimeDomainData(data)
+          let peak = 0
+          for (let i = 0; i < data.length; i++) {
+            const v = Math.abs(data[i] - 128)
+            if (v > peak) peak = v
+          }
+          console.log(
+            `[ses seviyesi ölçüm] ${peerSocketId} anlık tepe genlik: ${peak}/128 (0 = tam sessizlik)`
+          )
         }
       }
       setPeerPings((prev) => ({ ...prev, ...updates }))
@@ -1943,6 +2074,16 @@ function App() {
                         {outputDeviceError && (
                           <p className="device-settings-error">{outputDeviceError}</p>
                         )}
+                        {/* YENİ: karşı taraf olmadan, sesli sohbetle AYNI çıkış
+                            yolunu test etmek için — duyuyorsan sorun yönlendirmede
+                            değil, duymuyorsan seçili cihaz/işletim sistemi tarafında. */}
+                        <button
+                          type="button"
+                          className="device-settings-test-button"
+                          onClick={playTestTone}
+                        >
+                          🔊 Test sesi çal
+                        </button>
                       </div>
                     )}
                   </div>

@@ -1104,3 +1104,18 @@
   color: #e8776f;
   margin: 0;
 }
+
+.device-settings-test-button {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.device-settings-test-button:hover {
+  background: var(--bg-panel-hover, var(--bg-input));
+}
