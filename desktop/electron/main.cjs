@@ -66,6 +66,20 @@ function createWindow() {
     }
   });
 
+  // YENİ: çerçevesiz tam ekran düğmesi — pencere zaten çerçevesiz DEĞİL
+  // (normal başlık çubuğu var), ama setFullScreen(true) OS'in kendi tam
+  // ekran moduna geçiriyor (F11'e basmışsın gibi) — başlık çubuğu da,
+  // görev çubuğu da gidiyor. React tarafı sadece 'toggle-fullscreen'
+  // gönderiyor, gerçek pencere durumu (F11 ya da başka bir yoldan
+  // değişse bile) 'fullscreen-changed' ile geri bildiriliyor ki
+  // düğmenin ikonu her zaman doğru göstersin.
+  win.on("enter-full-screen", () => {
+    win.webContents.send("fullscreen-changed", true);
+  });
+  win.on("leave-full-screen", () => {
+    win.webContents.send("fullscreen-changed", false);
+  });
+
   if (isDev) {
     // Geliştirme modunda: Vite'ın çalıştırdığı canlı geliştirme sunucusuna
     // bağlanıyoruz (kod her değiştiğinde pencere otomatik yenilenir).
@@ -87,6 +101,15 @@ app.whenReady().then(() => {
   // diye. DevTools'u manuel açmak (Ctrl+Shift+I) için gereken kısayol,
   // yukarıda ayrıca (menüden bağımsız olarak) tanımlandı.
   Menu.setApplicationMenu(null);
+
+  // YENİ: çerçevesiz tam ekran düğmesi için IPC.
+  ipcMain.on("toggle-fullscreen", () => {
+    if (!mainWindow) return;
+    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  });
+  ipcMain.handle("is-fullscreen", () => {
+    return mainWindow ? mainWindow.isFullScreen() : false;
+  });
 
   // YENİ: Electron'un "sor sormaz her şeyi onayla" varsayılanını
   // KAPATIYORUZ. Kendi listemizi biz belirliyoruz: sadece "media"

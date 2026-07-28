@@ -31,6 +31,13 @@ process.on("unhandledRejection", (reason) => {
 });
 const { connectDB, User, Message, ChannelMember } = require("./db");
 
+// YENİ: "!sil @kullanıcı" komutuyla BAŞKASININ mesajlarını topluca silme
+// yetkisi, sadece rolleri arasında bu ismi taşıyan hesap(lar)a ait. Rol
+// atamak için server/add-user.js ile o hesabın roles listesine
+// "Alganis" eklenmesi yeterli — kod tarafında ayrıca bir "admin" alanı yok,
+// mevcut serbest-metin rol sistemi (bkz. userCanAccessChannel) kullanılıyor.
+const ADMIN_ROLE = "Alganis";
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -170,6 +177,28 @@ async function buildMemberList(channel) {
   } catch (err) {
     console.error("Üye listesi alınırken hata:", err.message);
   }
+
+  // YENİ: profil fotoğraflarını TEK sorguda çekip her iki listeye de
+  // ekliyoruz — online üyeler için textRooms (bellek içi) hiç avatar
+  // tutmuyor, o yüzden veritabanından tamamlıyoruz.
+  try {
+    const allUsernames = [...onlineUsernames, ...offline.map((m) => m.username)];
+    if (allUsernames.length > 0) {
+      const users = await User.find({ username: { $in: allUsernames } })
+        .select("username avatarData")
+        .lean();
+      const avatarByUsername = new Map(users.map((u) => [u.username, u.avatarData || null]));
+      online.forEach((m) => {
+        m.avatarData = avatarByUsername.get(m.username) || null;
+      });
+      offline.forEach((m) => {
+        m.avatarData = avatarByUsername.get(m.username) || null;
+      });
+    }
+  } catch (err) {
+    console.error("Profil fotoğrafları alınırken hata:", err.message);
+  }
+
   return { online, offline };
 }
 
@@ -213,6 +242,7 @@ io.on("connection", (socket) => {
         token,
         iceServers: buildIceServers(),
         channels: accessibleChannels,
+        avatarData: user.avatarData || null,
       });
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
@@ -247,6 +277,16 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // DÜZELTME: artık istemci sesteyken kanal değiştirdiğinde (sesi
+    // koparmadan başka bir kanalın mesajlarını okuyabilmek için) AYNI
+    // soketi tekrar kullanıyor. Bu yüzden eski metin kanalından socket.io
+    // oda üyeliğini burada AÇIKÇA bırakmazsak, o kanala yeni mesaj
+    // geldiğinde bu soket hâlâ dinlemeye devam eder ve mesaj yanlışlıkla
+    // görüntülenen YENİ kanalın sohbetine karışır. Ses odası (voiceRoomName)
+    // bundan tamamen ayrı bir isim alanı olduğu için etkilenmiyor.
+    if (currentTextRoom && currentTextRoom !== roomId) {
+      socket.leave(textRoomName(currentTextRoom));
+    }
     currentTextRoom = roomId;
     socket.join(textRoomName(roomId));
     if (!textRooms[roomId]) textRooms[roomId] = {};
@@ -299,6 +339,17 @@ io.on("connection", (socket) => {
     const roomId = currentTextRoom;
     if (!username || !roomId) return;
 
+    // YENİ: profil fotoğrafını da eş bağlantı (peer) bilgisine ekliyoruz
+    // ki karşı taraf kamerası kapalıyken avatar-yerine-baş-harf yerine
+    // gerçek fotoğrafı görebilsin.
+    let avatarData = null;
+    try {
+      const user = await User.findOne({ username }).select("avatarData").lean();
+      avatarData = user?.avatarData || null;
+    } catch (err) {
+      console.error("Avatar alınırken hata:", err.message);
+    }
+
     currentVoiceRoom = roomId;
     socket.join(voiceRoomName(roomId));
     if (!voiceRooms[roomId]) voiceRooms[roomId] = {};
@@ -307,6 +358,7 @@ io.on("connection", (socket) => {
       muted: true,
       cameraOn: false,
       sharingScreen: false,
+      avatarData,
     };
 
     const existingVoiceUsers = Object.entries(voiceRooms[roomId])
@@ -513,6 +565,63 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ---- YENİ: "!sil @kullanıcı" komutu — SADECE ADMIN_ROLE rolüne sahip
+  // hesaplar kullanabilir; hedef kullanıcının BU KANALDAKİ tüm mesajlarını
+  // siler (moderasyon: spam/uygunsuz içerik temizliği). delete-last-n'den
+  // farkı: kendi mesajınla sınırlı değilsin ve sayı değil, kullanıcı adı
+  // hedefliyorsun.
+  socket.on("delete-user-messages", async ({ token, targetUsername }) => {
+    const username = resolveUsername(token);
+    if (
+      !username ||
+      !currentTextRoom ||
+      typeof targetUsername !== "string" ||
+      !targetUsername.trim()
+    ) {
+      return;
+    }
+    const target = targetUsername.trim();
+
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const requesterRoles = requester?.roles || [];
+      if (!requesterRoles.includes(ADMIN_ROLE)) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Bu komutu kullanma yetkin yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+
+      const toDelete = await Message.find({ channel: currentTextRoom, username: target })
+        .select("_id")
+        .lean();
+      const idsToDelete = toDelete.map((m) => m._id);
+      if (idsToDelete.length === 0) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: `${target} adlı kullanıcının bu kanalda silinecek mesajı yok.`,
+          createdAt: new Date(),
+        });
+        return;
+      }
+      await Message.deleteMany({ _id: { $in: idsToDelete } });
+      io.to(textRoomName(currentTextRoom)).emit("messages-deleted", {
+        messageIds: idsToDelete.map((id) => id.toString()),
+      });
+      // YENİ: bu bir moderasyon eylemi — sadece komutu yazana değil,
+      // kanaldaki HERKESE görünür oluyor (şeffaflık için).
+      io.to(textRoomName(currentTextRoom)).emit("new-message", {
+        username: "Sistem",
+        text: `${username}, ${target} kullanıcısının ${idsToDelete.length} mesajını sildi.`,
+        createdAt: new Date(),
+      });
+    } catch (err) {
+      console.error("Kullanıcının mesajları silinirken hata:", err.message);
+    }
+  });
+
   // ---- YENİ: Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı
   // gibi: HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara
   // anlık iletiliyor. Kanaldan çıkıp girsen bile bir daha görünmez.
@@ -602,6 +711,49 @@ io.on("connection", (socket) => {
       socketId: socket.id,
       state: partialState,
     });
+  });
+
+  // ---- YENİ: Profil fotoğrafı belirleme — KALICI (send-photo'daki
+  // geçici/tek seferlik fotoğraflardan farklı olarak veritabanına
+  // yazılıyor). Küçük bir base64 data URL bekliyoruz; boyutu burada
+  // sınırlıyoruz ki veritabanı büyük resimlerle şişmesin (bu bir profil
+  // fotoğrafı, tam çözünürlüklü bir paylaşım değil).
+  socket.on("set-avatar", async ({ token, imageData, mimeType }) => {
+    const username = resolveUsername(token);
+    if (!username) return;
+    if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) return;
+    if (typeof imageData !== "string" || imageData.length === 0) return;
+    if (imageData.length > 700_000) {
+      // ~700 bin karakter ≈ 500 KB ham veri — küçük bir profil fotoğrafı
+      // için fazlasıyla yeterli.
+      socket.emit("new-message", {
+        username: "Sistem",
+        text: "Profil fotoğrafı çok büyük (maksimum ~500 KB). Daha küçük bir resim dene.",
+        createdAt: new Date(),
+      });
+      return;
+    }
+
+    try {
+      await User.updateOne({ username }, { avatarData: imageData });
+      socket.emit("avatar-saved", { avatarData: imageData });
+
+      // Şu an bulunduğu metin kanalındaki üye listesini (herkes için)
+      // ve varsa ses odasındaki eş bağlantı durumunu anlık güncelle.
+      if (currentTextRoom) {
+        const memberList = await buildMemberList(currentTextRoom);
+        io.to(textRoomName(currentTextRoom)).emit("channel-members", memberList);
+      }
+      if (currentVoiceRoom && voiceRooms[currentVoiceRoom]?.[socket.id]) {
+        voiceRooms[currentVoiceRoom][socket.id].avatarData = imageData;
+        socket.to(voiceRoomName(currentVoiceRoom)).emit("user-state-update", {
+          socketId: socket.id,
+          state: { avatarData: imageData },
+        });
+      }
+    } catch (err) {
+      console.error("Profil fotoğrafı kaydedilirken hata:", err.message);
+    }
   });
 
   // ---- Ayrılma (bağlantı tamamen kopunca) ----

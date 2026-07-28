@@ -26,6 +26,11 @@ const userSchema = new mongoose.Schema({
   // daha fazla etiketi (rolü) olabilir (ör. "Yönetici", "Arkadaş").
   // Kanallar artık şifreyle değil, bu rollere göre erişime açılıyor.
   roles: { type: [String], default: [] },
+  // YENİ: Profil fotoğrafı — küçük bir base64 data URL olarak saklanıyor
+  // (send-photo'daki geçici fotoğraflardan FARKLI olarak burası KALICI).
+  // Boyutu server.js'teki 'set-avatar' işleyicisinde sınırlıyoruz ki
+  // veritabanı büyük resimlerle şişmesin.
+  avatarData: { type: String, default: null },
 });
 
 // mongoose.models.User kontrolü: bu dosya birden fazla yerden

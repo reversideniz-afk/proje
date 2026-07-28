@@ -10,6 +10,18 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉']
 // YENİ: TURN bilgileri koda GÖMÜLMÜYOR — girişten sonra sunucudan geliyor.
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
+// YENİ: Renk temaları — her biri sadece App.css'teki :root[data-theme]
+// bloğuyla eşleşen bir kimlik + önizleme rengi. Yeni bir tema eklemek
+// istersen: App.css'e bir blok, buraya bir satır eklemen yeterli.
+const THEMES = [
+  { id: 'mercan', label: 'Mercan', color: '#f2726c' },
+  { id: 'mor', label: 'Mor', color: '#a374f2' },
+  { id: 'mavi', label: 'Mavi', color: '#5b9bf2' },
+  { id: 'yesil', label: 'Yeşil', color: '#4caf7d' },
+  { id: 'amber', label: 'Amber', color: '#e0a940' },
+  { id: 'pembe', label: 'Pembe', color: '#f26ca3' },
+]
+
 // YENİ: bas-konuş için seçilen tuşu (event.code) okunabilir göstermek için.
 function formatKeyCode(code) {
   if (!code) return ''
@@ -139,6 +151,7 @@ function RemoteCameraTile({
   onToggleEnlarge,
   onOpenVolumeMenu,
   ping,
+  avatarUrl,
 }) {
   const videoRef = useRef(null)
   const audioRef = useRef(null)
@@ -177,7 +190,11 @@ function RemoteCameraTile({
         <video ref={videoRef} autoPlay playsInline muted className="remote-video" />
       ) : (
         <div className="camera-off-placeholder">
-          <div className="avatar-circle">{label.charAt(0).toUpperCase()}</div>
+          {avatarUrl ? (
+            <img src={avatarUrl} alt="" className="avatar-circle avatar-circle--photo" />
+          ) : (
+            <div className="avatar-circle">{label.charAt(0).toUpperCase()}</div>
+          )}
           <audio ref={audioRef} autoPlay muted />
         </div>
       )}
@@ -186,6 +203,18 @@ function RemoteCameraTile({
       </span>
       {typeof ping === 'number' && (
         <span className={'ping-badge ' + pingClass}>{ping} ms</span>
+      )}
+      {isEnlarged && (
+        <button
+          className="enlarged-tile-close"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleEnlarge()
+          }}
+          title="Küçült"
+        >
+          ✕
+        </button>
       )}
     </div>
   )
@@ -222,6 +251,18 @@ function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge, outputDe
     >
       <video ref={videoRef} autoPlay playsInline className="remote-video remote-video--screen" />
       <span className="remote-video-label">{label} 🖥️ ekranı</span>
+      {isEnlarged && (
+        <button
+          className="enlarged-tile-close"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleEnlarge()
+          }}
+          title="Küçült"
+        >
+          ✕
+        </button>
+      )}
     </div>
   )
 }
@@ -252,7 +293,7 @@ function EyeIcon({ visible }) {
 
 // YENİ: her ekranda (giriş dahil) sabit köşede duran küçük yakınlaştırma
 // kontrolü — Ctrl+/Ctrl- ile aynı işi yapar, sadece tıklanabilir hali.
-function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset }) {
+function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset, isFullscreen, onToggleFullscreen }) {
   return (
     <div className="zoom-control">
       <button onClick={onZoomOut} title="Küçült (Ctrl -)">
@@ -264,6 +305,15 @@ function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset }) {
       <button onClick={onZoomIn} title="Büyüt (Ctrl +)">
         +
       </button>
+      {/* YENİ: tek tuşla çerçevesiz tam ekran. */}
+      {onToggleFullscreen && (
+        <button
+          onClick={onToggleFullscreen}
+          title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran yap'}
+        >
+          {isFullscreen ? '⤢' : '⛶'}
+        </button>
+      )}
     </div>
   )
 }
@@ -305,6 +355,35 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeydown)
   }, [])
 
+  // YENİ: tek tuşla çerçevesiz tam ekran — gerçek pencere durumu main
+  // process'te (bkz. electron/main.cjs) olduğu için IPC üzerinden okuyup
+  // dinliyoruz; F11 gibi başka bir yoldan da değişse (ya da pencere
+  // dışarıdan tam ekrandan çıkarılsa) düğmenin ikonu güncel kalsın diye.
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  useEffect(() => {
+    window.electronAPI?.isFullscreen?.().then((value) => {
+      if (typeof value === 'boolean') setIsFullscreen(value)
+    })
+    const unsubscribe = window.electronAPI?.onFullscreenChange?.(setIsFullscreen)
+    return unsubscribe
+  }, [])
+  const toggleFullscreen = () => window.electronAPI?.toggleFullscreen?.()
+
+  // YENİ: Renk teması — herkes kendi zevkine göre bir vurgu rengi
+  // seçebilsin diye. Sadece CSS değişkenlerini değiştiriyor (bkz.
+  // App.css :root[data-theme=...]), tüm arayüz otomatik uyum sağlıyor.
+  // Seçim cihazda kalıcı (localStorage) — hesaba değil, bu bilgisayara
+  // bağlı bir tercih.
+  const [theme, setTheme] = useState(() => window.localStorage?.getItem('theme') || 'mercan')
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    window.localStorage?.setItem('theme', theme)
+  }, [theme])
+  // YENİ: kalıcı, kanalların hizasındaki genel ayarlar paneli — şimdilik
+  // sadece kişiselleştirme (tema) var, ileride büyüyebilir diye ayrı bir
+  // panel olarak kurduk (sesteki cihaz ayarlarından bağımsız).
+  const [showAppSettings, setShowAppSettings] = useState(false)
+
   // --- Kişisel hesap girişi ---
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -313,6 +392,12 @@ function App() {
   const [loginError, setLoginError] = useState(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const displayName = username
+
+  // YENİ: Profil fotoğrafı — girişte sunucudan gelir, ayarlardan
+  // değiştirilince 'avatar-saved' ile güncellenir.
+  const [myAvatar, setMyAvatar] = useState(null)
+  const [avatarUploadError, setAvatarUploadError] = useState(null)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
 
   const [sessionToken, setSessionToken] = useState(null)
   const sessionTokenRef = useRef(null)
@@ -336,6 +421,11 @@ function App() {
   useEffect(() => {
     activeChannelRef.current = activeChannel
   }, [activeChannel])
+  // YENİ: hangi kanalın METNİNİ görüntülediğin (activeChannel) ile hangi
+  // kanalın SESİNDE olduğun (voiceChannel) artık AYRI şeyler — sesteyken
+  // başka bir kanala göz atıp mesaj okuyabilesin diye. voiceChannel, sesten
+  // çıkana kadar sabit kalır; activeChannel istediğin kadar değişebilir.
+  const [voiceChannel, setVoiceChannel] = useState(null)
   const [connectionError, setConnectionError] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState('connected')
 
@@ -358,6 +448,7 @@ function App() {
   const [ephemeralPhotos, setEphemeralPhotos] = useState([])
   const [isSendingPhoto, setIsSendingPhoto] = useState(false)
   const photoFileInputRef = useRef(null)
+  const avatarFileInputRef = useRef(null)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
   // YENİ: o an aktif kanalda kimlerin yazıyor olduğu.
@@ -504,6 +595,17 @@ function App() {
     setEnlargedTile((prev) => (prev === tileId ? null : tileId))
   }
 
+  // YENİ: büyütülmüş kutucuk artık tam ekrana yakın bir lightbox — Esc ile
+  // de kapatılabilsin (standart lightbox/tam ekran davranışı).
+  useEffect(() => {
+    if (!enlargedTile) return
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') setEnlargedTile(null)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [enlargedTile])
+
   // YENİ: kişi bazlı ses seviyesi (Discord'daki gibi, %0-%200 arası —
   // normal HTML ses elemanlarının %100 sınırını Web Audio API ile aşıyoruz).
   // ÖNEMLİ: artık geçici bağlantı kimliğine (socketId) DEĞİL, kullanıcı
@@ -540,6 +642,18 @@ function App() {
     window.addEventListener('click', closeIt)
     return () => window.removeEventListener('click', closeIt)
   }, [volumePopup])
+
+  // DÜZELTME: ses cihazı ayarları paneli küçük yerel kamera kutucuğunun
+  // İÇİNDE render ediliyordu (o kutucuğun sabit/küçük boyutuyla sıkışıp
+  // "iç içe" görünüyordu) — artık CSS ile position:fixed bir kart olarak
+  // çalışıyor (bkz. App.css .device-settings-panel), bu yüzden dışarı
+  // tıklayınca kapanması için de diğer popup'larla aynı deseni kullanıyoruz.
+  useEffect(() => {
+    if (!showDeviceSettings) return
+    const closeIt = () => setShowDeviceSettings(false)
+    window.addEventListener('click', closeIt)
+    return () => window.removeEventListener('click', closeIt)
+  }, [showDeviceSettings])
 
   const audioContextRef = useRef(null)
   // DÜZELTME: setSinkId()/resume() birer PROMISE — context'i kurar kurmaz
@@ -614,6 +728,70 @@ function App() {
     oscillator.start()
     oscillator.stop(ctx.currentTime + 0.6)
   }, [getAudioContext])
+
+  // YENİ: Mikrofon testi — seçili mikrofonu kısa süreliğine açıp canlı bir
+  // seviye çubuğu gösteriyor (konuşunca hareket etmeli). Hoparlöre
+  // BAĞLAMIYORUZ (yankı/geri besleme olmasın diye) — sadece bir
+  // AnalyserNode ile seviyeyi ölçüp okuyoruz. 10 saniye sonra ya da
+  // tekrar tıklanınca kendiliğinden kapanır, mikrofonu açık unutmuyoruz.
+  const [isTestingMic, setIsTestingMic] = useState(false)
+  const [micTestLevel, setMicTestLevel] = useState(0)
+  const micTestCleanupRef = useRef(null)
+
+  const stopMicTest = useCallback(() => {
+    micTestCleanupRef.current?.()
+    micTestCleanupRef.current = null
+    setIsTestingMic(false)
+    setMicTestLevel(0)
+  }, [])
+
+  const testMicrophone = useCallback(async () => {
+    if (isTestingMic) {
+      stopMicTest()
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true,
+      })
+      const ctx = getAudioContext()
+      const source = ctx.createMediaStreamSource(stream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 512
+      source.connect(analyser)
+      const data = new Uint8Array(analyser.frequencyBinCount)
+
+      const tick = () => {
+        analyser.getByteTimeDomainData(data)
+        let peak = 0
+        for (let i = 0; i < data.length; i++) {
+          const v = Math.abs(data[i] - 128)
+          if (v > peak) peak = v
+        }
+        setMicTestLevel(Math.min(100, Math.round((peak / 128) * 100)))
+        rafId = requestAnimationFrame(tick)
+      }
+      let rafId = requestAnimationFrame(tick)
+
+      const autoStopTimer = setTimeout(() => stopMicTest(), 10000)
+
+      micTestCleanupRef.current = () => {
+        cancelAnimationFrame(rafId)
+        clearTimeout(autoStopTimer)
+        source.disconnect()
+        stream.getTracks().forEach((t) => t.stop())
+      }
+      setIsTestingMic(true)
+    } catch (err) {
+      setMediaError(describeMediaError(err))
+    }
+  }, [isTestingMic, selectedAudioInput, getAudioContext, stopMicTest])
+
+  // Panel kapanırken ya da bileşen kaldırılırken testi arkada bırakma.
+  useEffect(() => {
+    if (!showDeviceSettings) stopMicTest()
+  }, [showDeviceSettings, stopMicTest])
+  useEffect(() => () => micTestCleanupRef.current?.(), [])
 
   // YENİ: Sağırlaştır — Discord'daki gibi, herkesin sesini tek tuşla
   // kapatıp, tekrar bastığında herkesi KENDİ ayarladığın ses seviyesine
@@ -1100,6 +1278,7 @@ function App() {
     setIsScreenSharing(false)
     setEnlargedTile(null)
     setInVoice(false)
+    setVoiceChannel(null)
     setVolumePopup(null)
     setIsDeafened(false)
     // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
@@ -1109,11 +1288,15 @@ function App() {
     connectedAudioTracksRef.current.clear()
   }, [stopLocalMedia, cleanupPeerConnections])
 
-  // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım.
+  // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım. Hangi
+  // kanaldayken katıldıysak (activeChannelRef.current), ses O kanala
+  // bağlanıyor — sonradan başka bir kanalın mesajlarına göz atsan bile
+  // ses hep bu kanalda kalır.
   const joinVoice = useCallback(() => {
     if (!socketRef.current) return
     socketRef.current.emit('join-voice', { token: sessionTokenRef.current })
     setInVoice(true)
+    setVoiceChannel(activeChannelRef.current)
   }, [])
 
   const leaveChannel = useCallback(() => {
@@ -1134,6 +1317,7 @@ function App() {
     setIsScreenSharing(false)
     setConnectionStatus('connected')
     setInVoice(false)
+    setVoiceChannel(null)
     setEnlargedTile(null)
     setActiveChannel(null)
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
@@ -1141,6 +1325,31 @@ function App() {
   // YENİ: Kanala (METİN) katılma — ses bağlantısı burada HİÇ kurulmuyor.
   const joinChannel = useCallback(
     (channelName) => {
+      // DÜZELTME: sesteyken başka bir kanala TIKLAYIP sadece mesajlarına
+      // göz atmak istiyorsan, soketi/mikrofonu/eş bağlantılarını YIKMAMIZ
+      // gerekmiyor — sadece HANGİ kanalın mesajlarını izlediğimizi
+      // değiştiriyoruz (var olan soket üzerinden 'join-channel' tekrar
+      // gönderilir). Ses bağlantısı olduğu kanalda (voiceChannel) kalmaya
+      // devam eder. Sunucu tarafında da metin/ses odaları zaten ayrı
+      // (bkz. server.js — currentTextRoom / currentVoiceRoom).
+      if (inVoice && socketRef.current?.connected && channelName !== activeChannelRef.current) {
+        setMessages([])
+        setEphemeralPhotos([])
+        setTypingUsers([])
+        setUnreadChannels((prev) => prev.filter((c) => c !== channelName))
+        setHasMoreHistory(true)
+        setOnlineMembers([])
+        setOfflineMembers([])
+        setConnectionError(null)
+        setEnlargedTile(null)
+        setActiveChannel(channelName)
+        socketRef.current.emit('join-channel', {
+          roomId: channelName,
+          token: sessionTokenRef.current,
+        })
+        return
+      }
+
       cleanupSocket()
       stopLocalMedia()
       cleanupPeerConnections()
@@ -1159,6 +1368,7 @@ function App() {
       setIsScreenSharing(false)
       setConnectionStatus('connected')
       setInVoice(false)
+      setVoiceChannel(null)
       setEnlargedTile(null)
       setActiveChannel(channelName)
 
@@ -1369,6 +1579,13 @@ function App() {
       socket.on('user-state-update', ({ socketId, state }) => {
         setPeers((prev) => prev.map((p) => (p.socketId === socketId ? { ...p, ...state } : p)))
       })
+
+      // YENİ: profil fotoğrafını değiştirince sunucudan kesin onay —
+      // kendi görünümümüzü de anında güncelliyoruz.
+      socket.on('avatar-saved', ({ avatarData }) => {
+        setMyAvatar(avatarData || null)
+        setIsUploadingAvatar(false)
+      })
     },
     [
       cleanupSocket,
@@ -1377,6 +1594,7 @@ function App() {
       getOrCreateMainConnection,
       getOrCreateScreenConnection,
       syncReceiversToStream,
+      inVoice,
     ]
   )
 
@@ -1641,6 +1859,7 @@ function App() {
             setIceServers(response.iceServers)
           }
           setChannels(Array.isArray(response.channels) ? response.channels : [])
+          setMyAvatar(response.avatarData || null)
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -1665,6 +1884,20 @@ function App() {
       socketRef.current.emit('delete-last-n', {
         token: sessionTokenRef.current,
         n: Number(silMatch[1]),
+      })
+      setChatInput('')
+      return
+    }
+
+    // YENİ: "!sil @kullanıcı" komutu — BAŞKASININ tüm mesajlarını
+    // topluca siler. Yetki kontrolü sunucuda yapılıyor (sadece "Alganis"
+    // rolündeki hesaplar) — burada sadece söz dizimini ayırt ediyoruz,
+    // yukarıdaki sayı kalıbıyla eşleşmeyen her "!sil <şey>" bunu dener.
+    const silUserMatch = text.match(/^!sil\s+@?(\S+)$/i)
+    if (silUserMatch) {
+      socketRef.current.emit('delete-user-messages', {
+        token: sessionTokenRef.current,
+        targetUsername: silUserMatch[1],
       })
       setChatInput('')
       return
@@ -1734,6 +1967,66 @@ function App() {
       setIsSendingPhoto(false)
     }
     reader.readAsDataURL(file)
+  }
+
+  // YENİ: Profil fotoğrafı yükleme — send-photo'daki geçici fotoğraflardan
+  // farklı olarak KALICI ve küçük olmalı. Kaynak resim ne kadar büyük
+  // olursa olsun, burada 256x256'lık bir kareye ("cover" gibi kırparak)
+  // sıkıştırıp JPEG'e çeviriyoruz — hem sunucudaki boyut sınırını rahat
+  // geçer hem veritabanını şişirmez.
+  const uploadAvatar = (file) => {
+    if (!file || !socketRef.current) return
+    if (!file.type.startsWith('image/')) {
+      setAvatarUploadError('Sadece görsel dosyaları kullanılabilir.')
+      return
+    }
+    if (file.size > MAX_PHOTO_BYTES) {
+      setAvatarUploadError('Resim çok büyük (en fazla 10 MB olabilir).')
+      return
+    }
+    setAvatarUploadError(null)
+    setIsUploadingAvatar(true)
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const size = 256
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')
+        const scale = Math.max(size / img.width, size / img.height)
+        const drawWidth = img.width * scale
+        const drawHeight = img.height * scale
+        ctx.drawImage(img, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+        socketRef.current?.emit('set-avatar', {
+          token: sessionTokenRef.current,
+          imageData: dataUrl,
+          mimeType: 'image/jpeg',
+        })
+        // NOT: isUploadingAvatar burada değil, sunucudan 'avatar-saved'
+        // gelince kapatılıyor — gerçekten kaydedildiğinden emin olalım diye.
+        setTimeout(() => setIsUploadingAvatar(false), 8000) // yanıt hiç gelmezse takılı kalmasın
+      }
+      img.onerror = () => {
+        setAvatarUploadError('Resim okunamadı, tekrar dener misin?')
+        setIsUploadingAvatar(false)
+      }
+      img.src = reader.result
+    }
+    reader.onerror = () => {
+      setAvatarUploadError('Dosya okunamadı, tekrar dener misin?')
+      setIsUploadingAvatar(false)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleAvatarFileSelected = (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    uploadAvatar(file)
   }
 
   // YENİ: Bir mesaja emoji tepkisi ekleme/kaldırma (aç/kapa).
@@ -1895,7 +2188,14 @@ function App() {
         <p className="name-entry-hint">
           Hesabın yoksa, grubu kuran kişiden hesap açmasını isteyebilirsin.
         </p>
-        <ZoomControl zoomLevel={zoomLevel} onZoomOut={zoomOut} onZoomIn={zoomIn} onReset={zoomReset} />
+        <ZoomControl
+        zoomLevel={zoomLevel}
+        onZoomOut={zoomOut}
+        onZoomIn={zoomIn}
+        onReset={zoomReset}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
+      />
       </div>
     )
   }
@@ -1919,6 +2219,7 @@ function App() {
         <nav className="channel-list">
           {channels.map((channel) => {
             const hasUnread = unreadChannels.includes(channel)
+            const isVoiceHere = voiceChannel === channel
             return (
               <button
                 key={channel}
@@ -1928,11 +2229,26 @@ function App() {
                 onClick={() => joinChannel(channel)}
               >
                 # {channel}
+                {/* YENİ: sesin hangi kanalda olduğunu, o kanalı görüntülemesen
+                    bile listede görebilesin diye. */}
+                {isVoiceHere && <span className="channel-voice-indicator">🎙️</span>}
                 {hasUnread && <span className="channel-unread-dot" />}
               </button>
             )
           })}
         </nav>
+
+        {/* YENİ: kanalların hizasında, sabit (her zaman görünür) genel
+            ayarlar düğmesi — sesteki ⚙️'den FARKLI: o sadece o anki ses
+            görüşmesinin mikrofon/hoparlör seçimiydi, bu ise kalıcı,
+            hesap/uygulama genelindeki kişiselleştirme ayarları için. */}
+        <button
+          type="button"
+          className="app-settings-button"
+          onClick={() => setShowAppSettings(true)}
+        >
+          ⚙️ Ayarlar
+        </button>
       </aside>
 
       <main className="main-panel">
@@ -1958,11 +2274,16 @@ function App() {
               <div className="channel-header">
                 <h2># {activeChannel}</h2>
                 <div className="channel-header-actions">
-                  {!inVoice ? (
+                  {/* YENİ: sesteyken BAŞKA bir kanala bakıyorsan burada ne
+                      "Sese Katıl" (zaten sestesin, başka kanalda ses
+                      açılamaz) ne de "Sesten Çık" (bu kanalın sesi değil ki)
+                      gösteriyoruz — onun yerine aşağıdaki banner var. */}
+                  {!inVoice && (
                     <button className="join-voice-button" onClick={joinVoice}>
                       📞 Sese Katıl
                     </button>
-                  ) : (
+                  )}
+                  {inVoice && voiceChannel === activeChannel && (
                     <button className="leave-voice-button" onClick={leaveVoice}>
                       📞 Sesten Çık
                     </button>
@@ -1973,8 +2294,42 @@ function App() {
                 </div>
               </div>
 
-              {inVoice && (
+              {/* YENİ: sesli sohbet BAŞKA bir kanaldayken (ör. #Genel'de
+                  sesteyken #Cereyancılar'ın mesajlarına bakıyorsun), sesin
+                  kesilmediğini hatırlatan ve geri dönüş imkânı veren
+                  kalıcı bir şerit. */}
+              {inVoice && voiceChannel && voiceChannel !== activeChannel && (
+                <div className="voice-elsewhere-banner">
+                  <span>
+                    🎙️ Sesli sohbettesin: <strong># {voiceChannel}</strong>
+                  </span>
+                  <div className="voice-elsewhere-banner-actions">
+                    <button onClick={() => joinChannel(voiceChannel)}>Kanala dön</button>
+                    <button
+                      className={
+                        'control-button control-button--small' +
+                        (isMicOn ? '' : ' control-button--off')
+                      }
+                      onClick={toggleMic}
+                      title={isMicOn ? 'Mikrofonu kapat' : 'Mikrofonu aç'}
+                    >
+                      {isMicOn ? '🎤' : '🔇'}
+                    </button>
+                    <button onClick={leaveVoice}>Sesten çık</button>
+                  </div>
+                </div>
+              )}
+
+              {inVoice && voiceChannel === activeChannel && (
                 <div className={'video-grid' + (enlargedTile ? ' video-grid--has-enlarged' : '')}>
+                  {/* YENİ: büyütülmüş kutucuk artık gerçek bir lightbox —
+                      arkasına tıklayınca da küçülsün diye karartma katmanı. */}
+                  {enlargedTile && (
+                    <div
+                      className="enlarged-tile-backdrop"
+                      onClick={() => setEnlargedTile(null)}
+                    />
+                  )}
                   {mediaError && <p className="error-text">{mediaError}</p>}
 
                   <div
@@ -1984,6 +2339,18 @@ function App() {
                     }
                     onClick={() => toggleEnlarge('local-camera')}
                   >
+                    {enlargedTile === 'local-camera' && (
+                      <button
+                        className="enlarged-tile-close"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleEnlarge('local-camera')
+                        }}
+                        title="Küçült"
+                      >
+                        ✕
+                      </button>
+                    )}
                     {isCameraOn ? (
                       <video
                         ref={localVideoRef}
@@ -1994,7 +2361,11 @@ function App() {
                       />
                     ) : (
                       <div className="camera-off-placeholder">
-                        <div className="avatar-circle">{displayName.charAt(0).toUpperCase()}</div>
+                        {myAvatar ? (
+                          <img src={myAvatar} alt="" className="avatar-circle avatar-circle--photo" />
+                        ) : (
+                          <div className="avatar-circle">{displayName.charAt(0).toUpperCase()}</div>
+                        )}
                       </div>
                     )}
                     <div className="media-controls" onClick={(e) => e.stopPropagation()}>
@@ -2062,7 +2433,10 @@ function App() {
                       <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
                     )}
                     {showDeviceSettings && (
-                      <div className="device-settings-panel">
+                      <div
+                        className="device-settings-panel"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <label>
                           🎤 Mikrofon
                           <select
@@ -2077,6 +2451,27 @@ function App() {
                             ))}
                           </select>
                         </label>
+                        {/* YENİ: mikrofon testi — konuşunca çubuğun hareket
+                            etmesi lazım, mikrofonun gerçekten ses aldığını
+                            (ve doğru cihazın seçili olduğunu) hoparlöre hiç
+                            bağlanmadan (yankı olmasın diye) doğrulamak için. */}
+                        <div className="mic-test-row">
+                          <button
+                            type="button"
+                            className="device-settings-test-button"
+                            onClick={testMicrophone}
+                          >
+                            {isTestingMic ? '⏹️ Testi durdur' : '🎤 Mikrofonu test et'}
+                          </button>
+                          {isTestingMic && (
+                            <div className="mic-test-meter">
+                              <div
+                                className="mic-test-meter-fill"
+                                style={{ width: `${micTestLevel}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
                         <label>
                           🔊 Hoparlör
                           <select
@@ -2129,6 +2524,18 @@ function App() {
                         className="local-video local-video--screen"
                       />
                       <span className="remote-video-label">Ekranın (sen)</span>
+                      {enlargedTile === 'local-screen' && (
+                        <button
+                          className="enlarged-tile-close"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleEnlarge('local-screen')
+                          }}
+                          title="Küçült"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -2147,6 +2554,7 @@ function App() {
                             onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
                             onOpenVolumeMenu={(e) => label && openVolumePopup(label, e)}
                             ping={peerPings[socketId]}
+                            avatarUrl={peer?.avatarData}
                           />
                         )}
                         {peer?.sharingScreen && streams.screenStream && (
@@ -2288,6 +2696,7 @@ function App() {
                               ))}
                               {item.username === displayName && (
                                 <>
+                                  <span className="reaction-picker-divider" />
                                   <button
                                     type="button"
                                     className="reaction-picker-option"
@@ -2364,6 +2773,13 @@ function App() {
                       title={m.username !== displayName ? 'Ses seviyesini ayarlamak için sağ tıkla' : undefined}
                     >
                       <span className="member-status-dot member-status-dot--online" />
+                      {m.avatarData ? (
+                        <img src={m.avatarData} alt="" className="member-item-avatar" />
+                      ) : (
+                        <span className="member-item-avatar member-item-avatar--empty">
+                          {m.username.charAt(0).toUpperCase()}
+                        </span>
+                      )}
                       {m.username} {m.inVoice && '🎙️'}
                     </li>
                   ))}
@@ -2381,6 +2797,13 @@ function App() {
                         title="Ses seviyesini ayarlamak için sağ tıkla"
                       >
                         <span className="member-status-dot member-status-dot--offline" />
+                        {m.avatarData ? (
+                          <img src={m.avatarData} alt="" className="member-item-avatar" />
+                        ) : (
+                          <span className="member-item-avatar member-item-avatar--empty">
+                            {m.username.charAt(0).toUpperCase()}
+                          </span>
+                        )}
                         {m.username}
                       </li>
                     ))}
@@ -2438,7 +2861,87 @@ function App() {
         </div>
       )}
 
-      <ZoomControl zoomLevel={zoomLevel} onZoomOut={zoomOut} onZoomIn={zoomIn} onReset={zoomReset} />
+      <ZoomControl
+        zoomLevel={zoomLevel}
+        onZoomOut={zoomOut}
+        onZoomIn={zoomIn}
+        onReset={zoomReset}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
+      />
+
+      {/* YENİ: genel/kalıcı ayarlar penceresi — şimdilik sadece
+          kişiselleştirme (renk teması), ileride büyüyecek bir yer. */}
+      {showAppSettings && (
+        <div
+          className="app-settings-backdrop"
+          onClick={() => setShowAppSettings(false)}
+        >
+          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="app-settings-modal-header">
+              <h3>Ayarlar</h3>
+              <button
+                type="button"
+                className="app-settings-close"
+                onClick={() => setShowAppSettings(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <section className="app-settings-section">
+              <h4>Profil</h4>
+              <div className="avatar-picker-row">
+                {myAvatar ? (
+                  <img src={myAvatar} alt="" className="avatar-picker-preview" />
+                ) : (
+                  <div className="avatar-picker-preview avatar-picker-preview--empty">
+                    {displayName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div>
+                  <input
+                    ref={avatarFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleAvatarFileSelected}
+                  />
+                  <button
+                    type="button"
+                    className="device-settings-test-button"
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    disabled={isUploadingAvatar}
+                  >
+                    {isUploadingAvatar ? 'Yükleniyor…' : '🖼️ Profil fotoğrafı seç'}
+                  </button>
+                  {avatarUploadError && (
+                    <p className="device-settings-error">{avatarUploadError}</p>
+                  )}
+                </div>
+              </div>
+            </section>
+            <section className="app-settings-section">
+              <h4>Kişiselleştirme</h4>
+              <p className="app-settings-hint">Vurgu rengini seç — tüm arayüz buna göre boyanır.</p>
+              <div className="theme-swatch-row">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={'theme-swatch' + (theme === t.id ? ' theme-swatch--active' : '')}
+                    style={{ '--swatch-color': t.color }}
+                    onClick={() => setTheme(t.id)}
+                    title={t.label}
+                  >
+                    <span className="theme-swatch-dot" />
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

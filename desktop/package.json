@@ -25,7 +25,10 @@
       "output": "release"
     },
     "win": {
-      "target": "zip"
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "${productName}.exe"
     }
   },
   "dependencies": {

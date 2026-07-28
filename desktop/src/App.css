@@ -22,6 +22,43 @@
   --online-dot: #4caf7d;
 }
 
+/* ------------------------------------------------------------
+   YENİ: Renk temaları — arka plan/metin şeması sabit kalıyor, sadece
+   vurgu rengi (ve ona uyumlu "kapalı" durum rengi) değişiyor. "Tehlike"
+   (silme vb.) ve "çevrimiçi" renkleri BİLEREK sabit — anlamları evrensel,
+   temaya göre kaymamalı.
+------------------------------------------------------------ */
+
+:root[data-theme='mor'] {
+  --accent: #a374f2;
+  --accent-hover: #b891f5;
+  --off-state: #3d3350;
+}
+
+:root[data-theme='mavi'] {
+  --accent: #5b9bf2;
+  --accent-hover: #7bacf5;
+  --off-state: #2e3d50;
+}
+
+:root[data-theme='yesil'] {
+  --accent: #4caf7d;
+  --accent-hover: #6cc496;
+  --off-state: #2d4a3a;
+}
+
+:root[data-theme='amber'] {
+  --accent: #e0a940;
+  --accent-hover: #eabb63;
+  --off-state: #4a3f2d;
+}
+
+:root[data-theme='pembe'] {
+  --accent: #f26ca3;
+  --accent-hover: #f589b8;
+  --off-state: #4a2d3d;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -81,6 +118,150 @@
   font-weight: 600;
   border-left: 3px solid var(--accent);
   padding-left: 7px;
+}
+
+/* YENİ: kanalların hizasında, sabit en alttaki genel ayarlar düğmesi —
+   margin-top:auto ile flex sütununun (channel-sidebar) en dibine yapışıyor. */
+.app-settings-button {
+  margin-top: auto;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  padding: 12px 10px 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.app-settings-button:hover {
+  color: var(--text-primary);
+}
+
+.app-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-settings-modal {
+  width: min(420px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.app-settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.app-settings-modal-header h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.app-settings-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.app-settings-close:hover {
+  color: var(--text-primary);
+}
+
+.app-settings-section + .app-settings-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.avatar-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar-picker-preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.avatar-picker-preview--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.app-settings-section h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+.app-settings-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.theme-swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.theme-swatch:hover {
+  background: var(--bg-panel-hover);
+}
+
+.theme-swatch--active {
+  border-color: var(--swatch-color);
+  box-shadow: 0 0 0 1px var(--swatch-color);
+}
+
+.theme-swatch-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--swatch-color);
+  flex-shrink: 0;
 }
 
 .main-panel {
@@ -217,10 +398,84 @@
   height: 84px;
 }
 
+/* DÜZELTME: büyütme daha önce sadece video-grid'in İÇİNDE, sabit 380px
+   yükseklikte bir flex öğesi büyütüyordu — sayfanın geri kalanı (sohbet
+   paneli, üst bar) yerinde kalıp "çerçeveyle oynanmış" gibi görünüyordu.
+   Artık gerçek bir lightbox: position:fixed ile TÜM sayfanın üzerine,
+   viewport'un büyük kısmını kaplayacak şekilde ortalanıyor (YouTube'un
+   tam ekran/teater moduna benzer), diğer kutucuklar arkada küçük bir
+   şerit olarak kalıyor. */
 .video-grid--has-enlarged .video-tile--enlarged {
-  flex: 1 1 100%;
-  height: 380px;
-  order: -1;
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(94vw, 1400px);
+  height: min(90vh, 900px);
+  max-width: none;
+  z-index: 900;
+  order: unset;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65);
+  background: #000;
+}
+
+/* Büyütülmüş kutucuğun İÇİNDEKİ her şey (video sarmalayıcı, video,
+   kamera-kapalı yer tutucu) o kutucuğun TAMAMINI doldursun — normal
+   küçük kutucuklardaki 280px genişlik sınırı ve sabit en-boy oranı burada
+   uygulanmamalı. */
+.video-tile--enlarged .remote-video-wrapper,
+.video-tile--enlarged .local-media-panel {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+}
+
+.video-tile--enlarged .remote-video,
+.video-tile--enlarged .local-video,
+.video-tile--enlarged .camera-off-placeholder {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+  /* Kırpma yerine (cover) tamamını göster (contain) — büyütülmüş halde
+     birinin yüzünün ya da ekran paylaşımının bir kısmının kesilmesini
+     istemiyoruz. */
+  object-fit: contain;
+}
+
+.enlarged-tile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 890;
+  cursor: pointer;
+}
+
+/* Büyütülmüş kutucuğun kendi içinde, sağ üstte sabit duran kapatma
+   düğmesi — kutucuğun gerçek boyutunu CSS'te tahmin etmemize gerek
+   kalmadan her zaman doğru köşede duruyor. */
+.enlarged-tile-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 910;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(20, 18, 17, 0.85);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.enlarged-tile-close:hover {
+  background: rgba(40, 36, 34, 0.95);
 }
 
 .remote-video-wrapper {
@@ -289,6 +544,11 @@
   width: 72px;
   height: 72px;
   font-size: 28px;
+}
+
+.avatar-circle--photo {
+  object-fit: cover;
+  background: var(--bg-panel);
 }
 
 .media-controls {
@@ -407,6 +667,24 @@
 
 .member-status-dot--offline {
   background: #55504d;
+}
+
+.member-item-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.member-item-avatar--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #1c1a19;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 /* ------------------------------------------------------------
@@ -575,6 +853,53 @@
   font-weight: 600;
   padding: 6px 0;
   z-index: 500;
+}
+
+/* YENİ: sesteyken başka bir kanala bakarken gösterilen "sesin başka
+   kanalda devam ediyor" şeridi. */
+.voice-elsewhere-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 16px 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.voice-elsewhere-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-elsewhere-banner-actions button {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.voice-elsewhere-banner-actions button:hover {
+  background: #3d3733;
+}
+
+.control-button--small {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.channel-voice-indicator {
+  margin-left: 6px;
+  font-size: 11px;
 }
 
 /* ------------------------------------------------------------
@@ -910,13 +1235,18 @@
 }
 
 .reaction-pill {
-  font-size: 11px;
+  font-size: 12px;
   background: var(--bg-panel-hover);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 1px 6px;
+  border-radius: 12px;
+  padding: 2px 8px;
   cursor: pointer;
   color: var(--text-primary);
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.reaction-pill:hover {
+  transform: translateY(-1px);
 }
 
 .reaction-pill--mine {
@@ -924,28 +1254,65 @@
   background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* DÜZELTME: eskiden mesajın akışının İÇİNDE, küçük (13px) ve donuk
+   (opacity 0.6) bir satır olarak duruyordu — mesaja sağ tıklayınca metni
+   aşağı iten, "eklenti gibi" bir görünümdü. Artık mesajın hemen ÜSTÜNDE
+   yüzen, yuvarlak uçlu bağımsız bir araç çubuğu (Discord/Slack'teki
+   "hover reaction bar" gibi) — mesaj akışını hiç etkilemiyor, belirgin
+   bir gölgeyle öne çıkıyor. */
 .reaction-picker {
+  position: absolute;
+  top: -38px;
+  right: 8px;
   display: flex;
+  align-items: center;
   gap: 2px;
-  background: var(--bg-panel-hover);
+  background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 3px 5px;
+  border-radius: 999px;
+  padding: 4px 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+  animation: reaction-picker-in 0.12s ease;
+}
+
+@keyframes reaction-picker-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .reaction-picker-option {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 13px;
-  padding: 1px 3px;
-  border-radius: 4px;
-  opacity: 0.6;
+  font-size: 18px;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s ease, background 0.1s ease;
 }
 
 .reaction-picker-option:hover {
-  opacity: 1;
   background: var(--bg-panel-hover);
+  transform: scale(1.15);
+}
+
+.reaction-picker-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-subtle);
+  margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .channel-unread-dot {
@@ -1041,8 +1408,8 @@
 }
 
 .app-logo--sidebar {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
 }
 
@@ -1065,15 +1432,25 @@
   color: #e8776f;
 }
 
+/* DÜZELTME: bu panel DAHA ÖNCE küçük yerel kamera kutucuğunun normal akış
+   içinde bir parçasıydı — o kutucuğun sabit/küçük boyutu içinde sıkışıp
+   video/butonlarla "iç içe" görünüyordu. Artık ekranın sağ altında SABİT
+   (position: fixed) bağımsız bir kart olarak yüzüyor, hangi kutucuğun
+   içinden açıldığından tamamen bağımsız. */
 .device-settings-panel {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  width: 260px;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-top: 6px;
+  border-radius: 10px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 700;
 }
 
 .device-settings-panel label {
@@ -1118,4 +1495,25 @@
 
 .device-settings-test-button:hover {
   background: var(--bg-panel-hover, var(--bg-input));
+}
+
+.mic-test-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mic-test-meter {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.mic-test-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.08s linear;
 }

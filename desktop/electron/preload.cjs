@@ -32,5 +32,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // renderer-seviyesinde zoom kontrolü sağlayan modülü.
   setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
   getZoomFactor: () => webFrame.getZoomFactor(),
+  // YENİ: çerçevesiz tam ekran düğmesi — gerçek pencere kontrolü main
+  // process'te olduğu için IPC üzerinden.
+  toggleFullscreen: () => ipcRenderer.send("toggle-fullscreen"),
+  isFullscreen: () => ipcRenderer.invoke("is-fullscreen"),
+  onFullscreenChange: (callback) => {
+    const listener = (_event, isFullscreen) => callback(isFullscreen);
+    ipcRenderer.on("fullscreen-changed", listener);
+    return () => ipcRenderer.removeListener("fullscreen-changed", listener);
+  },
 });
 
