@@ -2059,6 +2059,11 @@ function App() {
   const mentionRegex = /(^|\s)@(\w*)$/i
   const mentionMatch = chatInput.match(mentionRegex)
   const mentionQuery = mentionMatch ? mentionMatch[2].toLowerCase() : null
+  // DÜZELTME: sadece çevrimiçi üyeler öneriliyordu — çevrimdışı birinin
+  // (ör. "!sil @kullanıcı" ile moderasyon yapmak istediğin, artık bağlı
+  // olmayan biri) tam kullanıcı adını bilmeden etiketlemek/hedeflemek
+  // imkânsız hâle geliyordu. Artık çevrimdışı üyeler de öneriliyor
+  // (ayırt edilebilsin diye etiketinde belirtiliyor).
   const mentionCandidates =
     mentionQuery === null
       ? []
@@ -2067,6 +2072,10 @@ function App() {
           ...onlineMembers
             .filter((m) => m.username !== displayName)
             .map((m) => ({ username: m.username, label: `@${m.username}` })),
+          ...offlineMembers.map((m) => ({
+            username: m.username,
+            label: `@${m.username} (çevrimdışı)`,
+          })),
         ].filter((c) => c.username.toLowerCase().startsWith(mentionQuery))
 
   const insertMention = (targetUsername) => {
