@@ -40,7 +40,8 @@
     "publish": {
       "provider": "github",
       "owner": "reversideniz-afk",
-      "repo": "proje"
+      "repo": "proje",
+      "releaseType": "release"
     }
   },
   "dependencies": {
