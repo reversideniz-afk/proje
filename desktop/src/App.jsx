@@ -1993,10 +1993,24 @@ function App() {
       return
     }
 
+    // YENİ: "!sil @kullanıcı n" komutu — BAŞKASININ son N mesajını siler
+    // (tümünü değil, "!sil @kullanıcı" bunu yapıyor zaten). Yetki kontrolü
+    // sunucuda yapılıyor (sadece "Alganis" rolündeki hesaplar).
+    const silUserCountMatch = text.match(/^!sil\s+@?(\S+)\s+(\d+)$/i)
+    if (silUserCountMatch) {
+      socketRef.current.emit('delete-user-last-n', {
+        token: sessionTokenRef.current,
+        targetUsername: silUserCountMatch[1],
+        n: Number(silUserCountMatch[2]),
+      })
+      setChatInput('')
+      return
+    }
+
     // YENİ: "!sil @kullanıcı" komutu — BAŞKASININ tüm mesajlarını
     // topluca siler. Yetki kontrolü sunucuda yapılıyor (sadece "Alganis"
     // rolündeki hesaplar) — burada sadece söz dizimini ayırt ediyoruz,
-    // yukarıdaki sayı kalıbıyla eşleşmeyen her "!sil <şey>" bunu dener.
+    // yukarıdaki kalıplarla eşleşmeyen her "!sil <şey>" bunu dener.
     const silUserMatch = text.match(/^!sil\s+@?(\S+)$/i)
     if (silUserMatch) {
       socketRef.current.emit('delete-user-messages', {

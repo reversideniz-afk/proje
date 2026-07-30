@@ -638,6 +638,67 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ---- YENİ: "!sil @kullanıcı n" komutu — SADECE ADMIN_ROLE rolüne
+  // sahip hesaplar kullanabilir; hedef kullanıcının BU KANALDAKİ son N
+  // mesajını siler. "!sil @kullanıcı"dan (tümünü siler) farkı: burada
+  // sayıyla sınırlı, daha "cerrahi" bir moderasyon aracı.
+  socket.on("delete-user-last-n", async ({ token, targetUsername, n }) => {
+    const username = resolveUsername(token);
+    const count = Number(n);
+    if (
+      !username ||
+      !currentTextRoom ||
+      typeof targetUsername !== "string" ||
+      !targetUsername.trim() ||
+      !Number.isInteger(count) ||
+      count < 1
+    ) {
+      return;
+    }
+    const target = targetUsername.trim();
+    const cappedCount = Math.min(count, 200);
+
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Bu komutu kullanma yetkin yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+
+      const toDelete = await Message.find({ channel: currentTextRoom, username: target })
+        .sort({ createdAt: -1 })
+        .limit(cappedCount)
+        .select("_id")
+        .lean();
+      const idsToDelete = toDelete.map((m) => m._id);
+      if (idsToDelete.length === 0) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: `${target} adlı kullanıcının bu kanalda silinecek mesajı yok.`,
+          createdAt: new Date(),
+        });
+        return;
+      }
+      await Message.deleteMany({ _id: { $in: idsToDelete } });
+      io.to(textRoomName(currentTextRoom)).emit("messages-deleted", {
+        messageIds: idsToDelete.map((id) => id.toString()),
+      });
+      // YENİ: bu bir moderasyon eylemi — sadece komutu yazana değil,
+      // kanaldaki HERKESE görünür oluyor (şeffaflık için).
+      io.to(textRoomName(currentTextRoom)).emit("new-message", {
+        username: "Sistem",
+        text: `${username}, ${target} kullanıcısının son ${idsToDelete.length} mesajını sildi.`,
+        createdAt: new Date(),
+      });
+    } catch (err) {
+      console.error("Kullanıcının son mesajları silinirken hata:", err.message);
+    }
+  });
+
   // ---- YENİ: "!sil @kullanıcı" komutu — SADECE ADMIN_ROLE rolüne sahip
   // hesaplar kullanabilir; hedef kullanıcının BU KANALDAKİ tüm mesajlarını
   // siler (moderasyon: spam/uygunsuz içerik temizliği). delete-last-n'den
