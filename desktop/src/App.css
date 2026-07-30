@@ -138,6 +138,31 @@
   color: var(--text-primary);
 }
 
+/* YENİ: Discord tarzı "güncelleme hazır" bildirimi — kenar çubuğunun
+   altında, Ayarlar düğmesinin hemen üstünde beliriyor. */
+.update-ready-button {
+  text-align: left;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.update-ready-button:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.update-progress-text {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 10px 0 0;
+}
+
 .app-settings-backdrop {
   position: fixed;
   inset: 0;
@@ -286,8 +311,56 @@
 }
 
 .user-management-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lock-badge {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.lock-badge:hover {
+  background: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.security-alert-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 980;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.security-alert-modal {
+  width: min(380px, 90vw);
+  background: var(--bg-panel);
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.security-alert-modal h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.security-alert-modal p {
+  margin: 0 0 8px;
+  font-size: 13px;
   color: var(--text-primary);
 }
 

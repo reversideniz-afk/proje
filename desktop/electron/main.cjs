@@ -23,6 +23,11 @@
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
 const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu } = require("electron");
 const path = require("path");
+// YENİ: Discord'daki gibi uygulama içi otomatik güncelleme. GitHub
+// Releases'i "publish" kaynağı olarak kullanıyor (bkz. package.json
+// "build.publish") — her yeni sürüm orada bir Release olarak
+// yayınlandığında, açık olan uygulamalar bunu fark edip indiriyor.
+const { autoUpdater } = require("electron-updater");
 
 // app.isPackaged: uygulama .exe/.dmg olarak paketlenip paketlenmediğini
 // söylüyor. Paketlenmemişse (yani "npm run dev" ile geliştirme modundaysak)
@@ -110,6 +115,8 @@ app.whenReady().then(() => {
   ipcMain.handle("is-fullscreen", () => {
     return mainWindow ? mainWindow.isFullScreen() : false;
   });
+  // YENİ: Ayarlar panelinde hangi sürümün çalıştığını gösterebilmek için.
+  ipcMain.handle("get-app-version", () => app.getVersion());
 
   // YENİ: Electron'un "sor sormaz her şeyi onayla" varsayılanını
   // KAPATIYORUZ. Kendi listemizi biz belirliyoruz: sadece "media"
@@ -181,6 +188,60 @@ app.whenReady().then(() => {
   // (tüm pencereler kapalıyken) yeni pencere aç.
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  // YENİ: Otomatik güncelleme — SADECE paketlenmiş (kurulmuş) uygulamada
+  // anlamlı; "npm run dev" ile çalışırken hiç güncelleme kaynağı/sürüm
+  // bilgisi olmadığı için deneme bile yapmıyoruz.
+  if (!isDev) {
+    autoUpdater.logger = console;
+    // autoDownload: bir güncelleme bulununca SESSİZCE arka planda inmeye
+    // başlasın (Discord'un yaptığı gibi) — kullanıcıya sadece indirme
+    // BİTİNCE "yeniden başlat" düğmesi gösteriyoruz, ayrıca bir "indir"
+    // onayı istemiyoruz.
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    autoUpdater.on("update-available", (info) => {
+      mainWindow?.webContents.send("update-available", { version: info.version });
+    });
+    // YENİ: "Güncellemeleri kontrol et" butonuna manuel basıldığında,
+    // güncel olduğunu da React tarafına bildirebilelim diye.
+    autoUpdater.on("update-not-available", () => {
+      mainWindow?.webContents.send("update-not-available");
+    });
+    autoUpdater.on("download-progress", (progress) => {
+      mainWindow?.webContents.send("update-download-progress", {
+        percent: Math.round(progress.percent),
+      });
+    });
+    autoUpdater.on("update-downloaded", (info) => {
+      mainWindow?.webContents.send("update-downloaded", { version: info.version });
+    });
+    autoUpdater.on("error", (err) => {
+      console.error("[güncelleme] hata:", err?.message || err);
+      mainWindow?.webContents.send("update-error", err?.message || String(err));
+    });
+
+    // Açılışta bir kere kontrol et. Hata olursa (ör. internet yok,
+    // henüz hiç Release yayınlanmamış) sessizce yutuyoruz — kullanıcının
+    // normal kullanımını hiç etkilememeli.
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[güncelleme] kontrol hatası:", err?.message || err);
+    });
+  }
+
+  // YENİ: React tarafı manuel "güncellemeleri kontrol et" ve (indirme
+  // bitince) "yeniden başlat ve kur" tetikleyebilsin diye.
+  ipcMain.on("check-for-updates", () => {
+    if (isDev) return;
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[güncelleme] kontrol hatası:", err?.message || err);
+    });
+  });
+  ipcMain.on("install-update", () => {
+    if (isDev) return;
+    autoUpdater.quitAndInstall();
   });
 });
 

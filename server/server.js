@@ -29,7 +29,7 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("YAKALANMAMIŞ PROMISE HATASI (sunucu ayakta kalıyor):", reason);
 });
-const { connectDB, User, Message, ChannelMember } = require("./db");
+const { connectDB, User, Message, ChannelMember, BannedIp } = require("./db");
 
 // YENİ: "!sil @kullanıcı" komutuyla BAŞKASININ mesajlarını topluca silme
 // yetkisi, sadece rolleri arasında bu ismi taşıyan hesap(lar)a ait. Rol
@@ -37,6 +37,61 @@ const { connectDB, User, Message, ChannelMember } = require("./db");
 // "Alganis" eklenmesi yeterli — kod tarafında ayrıca bir "admin" alanı yok,
 // mevcut serbest-metin rol sistemi (bkz. userCanAccessChannel) kullanılıyor.
 const ADMIN_ROLE = "Alganis";
+
+// ------------------------------------------------------------
+// YENİ: Giriş/kayıt saldırı korumaları (rate limiting)
+// ------------------------------------------------------------
+// GİRİŞ: bir HESAP 5 kez yanlış şifre denenince 15 dakikalığına
+// kilitleniyor (bkz. User.failedLoginAttempts/loginLockedUntil, db.js) —
+// bu, veritabanında kalıcı, sunucu yeniden başlasa bile devam eder.
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+
+// KAYIT: bir IP adresi kısa sürede çok fazla yanlış davet kodu denerse
+// (otomatik/saldırı niteliğinde davranış — bir insanın elle deneyeceği
+// makul sayının çok üzerinde), o IP KALICI olarak banlanıyor. Bu sayaç
+// bilerek bellekte (in-memory) — sadece NİHAİ ban kararı veritabanına
+// yazılıp kalıcı oluyor (bkz. BannedIp, db.js).
+const MAX_REGISTER_ATTEMPTS_PER_WINDOW = 10;
+const REGISTER_ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
+const registerAttemptsByIp = new Map(); // ip -> { count, windowStart }
+const bannedIpSet = new Set(); // ip -> banlı mı (hızlı kontrol için, DB'den yükleniyor)
+
+// YENİ: "şu an bağlı olan X kullanıcısının soketleri hangileri" — bir IP
+// banlandığında Alganis rolündeki BAĞLI hesaplara ANLIK uyarı
+// gönderebilmek için (bkz. notifyAdmins).
+const socketsByUsername = new Map(); // username -> Set<socket>
+
+// YENİ: Render gibi bir ters vekil (reverse proxy) arkasında çalışıyoruz —
+// socket.handshake.address doğrudan kullanılırsa, GERÇEK istemci IP'si
+// yerine Render'ın kendi iç proxy IP'si görünür (bu da banlamayı tamamen
+// işlevsiz kılar, hatta yanlışlıkla HERKESİ aynı IP'ymiş gibi gösterip
+// tüm servisi kilitleme riski taşır). X-Forwarded-For başlığı, proxy
+// zincirindeki GERÇEK istemciyi (ilk adres) taşır.
+function getClientIp(socket) {
+  const forwarded = socket.handshake.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return forwarded.split(",")[0].trim();
+  }
+  return socket.handshake.address;
+}
+
+// YENİ: Alganis rolündeki, ŞU AN bağlı olan hesaplara anlık güvenlik
+// uyarısı gönderiyor (ör. bir IP kalıcı banlandığında). Kimse bağlı
+// değilse sessizce hiçbir şey yapmaz — banlar zaten kalıcı olarak
+// kaydediliyor, "Üye Yönetimi" > "Güvenlik" bölümünden her zaman
+// görülebilir.
+async function notifyAdmins(event, payload) {
+  try {
+    const admins = await User.find({ roles: ADMIN_ROLE }).select("username").lean();
+    admins.forEach(({ username }) => {
+      const sockets = socketsByUsername.get(username);
+      sockets?.forEach((s) => s.emit(event, payload));
+    });
+  } catch (err) {
+    console.error("Adminlere bildirim gönderilirken hata:", err.message);
+  }
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -93,7 +148,19 @@ function userCanAccessChannel(userRoles, channelConfig) {
 }
 
 // Veritabanına bağlan (kişisel hesaplar için).
-connectDB();
+connectDB().then((connected) => {
+  if (!connected) return;
+  // YENİ: daha önce kalıcı banlanmış IP'leri belleğe yükle — sunucu
+  // yeniden başlasa bile banlar geçerliliğini korusun diye.
+  BannedIp.find({})
+    .select("ip")
+    .lean()
+    .then((rows) => {
+      rows.forEach((r) => bannedIpSet.add(r.ip));
+      console.log(`${rows.length} banlı IP belleğe yüklendi.`);
+    })
+    .catch((err) => console.error("Banlı IP'ler yüklenirken hata:", err.message));
+});
 
 // YENİ (güvenlik): TURN sunucu bilgileri de koda/istemciye GÖMÜLMÜYOR —
 // sadece giriş yapmış (doğrulanmış) kullanıcılara, login başarılı
@@ -222,6 +289,10 @@ async function buildMemberList(channel) {
 io.on("connection", (socket) => {
   let currentTextRoom = null;
   let currentVoiceRoom = null;
+  // YENİ: bu soketin kim olduğunu (join-channel'da belirleniyor) —
+  // socketsByUsername kaydını doğru temizleyebilmek (disconnect'te) ve
+  // adminlere anlık güvenlik uyarısı gönderebilmek için.
+  let currentUsername = null;
 
   // ---- Kişisel hesap girişi ----
   socket.on("login", async ({ username, password }, callback) => {
@@ -238,10 +309,35 @@ io.on("connection", (socket) => {
       if (!user) {
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
+
+      // YENİ: hesap kilitli mi? (5 yanlış şifreden sonra 15 dakikalığına,
+      // ya da bir yönetici erken açana kadar — bkz. unlock-user-login).
+      if (user.loginLockedUntil && user.loginLockedUntil > new Date()) {
+        const minutesLeft = Math.ceil((user.loginLockedUntil - new Date()) / 60000);
+        return callback({
+          success: false,
+          message: `Çok fazla yanlış deneme yapıldı. Hesabın ${minutesLeft} dakika kilitli, ya da bir yöneticiden açmasını iste.`,
+        });
+      }
+
       const passwordMatches = await bcrypt.compare(password, user.passwordHash);
       if (!passwordMatches) {
+        // YENİ: yanlış şifre sayacını artır, eşiği geçtiyse kilitle.
+        user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+        if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+          user.loginLockedUntil = new Date(Date.now() + LOGIN_LOCK_MS);
+        }
+        await user.save();
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
+
+      // Başarılı giriş — sayaç ve varsa kilit sıfırlanır.
+      if (user.failedLoginAttempts > 0 || user.loginLockedUntil) {
+        user.failedLoginAttempts = 0;
+        user.loginLockedUntil = null;
+        await user.save();
+      }
+
       const token = crypto.randomUUID();
       sessionTokens.set(token, user.username);
 
@@ -280,6 +376,16 @@ io.on("connection", (socket) => {
   // biri (arkadaş grubunun dışından biri sunucu adresini bulsa bile)
   // hesap açamaz.
   socket.on("register", async ({ username, password, inviteCode }, callback) => {
+    const ip = getClientIp(socket);
+
+    // YENİ: bu IP daha önce saldırı niteliğinde davranış yüzünden
+    // KALICI banlanmışsa, hiçbir şeyi kontrol etmeden AYNI genel
+    // mesajla reddet — banlı olduğunu bilerek belli etmiyoruz (saldırgan
+    // "engellendim" bilgisini alıp başka bir yol denemeye çalışmasın).
+    if (bannedIpSet.has(ip)) {
+      return callback({ success: false, message: "Davet kodu hatalı." });
+    }
+
     if (
       typeof username !== "string" ||
       typeof password !== "string" ||
@@ -302,6 +408,42 @@ io.on("connection", (socket) => {
       return callback({ success: false, message: "Kayıt şu anda kapalı." });
     }
     if (inviteCode !== expectedCode) {
+      // YENİ: yanlış davet kodu denemesini bu IP için say. Kısa sürede
+      // (5 dakika) çok sayıda (10+) yanlış deneme = otomatik/saldırı
+      // niteliğinde davranış demektir — bir insan bu kadar hızlı bu
+      // kadar çok deneme yapmaz. Böyle bir durumda IP'yi KALICI banlıyoruz.
+      const now = Date.now();
+      const entry = registerAttemptsByIp.get(ip);
+      if (!entry || now - entry.windowStart > REGISTER_ATTEMPT_WINDOW_MS) {
+        registerAttemptsByIp.set(ip, { count: 1, windowStart: now });
+      } else {
+        entry.count += 1;
+        if (entry.count >= MAX_REGISTER_ATTEMPTS_PER_WINDOW) {
+          bannedIpSet.add(ip);
+          registerAttemptsByIp.delete(ip);
+          try {
+            await BannedIp.findOneAndUpdate(
+              { ip },
+              {
+                ip,
+                reason: "Kayıt ekranında kısa sürede çok sayıda yanlış davet kodu denemesi",
+                attemptCount: entry.count,
+                bannedAt: new Date(),
+              },
+              { upsert: true }
+            );
+          } catch (err) {
+            console.error("IP banı kaydedilirken hata:", err.message);
+          }
+          console.warn(`[güvenlik] IP kalıcı banlandı: ${ip} (${entry.count} deneme)`);
+          notifyAdmins("security-alert", {
+            type: "ip-banned",
+            ip,
+            attemptCount: entry.count,
+            reason: "Kayıt ekranında çok sayıda yanlış davet kodu denemesi",
+          });
+        }
+      }
       return callback({ success: false, message: "Davet kodu hatalı." });
     }
 
@@ -326,6 +468,17 @@ io.on("connection", (socket) => {
       socket.emit("join-error", "Önce giriş yapman gerekiyor.");
       return;
     }
+
+    // YENİ: bu soketin sahibini kaydediyoruz — adminlere anlık güvenlik
+    // uyarısı gönderebilmek (bkz. notifyAdmins) ve disconnect'te temizlik
+    // yapabilmek için.
+    if (currentUsername !== username) {
+      if (currentUsername) socketsByUsername.get(currentUsername)?.delete(socket);
+      currentUsername = username;
+      if (!socketsByUsername.has(username)) socketsByUsername.set(username, new Set());
+      socketsByUsername.get(username).add(socket);
+    }
+
     const channelConfig = CHANNELS_CONFIG.find((c) => c.name === roomId);
     if (!channelConfig) {
       socket.emit("join-error", "Böyle bir kanal yok.");
@@ -770,10 +923,20 @@ io.on("connection", (socket) => {
       if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
         return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
       }
-      const users = await User.find({}).select("username roles").sort({ username: 1 }).lean();
+      const users = await User.find({})
+        .select("username roles loginLockedUntil")
+        .sort({ username: 1 })
+        .lean();
+      const now = new Date();
       callback({
         success: true,
-        users: users.map((u) => ({ username: u.username, roles: u.roles || [] })),
+        users: users.map((u) => ({
+          username: u.username,
+          roles: u.roles || [],
+          // YENİ: Üye Yönetimi'nde kilitli hesapları gösterip erken
+          // açabilmek için (bkz. unlock-user-login).
+          isLoginLocked: !!(u.loginLockedUntil && u.loginLockedUntil > now),
+        })),
       });
     } catch (err) {
       console.error("Kullanıcı listesi alınırken hata:", err.message);
@@ -820,6 +983,83 @@ io.on("connection", (socket) => {
       socket.emit("user-role-updated", { username: targetUsername, roles: updated.roles || [] });
     } catch (err) {
       console.error("Rol güncellenirken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Kilitli bir hesabın girişini erken açma — SADECE
+  // ADMIN_ROLE. 5 yanlış şifreden sonra otomatik kilitlenen hesaplar
+  // için (bkz. login işleyicisi) — "istediğim zaman kaldırabileyim".
+  socket.on("unlock-user-login", async ({ token, targetUsername }) => {
+    const username = resolveUsername(token);
+    if (!username || typeof targetUsername !== "string" || !targetUsername.trim()) return;
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Bu işlemi yapma yetkin yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+      await User.updateOne(
+        { username: targetUsername.trim() },
+        { failedLoginAttempts: 0, loginLockedUntil: null }
+      );
+      socket.emit("user-login-unlocked", { username: targetUsername.trim() });
+    } catch (err) {
+      console.error("Giriş kilidi açılırken hata:", err.message);
+    }
+  });
+
+  // ---- YENİ: Banlı IP listesi — SADECE ADMIN_ROLE. ----
+  socket.on("list-banned-ips", async ({ token }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      const banned = await BannedIp.find({}).sort({ bannedAt: -1 }).lean();
+      callback({
+        success: true,
+        bannedIps: banned.map((b) => ({
+          ip: b.ip,
+          reason: b.reason,
+          attemptCount: b.attemptCount,
+          bannedAt: b.bannedAt,
+        })),
+      });
+    } catch (err) {
+      console.error("Banlı IP listesi alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir IP'nin banını kaldırma — SADECE ADMIN_ROLE. Yanlışlıkla
+  // (ör. bir arkadaşın art arda yanlış davet kodu denemesi) banlanan
+  // birini kurtarabilmek için. ----
+  socket.on("unban-ip", async ({ token, ip }) => {
+    const username = resolveUsername(token);
+    if (!username || typeof ip !== "string" || !ip.trim()) return;
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Bu işlemi yapma yetkin yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+      bannedIpSet.delete(ip.trim());
+      registerAttemptsByIp.delete(ip.trim());
+      await BannedIp.deleteOne({ ip: ip.trim() });
+      socket.emit("ip-unbanned", { ip: ip.trim() });
+    } catch (err) {
+      console.error("IP banı kaldırılırken hata:", err.message);
     }
   });
 
@@ -988,6 +1228,12 @@ io.on("connection", (socket) => {
         const memberList = await buildMemberList(roomId);
         io.to(textRoomName(roomId)).emit("channel-members", memberList);
       }
+    }
+    // YENİ: socketsByUsername kaydını temizle (bkz. join-channel).
+    if (currentUsername) {
+      const sockets = socketsByUsername.get(currentUsername);
+      sockets?.delete(socket);
+      if (sockets && sockets.size === 0) socketsByUsername.delete(currentUsername);
     }
   });
 });

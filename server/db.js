@@ -31,6 +31,12 @@ const userSchema = new mongoose.Schema({
   // Boyutu server.js'teki 'set-avatar' işleyicisinde sınırlıyoruz ki
   // veritabanı büyük resimlerle şişmesin.
   avatarData: { type: String, default: null },
+  // YENİ: Giriş denemesi sınırlama (rate limiting) — 5 yanlış şifreden
+  // sonra hesap geçici kilitleniyor (bkz. server.js login işleyicisi).
+  // loginLockedUntil geçmişte/null ise hesap kilitli DEĞİL. Alganis
+  // rolündeki bir hesap, Üye Yönetimi panelinden bunu erken açabilir.
+  failedLoginAttempts: { type: Number, default: 0 },
+  loginLockedUntil: { type: Date, default: null },
 });
 
 // mongoose.models.User kontrolü: bu dosya birden fazla yerden
@@ -69,6 +75,18 @@ channelMemberSchema.index({ channel: 1, username: 1 }, { unique: true });
 const ChannelMember =
   mongoose.models.ChannelMember || mongoose.model("ChannelMember", channelMemberSchema);
 
+// YENİ: Kayıt (register) uç noktasına karşı saldırı niteliğinde (kısa
+// sürede çok sayıda yanlış davet kodu deneyen) bir IP adresi KALICI
+// olarak buraya kaydediliyor — sunucu yeniden başlasa bile ban devam
+// etsin diye (bkz. server.js — banlıIpSet, açılışta buradan doldurulur).
+const bannedIpSchema = new mongoose.Schema({
+  ip: { type: String, required: true, unique: true },
+  reason: { type: String, default: "" },
+  attemptCount: { type: Number, default: 0 },
+  bannedAt: { type: Date, default: Date.now },
+});
+const BannedIp = mongoose.models.BannedIp || mongoose.model("BannedIp", bannedIpSchema);
+
 async function connectDB() {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -82,4 +100,4 @@ async function connectDB() {
   return true;
 }
 
-module.exports = { connectDB, User, Message, ChannelMember };
+module.exports = { connectDB, User, Message, ChannelMember, BannedIp };

@@ -41,5 +41,36 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("fullscreen-changed", listener);
     return () => ipcRenderer.removeListener("fullscreen-changed", listener);
   },
+  // YENİ: Discord tarzı otomatik güncelleme — gerçek indirme/kurulum
+  // main process'te (electron-updater), React tarafı sadece durumu
+  // dinleyip bir düğme gösteriyor.
+  getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+  checkForUpdates: () => ipcRenderer.send("check-for-updates"),
+  installUpdate: () => ipcRenderer.send("install-update"),
+  onUpdateAvailable: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on("update-available", listener);
+    return () => ipcRenderer.removeListener("update-available", listener);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("update-not-available", listener);
+    return () => ipcRenderer.removeListener("update-not-available", listener);
+  },
+  onUpdateDownloadProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("update-download-progress", listener);
+    return () => ipcRenderer.removeListener("update-download-progress", listener);
+  },
+  onUpdateDownloaded: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on("update-downloaded", listener);
+    return () => ipcRenderer.removeListener("update-downloaded", listener);
+  },
+  onUpdateError: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on("update-error", listener);
+    return () => ipcRenderer.removeListener("update-error", listener);
+  },
 });
 

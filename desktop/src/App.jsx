@@ -358,6 +358,46 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeydown)
   }, [])
 
+  // YENİ: Discord tarzı otomatik güncelleme — gerçek indirme/kurulum
+  // Electron main process'te (electron-updater) oluyor, biz sadece
+  // durumu dinleyip küçük bir bildirim gösteriyoruz.
+  const [updateInfo, setUpdateInfo] = useState(null) // { version } | null
+  const [updateProgress, setUpdateProgress] = useState(null) // 0-100 | null
+  const [updateReady, setUpdateReady] = useState(false)
+  const [appVersion, setAppVersion] = useState('')
+  const [updateCheckMessage, setUpdateCheckMessage] = useState(null)
+  useEffect(() => {
+    window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v || ''))
+  }, [])
+  useEffect(() => {
+    const unsubAvailable = window.electronAPI?.onUpdateAvailable?.((info) => {
+      setUpdateInfo(info)
+      setUpdateCheckMessage(null)
+    })
+    const unsubNotAvailable = window.electronAPI?.onUpdateNotAvailable?.(() => {
+      setUpdateCheckMessage('En güncel sürümü kullanıyorsun.')
+    })
+    const unsubProgress = window.electronAPI?.onUpdateDownloadProgress?.(({ percent }) => {
+      setUpdateProgress(percent)
+    })
+    const unsubDownloaded = window.electronAPI?.onUpdateDownloaded?.((info) => {
+      setUpdateInfo(info)
+      setUpdateReady(true)
+      setUpdateProgress(null)
+    })
+    const unsubError = window.electronAPI?.onUpdateError?.((message) => {
+      console.error('[güncelleme] hata:', message)
+      setUpdateCheckMessage('Güncelleme kontrol edilemedi, tekrar dener misin?')
+    })
+    return () => {
+      unsubAvailable?.()
+      unsubNotAvailable?.()
+      unsubProgress?.()
+      unsubDownloaded?.()
+      unsubError?.()
+    }
+  }, [])
+
   // YENİ: tek tuşla çerçevesiz tam ekran — gerçek pencere durumu main
   // process'te (bkz. electron/main.cjs) olduğu için IPC üzerinden okuyup
   // dinliyoruz; F11 gibi başka bir yoldan da değişse (ya da pencere
@@ -393,6 +433,12 @@ function App() {
   const [isLoadingUsers, setIsLoadingUsers] = useState(false)
   const [userManagementError, setUserManagementError] = useState(null)
   const [roleInputByUser, setRoleInputByUser] = useState({}) // username -> yazılmakta olan yeni rol
+
+  // YENİ: Güvenlik — banlı IP listesi + anlık güvenlik uyarıları
+  // (bkz. "Güvenlik" bölümü, Ayarlar panelinde, sadece isAdmin).
+  const [bannedIps, setBannedIps] = useState([])
+  const [isLoadingBannedIps, setIsLoadingBannedIps] = useState(false)
+  const [securityAlert, setSecurityAlert] = useState(null) // { ip, attemptCount, reason } | null
 
   // --- Kişisel hesap girişi ---
   const [username, setUsername] = useState('')
@@ -1639,6 +1685,31 @@ function App() {
           prev.map((u) => (u.username === targetUsername ? { ...u, roles } : u))
         )
       })
+
+      // YENİ: kilitli bir hesabın girişi (Üye Yönetimi'nden) açılınca.
+      socket.on('user-login-unlocked', ({ username: targetUsername }) => {
+        setAllUsers((prev) =>
+          prev.map((u) => (u.username === targetUsername ? { ...u, isLoginLocked: false } : u))
+        )
+      })
+
+      // YENİ: bir IP'nin banı kaldırılınca, Güvenlik listesinden de düş.
+      socket.on('ip-unbanned', ({ ip }) => {
+        setBannedIps((prev) => prev.filter((b) => b.ip !== ip))
+      })
+
+      // YENİ: bir IP kalıcı banlandığında (kayıt ekranına saldırı
+      // niteliğinde deneme), ŞU AN bağlıysak anlık uyarı al.
+      socket.on('security-alert', (alert) => {
+        setSecurityAlert(alert)
+        setBannedIps((prev) => {
+          if (prev.some((b) => b.ip === alert.ip)) return prev
+          return [
+            { ip: alert.ip, reason: alert.reason, attemptCount: alert.attemptCount, bannedAt: new Date() },
+            ...prev,
+          ]
+        })
+      })
     },
     [
       cleanupSocket,
@@ -2221,6 +2292,33 @@ function App() {
     })
   }
 
+  // YENİ: kilitli bir hesabın girişini erken açma (5 yanlış şifreden
+  // sonraki otomatik kilit için).
+  const unlockUserLogin = (targetUsername) => {
+    socketRef.current?.emit('unlock-user-login', {
+      token: sessionTokenRef.current,
+      targetUsername,
+    })
+  }
+
+  // YENİ: Güvenlik — banlı IP listesini çekme + banı kaldırma.
+  const fetchBannedIps = useCallback(() => {
+    if (!socketRef.current) return
+    setIsLoadingBannedIps(true)
+    socketRef.current.emit('list-banned-ips', { token: sessionTokenRef.current }, (response) => {
+      setIsLoadingBannedIps(false)
+      if (response?.success) setBannedIps(response.bannedIps || [])
+    })
+  }, [])
+
+  useEffect(() => {
+    if (showAppSettings && isAdmin) fetchBannedIps()
+  }, [showAppSettings, isAdmin, fetchBannedIps])
+
+  const unbanIp = (ip) => {
+    socketRef.current?.emit('unban-ip', { token: sessionTokenRef.current, ip })
+  }
+
   // YENİ: Bir mesaja emoji tepkisi ekleme/kaldırma (aç/kapa).
   const handleToggleReaction = (messageId, emoji) => {
     socketRef.current?.emit('toggle-reaction', {
@@ -2498,6 +2596,25 @@ function App() {
             )
           })}
         </nav>
+
+        {/* YENİ: Discord tarzı güncelleme bildirimi — indirilirken küçük
+            bir ilerleme yazısı, indirme bitince tıklanabilir "yeniden
+            başlat" düğmesi. Güncelleme yoksa hiçbir şey görünmüyor. */}
+        {updateReady ? (
+          <button
+            type="button"
+            className="update-ready-button"
+            onClick={() => window.electronAPI?.installUpdate()}
+            title={updateInfo?.version ? `Sürüm ${updateInfo.version}` : undefined}
+          >
+            🆕 Güncelleme hazır — Yeniden başlat
+          </button>
+        ) : (
+          updateInfo &&
+          updateProgress !== null && (
+            <p className="update-progress-text">Güncelleme iniyor… %{updateProgress}</p>
+          )
+        )}
 
         {/* YENİ: kanalların hizasında, sabit (her zaman görünür) genel
             ayarlar düğmesi — sesteki ⚙️'den FARKLI: o sadece o anki ses
@@ -3202,6 +3319,39 @@ function App() {
               </div>
             </section>
 
+            {/* YENİ: Discord tarzı otomatik güncelleme durumu + manuel
+                kontrol düğmesi. Kenar çubuğundaki bildirim otomatik
+                çıkıyor zaten — bu sadece "şu an hangi sürümdeyim, elle
+                kontrol edeyim" için. */}
+            <section className="app-settings-section">
+              <h4>Güncelleme</h4>
+              <p className="app-settings-hint">
+                Şu anki sürüm: {appVersion || '…'}
+                {updateReady && updateInfo?.version && ` — ${updateInfo.version} hazır`}
+              </p>
+              {updateReady ? (
+                <button
+                  type="button"
+                  className="device-settings-test-button"
+                  onClick={() => window.electronAPI?.installUpdate()}
+                >
+                  🆕 Yeniden başlat ve güncelle
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="device-settings-test-button"
+                  onClick={() => {
+                    setUpdateCheckMessage('Kontrol ediliyor…')
+                    window.electronAPI?.checkForUpdates()
+                  }}
+                >
+                  🔄 Güncellemeleri kontrol et
+                </button>
+              )}
+              {updateCheckMessage && <p className="app-settings-hint">{updateCheckMessage}</p>}
+            </section>
+
             {/* YENİ: Alganis rolü için üye/rol yönetimi — sadece admin
                 görüyor. Kayıtlı TÜM kullanıcılar (hiç çevrimiçi olmasalar
                 bile) listelenip rol eklenip/çıkarılabiliyor. */}
@@ -3218,7 +3368,21 @@ function App() {
                 <div className="user-management-list">
                   {allUsers.map((u) => (
                     <div key={u.username} className="user-management-row">
-                      <span className="user-management-name">{u.username}</span>
+                      <span className="user-management-name">
+                        {u.username}
+                        {/* YENİ: 5 yanlış şifreden sonra otomatik kilitlenen
+                            hesapları burada görüp erken açabilesin diye. */}
+                        {u.isLoginLocked && (
+                          <button
+                            type="button"
+                            className="lock-badge"
+                            onClick={() => unlockUserLogin(u.username)}
+                            title="Hesap kilitli (çok fazla yanlış şifre) — açmak için tıkla"
+                          >
+                            🔒 Kilidi aç
+                          </button>
+                        )}
+                      </span>
                       <div className="user-management-roles">
                         {u.roles.map((role) => (
                           <span key={role} className="role-chip">
@@ -3256,6 +3420,66 @@ function App() {
                 </div>
               </section>
             )}
+
+            {/* YENİ: kayıt ekranına saldırı niteliğinde deneme yapıp
+                kalıcı banlanan IP'ler burada — yanlışlıkla banlanan biri
+                (ör. bir arkadaş) varsa buradan banı kaldırabilirsin. */}
+            {isAdmin && (
+              <section className="app-settings-section">
+                <h4>Güvenlik</h4>
+                <p className="app-settings-hint">
+                  Kayıt ekranında çok fazla yanlış davet kodu deneyen, kalıcı banlanmış IP'ler.
+                </p>
+                {isLoadingBannedIps && <p className="app-settings-hint">Yükleniyor…</p>}
+                {bannedIps.length === 0 && !isLoadingBannedIps && (
+                  <p className="app-settings-hint">Banlı IP yok.</p>
+                )}
+                <div className="user-management-list">
+                  {bannedIps.map((b) => (
+                    <div key={b.ip} className="user-management-row">
+                      <span className="user-management-name">{b.ip}</span>
+                      <p className="app-settings-hint">
+                        {b.reason} — {b.attemptCount} deneme
+                      </p>
+                      <button
+                        type="button"
+                        className="device-settings-test-button"
+                        onClick={() => unbanIp(b.ip)}
+                      >
+                        Banı kaldır
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* YENİ: bir IP kalıcı banlandığında (Alganis şu an bağlıysa) çıkan
+          anlık uyarı — "kim banlandı" bilgisi net görünsün diye. */}
+      {securityAlert && (
+        <div className="security-alert-backdrop" onClick={() => setSecurityAlert(null)}>
+          <div className="security-alert-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>🚨 Güvenlik uyarısı</h3>
+            <p>
+              <strong>{securityAlert.ip}</strong> adresi kalıcı olarak banlandı.
+            </p>
+            <p className="app-settings-hint">
+              Sebep: {securityAlert.reason} ({securityAlert.attemptCount} deneme)
+            </p>
+            <p className="app-settings-hint">
+              Bu bir arkadaşın yanlışlıkla tetiklediği bir şeyse, Ayarlar &gt; Güvenlik'ten banı
+              kaldırabilirsin.
+            </p>
+            <button
+              type="button"
+              className="device-settings-test-button"
+              onClick={() => setSecurityAlert(null)}
+            >
+              Tamam
+            </button>
           </div>
         </div>
       )}
