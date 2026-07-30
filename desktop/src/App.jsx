@@ -113,7 +113,10 @@ function renderMessageTextWithMentions(text, myUsername) {
   const parts = text.split(/(@[\wÇĞİÖŞÜçğıöşü]+)/g)
   return parts.map((part, i) => {
     if (part.startsWith('@')) {
-      const isMe = myUsername && part.slice(1).toLowerCase() === myUsername.toLowerCase()
+      // YENİ: "@all" herkese yönelik özel bir etiket — kendi adın gibi
+      // vurgulanıyor, çünkü bu mesaj SANA (ve herkese) yönelik.
+      const isAll = part.toLowerCase() === '@all'
+      const isMe = isAll || (myUsername && part.slice(1).toLowerCase() === myUsername.toLowerCase())
       return (
         <span key={i} className={'mention' + (isMe ? ' mention--me' : '')}>
           {part}
@@ -384,6 +387,13 @@ function App() {
   // panel olarak kurduk (sesteki cihaz ayarlarından bağımsız).
   const [showAppSettings, setShowAppSettings] = useState(false)
 
+  // YENİ: Alganis rolü için uygulama içi üye/rol yönetimi — Ayarlar
+  // panelinin bir bölümü, sadece isAdmin true iken görünüyor.
+  const [allUsers, setAllUsers] = useState([])
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
+  const [userManagementError, setUserManagementError] = useState(null)
+  const [roleInputByUser, setRoleInputByUser] = useState({}) // username -> yazılmakta olan yeni rol
+
   // --- Kişisel hesap girişi ---
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -392,6 +402,21 @@ function App() {
   const [loginError, setLoginError] = useState(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const displayName = username
+
+  // YENİ: Davet kodlu kayıt — giriş ekranında "Kayıt ol" moduna
+  // geçilebiliyor. Kullanıcı adı/şifre alanları login ile PAYLAŞILIYOR,
+  // sadece davet kodu ekstra.
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'register'
+  const [inviteCode, setInviteCode] = useState('')
+  const [isRegistering, setIsRegistering] = useState(false)
+  const [registerError, setRegisterError] = useState(null)
+  const [registerSuccessMessage, setRegisterSuccessMessage] = useState(null)
+
+  // YENİ: kendi rollerim — sadece arayüzde admin panelini gösterip
+  // göstermemeye karar vermek için. Gerçek yetki kontrolü HER ZAMAN
+  // sunucuda taze bir DB okumasıyla tekrar yapılıyor.
+  const [myRoles, setMyRoles] = useState([])
+  const isAdmin = myRoles.includes('Alganis')
 
   // YENİ: Profil fotoğrafı — girişte sunucudan gelir, ayarlardan
   // değiştirilince 'avatar-saved' ile güncellenir.
@@ -448,6 +473,7 @@ function App() {
   const [ephemeralPhotos, setEphemeralPhotos] = useState([])
   const [isSendingPhoto, setIsSendingPhoto] = useState(false)
   const photoFileInputRef = useRef(null)
+  const chatInputRef = useRef(null)
   const avatarFileInputRef = useRef(null)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
@@ -476,7 +502,6 @@ function App() {
   const [selectedAudioOutput, setSelectedAudioOutput] = useState(
     () => window.localStorage?.getItem('audioOutputId') || ''
   )
-  const [showDeviceSettings, setShowDeviceSettings] = useState(false)
   const [outputDeviceError, setOutputDeviceError] = useState(null)
   // AudioContext bir REF içinde yaşıyor (bkz. audioContextRef, aşağıda) —
   // yani oluşturulduğu an React bunu "state değişti" diye algılamıyor.
@@ -643,18 +668,6 @@ function App() {
     return () => window.removeEventListener('click', closeIt)
   }, [volumePopup])
 
-  // DÜZELTME: ses cihazı ayarları paneli küçük yerel kamera kutucuğunun
-  // İÇİNDE render ediliyordu (o kutucuğun sabit/küçük boyutuyla sıkışıp
-  // "iç içe" görünüyordu) — artık CSS ile position:fixed bir kart olarak
-  // çalışıyor (bkz. App.css .device-settings-panel), bu yüzden dışarı
-  // tıklayınca kapanması için de diğer popup'larla aynı deseni kullanıyoruz.
-  useEffect(() => {
-    if (!showDeviceSettings) return
-    const closeIt = () => setShowDeviceSettings(false)
-    window.addEventListener('click', closeIt)
-    return () => window.removeEventListener('click', closeIt)
-  }, [showDeviceSettings])
-
   const audioContextRef = useRef(null)
   // DÜZELTME: setSinkId()/resume() birer PROMISE — context'i kurar kurmaz
   // grafiğe (source->gain->destination) düğüm bağlamaya başlarsak, bu
@@ -789,8 +802,8 @@ function App() {
 
   // Panel kapanırken ya da bileşen kaldırılırken testi arkada bırakma.
   useEffect(() => {
-    if (!showDeviceSettings) stopMicTest()
-  }, [showDeviceSettings, stopMicTest])
+    if (!showAppSettings) stopMicTest()
+  }, [showAppSettings, stopMicTest])
   useEffect(() => () => micTestCleanupRef.current?.(), [])
 
   // YENİ: Sağırlaştır — Discord'daki gibi, herkesin sesini tek tuşla
@@ -940,11 +953,22 @@ function App() {
         if (pc) {
           try {
             const stats = await pc.getStats()
+            const candidateTypes = new Map() // candidate id -> type (local-candidate raporlarından)
+            stats.forEach((report) => {
+              if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
+                candidateTypes.set(report.id, report.candidateType)
+              }
+            })
             stats.forEach((report) => {
               if (report.type === 'candidate-pair' && report.state === 'succeeded') {
                 if (typeof report.currentRoundTripTime === 'number') {
                   updates[peerSocketId] = Math.round(report.currentRoundTripTime * 1000)
                 }
+                // YENİ (teşhis): AKTİF bağlantı gerçekten TURN röle mi
+                // kullanıyor, yoksa doğrudan mı (host/srflx) kuruldu?
+                console.log(
+                  `[ICE seçilen yol] ${peerSocketId} yerel: ${candidateTypes.get(report.localCandidateId)}, karşı: ${candidateTypes.get(report.remoteCandidateId)}`
+                )
               }
               // YENİ (teşhis): ses verisi GERÇEKTEN gidiyor/geliyor mu?
               if (report.type === 'outbound-rtp' && report.kind === 'audio') {
@@ -1125,6 +1149,14 @@ function App() {
       }
       pc.onicecandidate = (event) => {
         if (event.candidate && socketRef.current) {
+          // YENİ (teşhis): toplanan her adayın TÜRünü (host/srflx/relay)
+          // logluyoruz — "relay" hiç görünmüyorsa TURN sunucusuna hiç
+          // ulaşılamıyor demektir (yanlış URL, kapalı port, geçersiz
+          // kimlik bilgisi); "relay" görünüyor ama bağlantı yine de
+          // kurulamıyorsa sorun başka bir yerde.
+          console.log(
+            `[ICE aday] ${peerSocketId}/${connectionType} tür: ${event.candidate.type}, protokol: ${event.candidate.protocol}`
+          )
           socketRef.current.emit('signal', {
             to: peerSocketId,
             data: { type: 'ice-candidate', candidate: event.candidate, connectionType },
@@ -1133,6 +1165,15 @@ function App() {
       }
       pc.onconnectionstatechange = () => {
         console.log(`[WebRTC ${peerSocketId}/${connectionType}] durum: ${pc.connectionState}`)
+      }
+      // YENİ (teşhis): connectionState DTLS+ICE'yi birlikte özetliyor —
+      // sadece ICE'nin kendisinin (NAT geçişi) başarılı olup olmadığını
+      // ayrı görmek için iceConnectionState'i de ayrıca logluyoruz.
+      // "failed" görürsen bu, TURN gerekiyordu ama kullanılamadı demektir.
+      pc.oniceconnectionstatechange = () => {
+        console.log(
+          `[ICE bağlantı durumu] ${peerSocketId}/${connectionType}: ${pc.iceConnectionState}`
+        )
       }
       pc.onnegotiationneeded = async () => {
         if (pc.makingOffer) return
@@ -1416,8 +1457,12 @@ function App() {
         // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
         // aynı anda çalmıyor.
         const isOwnMessage = message.username === displayName
+        // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
+        // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
+        // kişiye değil.
         const isMention =
-          displayName && message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`)
+          (displayName && message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`)) ||
+          message.text?.toLowerCase().includes('@all')
         if (!isOwnMessage) {
           if (isMention && document.hidden) {
             playMentionSound()
@@ -1585,6 +1630,14 @@ function App() {
       socket.on('avatar-saved', ({ avatarData }) => {
         setMyAvatar(avatarData || null)
         setIsUploadingAvatar(false)
+      })
+
+      // YENİ: Alganis rolü bir kullanıcının rollerini ekleyip/çıkarınca,
+      // Üye Yönetimi listesindeki o satırı yerel olarak da güncelle.
+      socket.on('user-role-updated', ({ username: targetUsername, roles }) => {
+        setAllUsers((prev) =>
+          prev.map((u) => (u.username === targetUsername ? { ...u, roles } : u))
+        )
       })
     },
     [
@@ -1858,8 +1911,23 @@ function App() {
           if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
             setIceServers(response.iceServers)
           }
+          // YENİ (teşhis): sunucudan GERÇEKTEN hangi ICE sunucularının
+          // geldiğini konsola basıyoruz — TURN sadece STUN'ın yanına bir
+          // satır daha eklenmiş mi (ExpressTurn vb. doğru okunmuş mu),
+          // yoksa sunucu ortam değişkenleri (TURN_URL/USERNAME/CREDENTIAL)
+          // ayarlanmamış olduğu için sessizce sadece STUN mu geldi — bunu
+          // buradan kesin görebiliriz.
+          console.log('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
+
           setChannels(Array.isArray(response.channels) ? response.channels : [])
           setMyAvatar(response.avatarData || null)
+          // YENİ (teşhis): sunucudan GERÇEKTEN hangi rollerin geldiğini
+          // konsola basıyoruz — "Üye Yönetimi" bölümü isAdmin (roles
+          // içinde "Alganis" var mı) kontrolüne bağlı, sorunun DB'de mi
+          // yoksa istemcinin bunu okuma/gösterme tarafında mı olduğunu
+          // buradan ayırt edebiliriz.
+          console.log('[giriş] sunucudan gelen roller:', response.roles)
+          setMyRoles(Array.isArray(response.roles) ? response.roles : [])
           setLoggedIn(true)
         } else {
           setLoginError(response?.message || 'Giriş başarısız.')
@@ -1869,6 +1937,42 @@ function App() {
     tempSocket.on('connect_error', () => {
       setIsLoggingIn(false)
       setLoginError('Sunucuya bağlanılamadı.')
+      tempSocket.disconnect()
+    })
+  }
+
+  // YENİ: Kayıt ol — davet kodu doğruysa hesap oluşur, sonra kullanıcı
+  // normal giriş formuna dönüp giriş yapar (otomatik giriş yapmıyoruz,
+  // şifresini bir daha yazıp doğrulaması daha güvenli bir alışkanlık).
+  const handleRegister = (e) => {
+    e.preventDefault()
+    if (!username.trim() || !password || !inviteCode.trim()) return
+    setIsRegistering(true)
+    setRegisterError(null)
+    setRegisterSuccessMessage(null)
+
+    const tempSocket = io(SERVER_URL)
+    tempSocket.on('connect', () => {
+      tempSocket.emit(
+        'register',
+        { username: username.trim(), password, inviteCode: inviteCode.trim() },
+        (response) => {
+          tempSocket.disconnect()
+          setIsRegistering(false)
+          if (response?.success) {
+            setAuthMode('login')
+            setPassword('')
+            setInviteCode('')
+            setRegisterSuccessMessage('Kayıt başarılı! Şimdi giriş yapabilirsin.')
+          } else {
+            setRegisterError(response?.message || 'Kayıt başarısız.')
+          }
+        }
+      )
+    })
+    tempSocket.on('connect_error', () => {
+      setIsRegistering(false)
+      setRegisterError('Sunucuya bağlanılamadı.')
       tempSocket.disconnect()
     })
   }
@@ -1932,6 +2036,28 @@ function App() {
       isTypingRef.current = false
       socketRef.current?.emit('typing-stop', { token: sessionTokenRef.current })
     }, 3000)
+  }
+
+  // YENİ: @ yazarken üye önerisi. NOT: basit tutmak için imlecin metnin
+  // TAM SONUNDA olduğunu varsayıyor (metnin ortasına @ eklemeyi
+  // desteklemiyor) — en yaygın kullanım şekli olan "mesajın sonuna
+  // birini etiketle" senaryosunu karşılıyor.
+  const mentionRegex = /(^|\s)@(\w*)$/i
+  const mentionMatch = chatInput.match(mentionRegex)
+  const mentionQuery = mentionMatch ? mentionMatch[2].toLowerCase() : null
+  const mentionCandidates =
+    mentionQuery === null
+      ? []
+      : [
+          { username: 'all', label: '@all — herkese' },
+          ...onlineMembers
+            .filter((m) => m.username !== displayName)
+            .map((m) => ({ username: m.username, label: `@${m.username}` })),
+        ].filter((c) => c.username.toLowerCase().startsWith(mentionQuery))
+
+  const insertMention = (targetUsername) => {
+    setChatInput((prev) => prev.replace(mentionRegex, (_match, leading) => `${leading}@${targetUsername} `))
+    chatInputRef.current?.focus()
   }
 
   // YENİ: Fotoğraf gönderme — dosya seçme VE Ctrl+V yapıştırma, ikisi de
@@ -2027,6 +2153,49 @@ function App() {
     const file = e.target.files?.[0]
     e.target.value = ''
     uploadAvatar(file)
+  }
+
+  // YENİ: Alganis rolü için üye/rol yönetimi — Ayarlar panelindeki
+  // "Üye Yönetimi" bölümü açıldığında tüm kayıtlı kullanıcıları çekiyoruz.
+  // NOT: burada gösterilmesi sadece arayüz kolaylığı — gerçek yetki
+  // kontrolü sunucuda, her istekte yeniden yapılıyor.
+  const fetchAllUsers = useCallback(() => {
+    if (!socketRef.current) return
+    setIsLoadingUsers(true)
+    setUserManagementError(null)
+    socketRef.current.emit('list-all-users', { token: sessionTokenRef.current }, (response) => {
+      setIsLoadingUsers(false)
+      if (response?.success) {
+        setAllUsers(response.users || [])
+      } else {
+        setUserManagementError(response?.message || 'Kullanıcı listesi alınamadı.')
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (showAppSettings && isAdmin) fetchAllUsers()
+  }, [showAppSettings, isAdmin, fetchAllUsers])
+
+  const addRoleToUser = (targetUsername) => {
+    const role = (roleInputByUser[targetUsername] || '').trim()
+    if (!role || !socketRef.current) return
+    socketRef.current.emit('update-user-role', {
+      token: sessionTokenRef.current,
+      targetUsername,
+      role,
+      action: 'add',
+    })
+    setRoleInputByUser((prev) => ({ ...prev, [targetUsername]: '' }))
+  }
+
+  const removeRoleFromUser = (targetUsername, role) => {
+    socketRef.current?.emit('update-user-role', {
+      token: sessionTokenRef.current,
+      targetUsername,
+      role,
+      action: 'remove',
+    })
   }
 
   // YENİ: Bir mesaja emoji tepkisi ekleme/kaldırma (aç/kapa).
@@ -2154,40 +2323,109 @@ function App() {
       <div className="name-entry">
         <img src={logoUrl} alt="Disco" className="app-logo app-logo--login" />
         <h1>Disco</h1>
-        <p>Hesabınla giriş yap:</p>
-        <form onSubmit={handleLogin}>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Kullanıcı adı"
-            autoFocus
-          />
-          <div className="password-field-wrapper">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Şifre"
-            />
-            <button
-              type="button"
-              className="password-toggle-button"
-              onClick={() => setShowPassword((prev) => !prev)}
-              tabIndex={-1}
-              title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
-            >
-              <EyeIcon visible={showPassword} />
-            </button>
-          </div>
-          <button type="submit" disabled={isLoggingIn}>
-            {isLoggingIn ? 'Giriş yapılıyor…' : 'Giriş Yap'}
-          </button>
-        </form>
-        {loginError && <p className="error-text">{loginError}</p>}
-        <p className="name-entry-hint">
-          Hesabın yoksa, grubu kuran kişiden hesap açmasını isteyebilirsin.
-        </p>
+        {authMode === 'login' ? (
+          <>
+            <p>Hesabınla giriş yap:</p>
+            <form onSubmit={handleLogin}>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Kullanıcı adı"
+                autoFocus
+              />
+              <div className="password-field-wrapper">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Şifre"
+                />
+                <button
+                  type="button"
+                  className="password-toggle-button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  tabIndex={-1}
+                  title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                >
+                  <EyeIcon visible={showPassword} />
+                </button>
+              </div>
+              <button type="submit" disabled={isLoggingIn}>
+                {isLoggingIn ? 'Giriş yapılıyor…' : 'Giriş Yap'}
+              </button>
+            </form>
+            {loginError && <p className="error-text">{loginError}</p>}
+            {registerSuccessMessage && <p className="register-success-text">{registerSuccessMessage}</p>}
+            <p className="name-entry-hint">
+              Hesabın yok mu?{' '}
+              <button
+                type="button"
+                className="auth-mode-link"
+                onClick={() => {
+                  setAuthMode('register')
+                  setLoginError(null)
+                  setRegisterSuccessMessage(null)
+                }}
+              >
+                Kayıt ol
+              </button>
+            </p>
+          </>
+        ) : (
+          <>
+            <p>Davet koduyla kayıt ol:</p>
+            <form onSubmit={handleRegister}>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Kullanıcı adı"
+                autoFocus
+              />
+              <div className="password-field-wrapper">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Şifre (en az 6 karakter)"
+                />
+                <button
+                  type="button"
+                  className="password-toggle-button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  tabIndex={-1}
+                  title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                >
+                  <EyeIcon visible={showPassword} />
+                </button>
+              </div>
+              <input
+                type="text"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                placeholder="Davet kodu"
+              />
+              <button type="submit" disabled={isRegistering}>
+                {isRegistering ? 'Kayıt olunuyor…' : 'Kayıt Ol'}
+              </button>
+            </form>
+            {registerError && <p className="error-text">{registerError}</p>}
+            <p className="name-entry-hint">
+              Zaten hesabın var mı?{' '}
+              <button
+                type="button"
+                className="auth-mode-link"
+                onClick={() => {
+                  setAuthMode('login')
+                  setRegisterError(null)
+                }}
+              >
+                Giriş yap
+              </button>
+            </p>
+          </>
+        )}
         <ZoomControl
         zoomLevel={zoomLevel}
         onZoomOut={zoomOut}
@@ -2406,106 +2644,7 @@ function App() {
                       >
                         {isScreenSharing ? '🛑' : '🖥️'}
                       </button>
-                      {/* YENİ: Bas-konuş ayarla/kapat. */}
-                      <button
-                        className={
-                          'control-button' + (pttEnabled ? ' control-button--ptt-active' : '')
-                        }
-                        onClick={handleTogglePtt}
-                        title={
-                          pttEnabled
-                            ? `Bas-konuş: ${formatKeyCode(pttKey)} — kapatmak için tıkla`
-                            : 'Bas-konuş ayarla'
-                        }
-                      >
-                        🎯
-                      </button>
-                      {/* YENİ: Ses giriş/çıkış cihazı seçimi. */}
-                      <button
-                        className="control-button"
-                        onClick={() => setShowDeviceSettings((prev) => !prev)}
-                        title="Ses cihazlarını seç"
-                      >
-                        ⚙️
-                      </button>
                     </div>
-                    {isCapturingPttKey && (
-                      <p className="ptt-capture-hint">Bas-konuş için bir tuşa bas…</p>
-                    )}
-                    {showDeviceSettings && (
-                      <div
-                        className="device-settings-panel"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <label>
-                          🎤 Mikrofon
-                          <select
-                            value={selectedAudioInput}
-                            onChange={(e) => setSelectedAudioInput(e.target.value)}
-                          >
-                            <option value="">Varsayılan</option>
-                            {audioInputs.map((d) => (
-                              <option key={d.deviceId} value={d.deviceId}>
-                                {d.label || 'Mikrofon'}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {/* YENİ: mikrofon testi — konuşunca çubuğun hareket
-                            etmesi lazım, mikrofonun gerçekten ses aldığını
-                            (ve doğru cihazın seçili olduğunu) hoparlöre hiç
-                            bağlanmadan (yankı olmasın diye) doğrulamak için. */}
-                        <div className="mic-test-row">
-                          <button
-                            type="button"
-                            className="device-settings-test-button"
-                            onClick={testMicrophone}
-                          >
-                            {isTestingMic ? '⏹️ Testi durdur' : '🎤 Mikrofonu test et'}
-                          </button>
-                          {isTestingMic && (
-                            <div className="mic-test-meter">
-                              <div
-                                className="mic-test-meter-fill"
-                                style={{ width: `${micTestLevel}%` }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                        <label>
-                          🔊 Hoparlör
-                          <select
-                            value={selectedAudioOutput}
-                            onChange={(e) => setSelectedAudioOutput(e.target.value)}
-                          >
-                            <option value="">Varsayılan</option>
-                            {audioOutputs.map((d) => (
-                              <option key={d.deviceId} value={d.deviceId}>
-                                {d.label || 'Hoparlör'}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {selectedAudioInput && (
-                          <p className="device-settings-hint">
-                            Mikrofon değişikliği bir sonraki mikrofon açışında uygulanır.
-                          </p>
-                        )}
-                        {outputDeviceError && (
-                          <p className="device-settings-error">{outputDeviceError}</p>
-                        )}
-                        {/* YENİ: karşı taraf olmadan, sesli sohbetle AYNI çıkış
-                            yolunu test etmek için — duyuyorsan sorun yönlendirmede
-                            değil, duymuyorsan seçili cihaz/işletim sistemi tarafında. */}
-                        <button
-                          type="button"
-                          className="device-settings-test-button"
-                          onClick={playTestTone}
-                        >
-                          🔊 Test sesi çal
-                        </button>
-                      </div>
-                    )}
                   </div>
 
                   {isScreenSharing && (
@@ -2694,26 +2833,32 @@ function App() {
                                   {emoji}
                                 </button>
                               ))}
+                              {/* YENİ: silme artık kendi mesajınla sınırlı değil —
+                                  Alganis rolündeki hesaplar BAŞKASININ mesajını da
+                                  tek tıkla silebiliyor (moderasyon). Düzenleme
+                                  hâlâ sadece kendi mesajın için. */}
+                              {(item.username === displayName || isAdmin) && (
+                                <span className="reaction-picker-divider" />
+                              )}
                               {item.username === displayName && (
-                                <>
-                                  <span className="reaction-picker-divider" />
-                                  <button
-                                    type="button"
-                                    className="reaction-picker-option"
-                                    title="Düzenle"
-                                    onClick={() => handleStartEdit(item)}
-                                  >
-                                    ✏️
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="reaction-picker-option"
-                                    title="Sil"
-                                    onClick={() => handleDeleteMessage(item.id)}
-                                  >
-                                    🗑️
-                                  </button>
-                                </>
+                                <button
+                                  type="button"
+                                  className="reaction-picker-option"
+                                  title="Düzenle"
+                                  onClick={() => handleStartEdit(item)}
+                                >
+                                  ✏️
+                                </button>
+                              )}
+                              {(item.username === displayName || isAdmin) && (
+                                <button
+                                  type="button"
+                                  className="reaction-picker-option"
+                                  title="Sil"
+                                  onClick={() => handleDeleteMessage(item.id)}
+                                >
+                                  🗑️
+                                </button>
                               )}
                             </div>
                             )}
@@ -2745,14 +2890,36 @@ function App() {
                   >
                     {isSendingPhoto ? '…' : '📷'}
                   </button>
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={handleChatInputChange}
-                    onPaste={handleChatInputPaste}
-                    placeholder="Mesaj yaz… (fotoğraf yapıştırabilirsin)"
-                    maxLength={2000}
-                  />
+                  <div className="chat-input-wrapper">
+                    {/* YENİ: @ yazarken üye önerisi — mesajın sonuna
+                        birini ya da @all'ı kolayca etiketleyebilesin diye. */}
+                    {mentionCandidates.length > 0 && (
+                      <div className="mention-suggestions">
+                        {mentionCandidates.map((c) => (
+                          <button
+                            key={c.username}
+                            type="button"
+                            className="mention-suggestion-option"
+                            onMouseDown={(e) => {
+                              e.preventDefault() // input'un focus'unu kaybetmesin
+                              insertMention(c.username)
+                            }}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      ref={chatInputRef}
+                      type="text"
+                      value={chatInput}
+                      onChange={handleChatInputChange}
+                      onPaste={handleChatInputPaste}
+                      placeholder="Mesaj yaz… (fotoğraf yapıştırabilirsin, @ ile etiketleyebilirsin)"
+                      maxLength={2000}
+                    />
+                  </div>
                   <button type="submit">Gönder</button>
                 </form>
               </div>
@@ -2921,6 +3088,78 @@ function App() {
               </div>
             </section>
             <section className="app-settings-section">
+              <h4>Ses Cihazları</h4>
+              <label>
+                🎤 Mikrofon
+                <select
+                  value={selectedAudioInput}
+                  onChange={(e) => setSelectedAudioInput(e.target.value)}
+                >
+                  <option value="">Varsayılan</option>
+                  {audioInputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || 'Mikrofon'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/* YENİ: mikrofon testi — konuşunca çubuğun hareket etmesi
+                  lazım, mikrofonun gerçekten ses aldığını (ve doğru cihazın
+                  seçili olduğunu) hoparlöre hiç bağlanmadan (yankı olmasın
+                  diye) doğrulamak için. */}
+              <div className="mic-test-row">
+                <button type="button" className="device-settings-test-button" onClick={testMicrophone}>
+                  {isTestingMic ? '⏹️ Testi durdur' : '🎤 Mikrofonu test et'}
+                </button>
+                {isTestingMic && (
+                  <div className="mic-test-meter">
+                    <div className="mic-test-meter-fill" style={{ width: `${micTestLevel}%` }} />
+                  </div>
+                )}
+              </div>
+              <label>
+                🔊 Hoparlör
+                <select
+                  value={selectedAudioOutput}
+                  onChange={(e) => setSelectedAudioOutput(e.target.value)}
+                >
+                  <option value="">Varsayılan</option>
+                  {audioOutputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || 'Hoparlör'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedAudioInput && (
+                <p className="device-settings-hint">
+                  Mikrofon değişikliği bir sonraki mikrofon açışında uygulanır.
+                </p>
+              )}
+              {outputDeviceError && <p className="device-settings-error">{outputDeviceError}</p>}
+              {/* YENİ: karşı taraf olmadan, sesli sohbetle AYNI çıkış yolunu
+                  test etmek için — duyuyorsan sorun yönlendirmede değil,
+                  duymuyorsan seçili cihaz/işletim sistemi tarafında. */}
+              <button type="button" className="device-settings-test-button" onClick={playTestTone}>
+                🔊 Test sesi çal
+              </button>
+            </section>
+
+            <section className="app-settings-section">
+              <h4>Bas Konuş</h4>
+              <p className="app-settings-hint">
+                Etkinleştirirsen mikrofonun sürekli açık olmaz — sadece
+                atadığın tuşa bastığın sürece sesin gider.
+              </p>
+              <button type="button" className="device-settings-test-button" onClick={handleTogglePtt}>
+                {pttEnabled ? `🎯 Bas-konuş: ${formatKeyCode(pttKey)} — kapat` : '🎯 Bas-konuşu etkinleştir'}
+              </button>
+              {isCapturingPttKey && (
+                <p className="app-settings-hint">Bas-konuş için bir tuşa bas…</p>
+              )}
+            </section>
+
+            <section className="app-settings-section">
               <h4>Kişiselleştirme</h4>
               <p className="app-settings-hint">Vurgu rengini seç — tüm arayüz buna göre boyanır.</p>
               <div className="theme-swatch-row">
@@ -2939,6 +3178,61 @@ function App() {
                 ))}
               </div>
             </section>
+
+            {/* YENİ: Alganis rolü için üye/rol yönetimi — sadece admin
+                görüyor. Kayıtlı TÜM kullanıcılar (hiç çevrimiçi olmasalar
+                bile) listelenip rol eklenip/çıkarılabiliyor. */}
+            {isAdmin && (
+              <section className="app-settings-section">
+                <h4>Üye Yönetimi</h4>
+                <p className="app-settings-hint">
+                  Kayıtlı kullanıcılara rol ekle/çıkar (ör. bir kanala erişim vermek için).
+                </p>
+                {isLoadingUsers && <p className="app-settings-hint">Yükleniyor…</p>}
+                {userManagementError && (
+                  <p className="device-settings-error">{userManagementError}</p>
+                )}
+                <div className="user-management-list">
+                  {allUsers.map((u) => (
+                    <div key={u.username} className="user-management-row">
+                      <span className="user-management-name">{u.username}</span>
+                      <div className="user-management-roles">
+                        {u.roles.map((role) => (
+                          <span key={role} className="role-chip">
+                            {role}
+                            <button
+                              type="button"
+                              onClick={() => removeRoleFromUser(u.username, role)}
+                              title="Rolü kaldır"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                        <input
+                          type="text"
+                          className="role-input"
+                          placeholder="+ rol"
+                          value={roleInputByUser[u.username] || ''}
+                          onChange={(e) =>
+                            setRoleInputByUser((prev) => ({
+                              ...prev,
+                              [u.username]: e.target.value,
+                            }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              addRoleToUser(u.username)
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
         </div>
       )}

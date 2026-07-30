@@ -140,6 +140,23 @@ function resolveUsername(token) {
   return sessionTokens.get(token);
 }
 
+// YENİ (güvenlik): "imageData" alanının GERÇEKTEN bir base64 data URI
+// olduğunu ve beyan edilen mimeType ile eşleştiğini doğruluyoruz. Bu
+// kontrol olmadan biri imageData alanına dışarıdan bir URL (ör.
+// "http://saldirgan.com/piksel.png") koyabilir — bunu gören HERKESİN
+// istemcisi (<img src=...>) o adrese sessizce bir istek atar, bu da
+// görüntüleyen kullanıcıların IP adresini/varlık bilgisini saldırgana
+// sızdırır ("takip pikseli"). set-avatar VE send-photo aynı deseni
+// kullandığı için ortak fonksiyon.
+function isValidImageDataUri(imageData, mimeType) {
+  if (typeof imageData !== "string" || typeof mimeType !== "string") return false;
+  if (!mimeType.startsWith("image/")) return false;
+  const match = imageData.match(
+    /^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/]+=*)$/
+  );
+  return !!match && match[1] === mimeType;
+}
+
 function textRoomName(channel) {
   return `text:${channel}`;
 }
@@ -243,9 +260,61 @@ io.on("connection", (socket) => {
         iceServers: buildIceServers(),
         channels: accessibleChannels,
         avatarData: user.avatarData || null,
+        // YENİ: istemcinin "ben admin miyim (Alganis rolü var mı)"
+        // kontrolünü yapıp arayüzü ona göre göstermesi için. Gerçek
+        // YETKİ kontrolü her zaman sunucuda, taze bir DB okumasıyla
+        // tekrar yapılıyor — bu sadece arayüz gösterimi için.
+        roles: userRoles,
       });
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Kayıt olma — davet kodu ile sınırlı. Uygulamada bilerek
+  // herkese açık bir kayıt formu YOKTU (bkz. add-user.js'teki eski not) —
+  // çünkü sunucu adresini bulan HERKES hesap açıp en azından rol
+  // gerektirmeyen kanallara (ör. Genel) girebilirdi. REGISTER_INVITE_CODE
+  // ortam değişkeniyle eşleşmeyen istekler reddediliyor; kodu bilmeyen
+  // biri (arkadaş grubunun dışından biri sunucu adresini bulsa bile)
+  // hesap açamaz.
+  socket.on("register", async ({ username, password, inviteCode }, callback) => {
+    if (
+      typeof username !== "string" ||
+      typeof password !== "string" ||
+      typeof inviteCode !== "string"
+    ) {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    const trimmedUsername = username.trim();
+    if (!/^[\wÇĞİÖŞÜçğıöşü]{3,32}$/.test(trimmedUsername)) {
+      return callback({
+        success: false,
+        message: "Kullanıcı adı 3-32 karakter olmalı, sadece harf/rakam/alt çizgi içerebilir.",
+      });
+    }
+    if (password.length < 6) {
+      return callback({ success: false, message: "Şifre en az 6 karakter olmalı." });
+    }
+    const expectedCode = process.env.REGISTER_INVITE_CODE;
+    if (!expectedCode) {
+      return callback({ success: false, message: "Kayıt şu anda kapalı." });
+    }
+    if (inviteCode !== expectedCode) {
+      return callback({ success: false, message: "Davet kodu hatalı." });
+    }
+
+    try {
+      const existing = await User.findOne({ username: trimmedUsername }).lean();
+      if (existing) {
+        return callback({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
+      }
+      const passwordHash = await bcrypt.hash(password, 10);
+      await User.create({ username: trimmedUsername, passwordHash, roles: [] });
+      callback({ success: true });
+    } catch (err) {
+      console.error("Kayıt sırasında hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
     }
   });
@@ -482,11 +551,15 @@ io.on("connection", (socket) => {
     if (!username || !currentTextRoom || typeof messageId !== "string") return;
 
     try {
-      const result = await Message.deleteOne({
-        _id: messageId,
-        channel: currentTextRoom,
-        username,
-      });
+      // YENİ: Alganis rolündeki hesaplar BAŞKASININ tek bir mesajını da
+      // silebilir (moderasyon, arayüzden tek tıkla) — normal kullanıcılar
+      // hâlâ sadece kendi mesajını silebiliyor.
+      const requester = await User.findOne({ username }).lean();
+      const isAdmin = (requester?.roles || []).includes(ADMIN_ROLE);
+      const filter = isAdmin
+        ? { _id: messageId, channel: currentTextRoom }
+        : { _id: messageId, channel: currentTextRoom, username };
+      const result = await Message.deleteOne(filter);
       if (result.deletedCount > 0) {
         io.to(textRoomName(currentTextRoom)).emit("messages-deleted", { messageIds: [messageId] });
       }
@@ -622,6 +695,73 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ---- YENİ: Uygulama içi rol yönetimi — SADECE ADMIN_ROLE rolüne sahip
+  // hesaplar kullanabilir. Kayıtlı TÜM kullanıcıları (rolleriyle birlikte)
+  // döndürüyor — bir kanalı hiç açmamış olsalar bile (offline üye listesi
+  // sadece o kanalı en az bir kere açmış kişileri gösteriyordu, bu ondan
+  // bağımsız ve tam liste).
+  socket.on("list-all-users", async ({ token }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      const users = await User.find({}).select("username roles").sort({ username: 1 }).lean();
+      callback({
+        success: true,
+        users: users.map((u) => ({ username: u.username, roles: u.roles || [] })),
+      });
+    } catch (err) {
+      console.error("Kullanıcı listesi alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir kullanıcıya rol ekleme/çıkarma — SADECE ADMIN_ROLE. ----
+  socket.on("update-user-role", async ({ token, targetUsername, role, action }) => {
+    const username = resolveUsername(token);
+    if (
+      !username ||
+      typeof targetUsername !== "string" ||
+      typeof role !== "string" ||
+      !role.trim() ||
+      (action !== "add" && action !== "remove")
+    ) {
+      return;
+    }
+    try {
+      const requester = await User.findOne({ username }).lean();
+      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Bu işlemi yapma yetkin yok.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+      const roleTrimmed = role.trim();
+      const update =
+        action === "add" ? { $addToSet: { roles: roleTrimmed } } : { $pull: { roles: roleTrimmed } };
+      const updated = await User.findOneAndUpdate({ username: targetUsername }, update, {
+        new: true,
+      }).lean();
+      if (!updated) {
+        socket.emit("new-message", {
+          username: "Sistem",
+          text: "Kullanıcı bulunamadı.",
+          createdAt: new Date(),
+        });
+        return;
+      }
+      socket.emit("user-role-updated", { username: targetUsername, roles: updated.roles || [] });
+    } catch (err) {
+      console.error("Rol güncellenirken hata:", err.message);
+    }
+  });
+
   // ---- YENİ: Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı
   // gibi: HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara
   // anlık iletiliyor. Kanaldan çıkıp girsen bile bir daha görünmez.
@@ -629,9 +769,9 @@ io.on("connection", (socket) => {
     const username = resolveUsername(token);
     if (!username || !currentTextRoom) return;
 
-    // GÜVENLİK/SAĞLAMLIK: beklenmedik veri tiplerini en başta reddet.
-    if (typeof imageData !== "string" || typeof mimeType !== "string") return;
-    if (!mimeType.startsWith("image/")) return;
+    // GÜVENLİK: set-avatar ile AYNI açık burada da vardı — gerçek bir data
+    // URI mi, beyan edilen mimeType ile eşleşiyor mu diye doğruluyoruz.
+    if (!isValidImageDataUri(imageData, mimeType)) return;
     // ~10 MB'lık bir görsel, base64'e çevrilince kabaca 13.3 milyon
     // karaktere denk geliyor — biraz payla 14 milyonda sınır koyuyoruz.
     if (imageData.length > 14 * 1024 * 1024) return;
@@ -721,8 +861,10 @@ io.on("connection", (socket) => {
   socket.on("set-avatar", async ({ token, imageData, mimeType }) => {
     const username = resolveUsername(token);
     if (!username) return;
-    if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) return;
-    if (typeof imageData !== "string" || imageData.length === 0) return;
+    // GÜVENLİK: gerçekten bir data URI mi, beyan edilen mimeType ile
+    // eşleşiyor mu — yoksa bir dış URL'yi profil fotoğrafı diye kaydedip
+    // onu görecek herkesin istemcisini o adrese sessizce istek attırabilirdi.
+    if (!isValidImageDataUri(imageData, mimeType)) return;
     if (imageData.length > 700_000) {
       // ~700 bin karakter ≈ 500 KB ham veri — küçük bir profil fotoğrafı
       // için fazlasıyla yeterli.

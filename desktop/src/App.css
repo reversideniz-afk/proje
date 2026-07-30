@@ -264,6 +264,76 @@
   flex-shrink: 0;
 }
 
+/* YENİ: Ayarlar panelindeki Üye Yönetimi (rol atama) bölümü. */
+.user-management-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.user-management-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.user-management-row:last-child {
+  border-bottom: none;
+}
+
+.user-management-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-management-roles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 2px 6px 2px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.role-chip button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  line-height: 1;
+}
+
+.role-chip button:hover {
+  color: var(--danger);
+}
+
+.role-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+  width: 90px;
+}
+
 .main-panel {
   flex: 1;
   display: flex;
@@ -755,6 +825,23 @@
   text-align: center;
 }
 
+.auth-mode-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.register-success-text {
+  font-size: 13px;
+  color: var(--online-dot);
+  text-align: center;
+  max-width: 240px;
+}
+
 /* ------------------------------------------------------------
    Ekran paylaşımı / kanal şifresi pencereleri
 ------------------------------------------------------------ */
@@ -956,8 +1043,16 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-.chat-input-form input {
+/* YENİ: @ önerileri kutucuğun tam üstünde konumlanabilsin diye giriş
+   kutusunu bir sarmalayıcıya aldık — eskiden flex:1 doğrudan <input>'daydı,
+   şimdi sarmalayıcı flex öğesi, input onun içinde %100 genişlikte. */
+.chat-input-wrapper {
+  position: relative;
   flex: 1;
+}
+
+.chat-input-form input {
+  width: 100%;
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
@@ -984,6 +1079,39 @@
 
 .chat-input-form button:hover {
   background: var(--accent-hover);
+}
+
+/* YENİ: @ yazarken çıkan üye önerisi listesi. */
+.mention-suggestions {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 220px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  z-index: 60;
+}
+
+.mention-suggestion-option {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mention-suggestion-option:hover {
+  background: var(--bg-panel-hover);
 }
 
 .chat-load-older {
@@ -1097,18 +1225,6 @@
 .control-button:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-.control-button--ptt-active {
-  background: var(--accent);
-  color: #1c1a19;
-}
-
-.ptt-capture-hint {
-  font-size: 12px;
-  color: var(--accent);
-  text-align: center;
-  margin: 4px 0 0 0;
 }
 
 .zoom-control {
@@ -1432,36 +1548,20 @@
   color: #e8776f;
 }
 
-/* DÜZELTME: bu panel DAHA ÖNCE küçük yerel kamera kutucuğunun normal akış
-   içinde bir parçasıydı — o kutucuğun sabit/küçük boyutu içinde sıkışıp
-   video/butonlarla "iç içe" görünüyordu. Artık ekranın sağ altında SABİT
-   (position: fixed) bağımsız bir kart olarak yüzüyor, hangi kutucuğun
-   içinden açıldığından tamamen bağımsız. */
-.device-settings-panel {
-  position: fixed;
-  right: 24px;
-  bottom: 96px;
-  width: 260px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  z-index: 700;
-}
-
-.device-settings-panel label {
+/* DÜZELTME: ses cihazı seçimi ve bas-konuş artık ayrı, uçan bir panelde
+   DEĞİL — kalıcı "Ayarlar" modalının bir bölümü (bkz. .app-settings-modal),
+   o yüzden bu etiket/seçim kutusu stilleri artık .app-settings-section
+   içinde kapsanıyor. */
+.app-settings-section label {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
   color: var(--text-muted);
+  margin-bottom: 8px;
 }
 
-.device-settings-panel select {
+.app-settings-section select {
   background: var(--bg-input);
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
