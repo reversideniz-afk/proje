@@ -872,6 +872,20 @@
   border-color: var(--accent);
 }
 
+.remember-me-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.remember-me-label input[type='checkbox'] {
+  width: auto;
+  cursor: pointer;
+}
+
 .name-entry button {
   padding: 9px 14px;
   border-radius: 6px;

@@ -87,6 +87,19 @@ const bannedIpSchema = new mongoose.Schema({
 });
 const BannedIp = mongoose.models.BannedIp || mongoose.model("BannedIp", bannedIpSchema);
 
+// YENİ: "Beni hatırla" — kullanıcı bunu işaretlerse, giriş belirteci
+// (token) burada KALICI olarak saklanıyor (server.js'teki bellek-içi
+// sessionTokens haritası sunucu yeniden başlayınca sıfırlanır, bu ise
+// kalır). expiresAt geçmişse token artık geçersiz sayılıyor — her
+// başarılı "resume-session" isteğinde süre yenileniyor (kayan pencere).
+const sessionSchema = new mongoose.Schema({
+  token: { type: String, required: true, unique: true },
+  username: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true },
+});
+const Session = mongoose.models.Session || mongoose.model("Session", sessionSchema);
+
 async function connectDB() {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -100,4 +113,4 @@ async function connectDB() {
   return true;
 }
 
-module.exports = { connectDB, User, Message, ChannelMember, BannedIp };
+module.exports = { connectDB, User, Message, ChannelMember, BannedIp, Session };

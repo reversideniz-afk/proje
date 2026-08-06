@@ -449,6 +449,17 @@ function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const displayName = username
 
+  // YENİ: "Beni hatırla" — işaretlenirse giriş belirteci localStorage'da
+  // saklanıp bir dahaki açılışta otomatik oturum devam ettiriliyor (bkz.
+  // aşağıdaki "oturumu geri yükle" efekti). isRestoringSession, uygulama
+  // İLK açıldığında bunu deneyip denemediğimizi (ve hâlâ sürüyorsa)
+  // takip ediyor — böylece kayıtlı bir oturumu olan biri KISA bir an
+  // için bile giriş ekranını görmüyor.
+  const [rememberMe, setRememberMe] = useState(false)
+  const [isRestoringSession, setIsRestoringSession] = useState(
+    () => !!window.localStorage?.getItem('rememberedSessionToken')
+  )
+
   // YENİ: Davet kodlu kayıt — giriş ekranında "Kayıt ol" moduna
   // geçilebiliyor. Kullanıcı adı/şifre alanları login ile PAYLAŞILIYOR,
   // sadece davet kodu ekstra.
@@ -1965,6 +1976,73 @@ function App() {
     else startScreenShare()
   }, [isScreenSharing, startScreenShare, stopScreenShare])
 
+  // YENİ: hem normal giriş hem de "beni hatırla" ile otomatik oturum
+  // devamında (resume-session) AYNI başarı yanıtını uygulamamız
+  // gerekiyor — tekrar tekrar yazmamak için ortak fonksiyon.
+  const applyLoginResponse = useCallback((response) => {
+    setUsername(response.username)
+    setSessionToken(response.token)
+    if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
+      setIceServers(response.iceServers)
+    }
+    console.log('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
+    setChannels(Array.isArray(response.channels) ? response.channels : [])
+    setMyAvatar(response.avatarData || null)
+    console.log('[giriş] sunucudan gelen roller:', response.roles)
+    setMyRoles(Array.isArray(response.roles) ? response.roles : [])
+    setLoggedIn(true)
+  }, [])
+
+  // YENİ: uygulama açılışında, "beni hatırla" ile kaydedilmiş bir
+  // belirteç varsa şifre sormadan otomatik giriş yapmayı dene. Bu, ayrı
+  // bir "geçici" soket üzerinden oluyor (login'deki gibi) — başarılı
+  // olursa normal giriş akışıyla AYNI şekilde devam ediyoruz.
+  useEffect(() => {
+    const storedToken = window.localStorage?.getItem('rememberedSessionToken')
+    if (!storedToken) return
+
+    const tempSocket = io(SERVER_URL)
+    tempSocket.on('connect', () => {
+      tempSocket.emit('resume-session', { token: storedToken }, (response) => {
+        tempSocket.disconnect()
+        setIsRestoringSession(false)
+        if (response?.success) {
+          setRememberMe(true)
+          applyLoginResponse(response)
+        } else {
+          // Belirteç artık geçersiz (süresi dolmuş, ya da çıkış yapılmış) —
+          // bir daha denemeyelim diye temizliyoruz.
+          window.localStorage?.removeItem('rememberedSessionToken')
+        }
+      })
+    })
+    tempSocket.on('connect_error', () => {
+      // NOT: localStorage'ı SİLMİYORUZ — sadece o an internete/sunucuya
+      // erişilemiyor olabilir, bir dahaki açılışta tekrar denenir.
+      setIsRestoringSession(false)
+      tempSocket.disconnect()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // YENİ: Çıkış yap — hesaptan tamamen çıkar (kanaldan ayrılmaktan
+  // FARKLI), "beni hatırla" kaydını da temizler ki bir dahaki açılışta
+  // otomatik girmesin.
+  const handleLogout = () => {
+    socketRef.current?.emit('logout', { token: sessionTokenRef.current })
+    leaveChannel()
+    window.localStorage?.removeItem('rememberedSessionToken')
+    setLoggedIn(false)
+    setUsername('')
+    setPassword('')
+    setSessionToken(null)
+    setChannels([])
+    setMyAvatar(null)
+    setMyRoles([])
+    setRememberMe(false)
+    setShowAppSettings(false)
+  }
+
   const handleLogin = (e) => {
     e.preventDefault()
     if (!username.trim() || !password) return
@@ -1973,37 +2051,24 @@ function App() {
 
     const tempSocket = io(SERVER_URL)
     tempSocket.on('connect', () => {
-      tempSocket.emit('login', { username: username.trim(), password }, (response) => {
-        tempSocket.disconnect()
-        setIsLoggingIn(false)
-        if (response?.success) {
-          setUsername(response.username)
-          setSessionToken(response.token)
-          if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
-            setIceServers(response.iceServers)
+      tempSocket.emit(
+        'login',
+        { username: username.trim(), password, rememberMe },
+        (response) => {
+          tempSocket.disconnect()
+          setIsLoggingIn(false)
+          if (response?.success) {
+            // YENİ: "beni hatırla" işaretliyse, belirteci kalıcı olarak
+            // sakla — bir dahaki açılışta şifre sormadan otomatik girer.
+            if (rememberMe) {
+              window.localStorage?.setItem('rememberedSessionToken', response.token)
+            }
+            applyLoginResponse(response)
+          } else {
+            setLoginError(response?.message || 'Giriş başarısız.')
           }
-          // YENİ (teşhis): sunucudan GERÇEKTEN hangi ICE sunucularının
-          // geldiğini konsola basıyoruz — TURN sadece STUN'ın yanına bir
-          // satır daha eklenmiş mi (ExpressTurn vb. doğru okunmuş mu),
-          // yoksa sunucu ortam değişkenleri (TURN_URL/USERNAME/CREDENTIAL)
-          // ayarlanmamış olduğu için sessizce sadece STUN mu geldi — bunu
-          // buradan kesin görebiliriz.
-          console.log('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
-
-          setChannels(Array.isArray(response.channels) ? response.channels : [])
-          setMyAvatar(response.avatarData || null)
-          // YENİ (teşhis): sunucudan GERÇEKTEN hangi rollerin geldiğini
-          // konsola basıyoruz — "Üye Yönetimi" bölümü isAdmin (roles
-          // içinde "Alganis" var mı) kontrolüne bağlı, sorunun DB'de mi
-          // yoksa istemcinin bunu okuma/gösterme tarafında mı olduğunu
-          // buradan ayırt edebiliriz.
-          console.log('[giriş] sunucudan gelen roller:', response.roles)
-          setMyRoles(Array.isArray(response.roles) ? response.roles : [])
-          setLoggedIn(true)
-        } else {
-          setLoginError(response?.message || 'Giriş başarısız.')
         }
-      })
+      )
     })
     tempSocket.on('connect_error', () => {
       setIsLoggingIn(false)
@@ -2439,6 +2504,20 @@ function App() {
     )
   }
 
+  // YENİ: "beni hatırla" ile kaydedilmiş bir oturum varsa, onu deneme
+  // sonuçlanana kadar giriş formunu HİÇ göstermiyoruz — yoksa her
+  // açılışta bir anlığına giriş ekranı "çakıp" sonra otomatik
+  // giriş yapılmış gibi görünürdü, rahatsız edici bir titreşim olurdu.
+  if (isRestoringSession) {
+    return (
+      <div className="name-entry">
+        <img src={logoUrl} alt="Disco" className="app-logo app-logo--login" />
+        <h1>Disco</h1>
+        <p>Oturum açılıyor…</p>
+      </div>
+    )
+  }
+
   if (!loggedIn) {
     return (
       <div className="name-entry">
@@ -2472,6 +2551,14 @@ function App() {
                   <EyeIcon visible={showPassword} />
                 </button>
               </div>
+              <label className="remember-me-label">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                />
+                Beni hatırla
+              </label>
               <button type="submit" disabled={isLoggingIn}>
                 {isLoggingIn ? 'Giriş yapılıyor…' : 'Giriş Yap'}
               </button>
@@ -3226,6 +3313,10 @@ function App() {
                   )}
                 </div>
               </div>
+              <p className="app-settings-hint">{displayName} olarak bağlısın.</p>
+              <button type="button" className="device-settings-test-button" onClick={handleLogout}>
+                🚪 Çıkış Yap
+              </button>
             </section>
             <section className="app-settings-section">
               <h4>Ses Cihazları</h4>

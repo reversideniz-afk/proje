@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build": "cd ../desktop && npm install && npm run build"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

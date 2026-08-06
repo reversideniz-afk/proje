@@ -15,6 +15,7 @@
 
 const express = require("express");
 const http = require("http");
+const path = require("path");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const bcrypt = require("bcryptjs");
@@ -29,7 +30,7 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("YAKALANMAMIŞ PROMISE HATASI (sunucu ayakta kalıyor):", reason);
 });
-const { connectDB, User, Message, ChannelMember, BannedIp } = require("./db");
+const { connectDB, User, Message, ChannelMember, BannedIp, Session } = require("./db");
 
 // YENİ: "!sil @kullanıcı" komutuyla BAŞKASININ mesajlarını topluca silme
 // yetkisi, sadece rolleri arasında bu ismi taşıyan hesap(lar)a ait. Rol
@@ -46,6 +47,13 @@ const ADMIN_ROLE = "Alganis";
 // bu, veritabanında kalıcı, sunucu yeniden başlasa bile devam eder.
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
+
+// YENİ: "Beni hatırla" — işaretlenirse, giriş belirteci veritabanında
+// (Session, db.js) 30 gün geçerli olacak şekilde saklanıyor. Her
+// başarılı "resume-session" isteğinde süre yeniden 30 güne uzatılıyor
+// (kayan pencere) — düzenli kullanan biri hiç çıkış yapmadığı sürece
+// tekrar şifre girmek zorunda kalmaz.
+const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 // KAYIT: bir IP adresi kısa sürede çok fazla yanlış davet kodu denerse
 // (otomatik/saldırı niteliğinde davranış — bir insanın elle deneyeceği
@@ -179,8 +187,26 @@ if (!process.env.TURN_URL || !process.env.TURN_USERNAME || !process.env.TURN_CRE
   );
 }
 
-app.get("/", (req, res) => {
-  res.send("Sinyalleşme sunucusu çalışıyor. Bu bir web sayfası değil, sadece durum kontrolü.");
+// YENİ: Web/PWA sürümü — masaüstü (Electron) uygulamasıyla AYNI React
+// kaynağından üretilen build'i (desktop/dist), aynı sunucudan servis
+// ediyoruz. Aynı origin'den geldiği için CORS'a ve desktop/index.html
+// içindeki CSP'nin connect-src 'self' kuralına takılmadan Socket.io'ya
+// bağlanabiliyor. "npm run build" desktop/ klasöründe ÖNCEDEN
+// çalıştırılmış olmalı (Render build komutuna eklenmesi gerekiyor).
+const desktopDistPath = path.join(__dirname, "..", "desktop", "dist");
+app.use(express.static(desktopDistPath));
+
+app.get("/status", (req, res) => {
+  res.send("Sinyalleşme sunucusu çalışıyor.");
+});
+
+// SPA yedek yönlendirme: bilinen bir statik dosyaya karşılık gelmeyen
+// her GET isteği index.html'e düşsün (Socket.io kendi /socket.io/
+// yolunu bundan önce, Express'e hiç uğramadan kendi işliyor zaten).
+app.get(/^(?!\/socket\.io\/).*/, (req, res) => {
+  res.sendFile(path.join(desktopDistPath, "index.html"), (err) => {
+    if (err) res.status(404).send("Bulunamadı — önce 'desktop' klasöründe build alınmış mı?");
+  });
 });
 
 // ------------------------------------------------------------
@@ -295,7 +321,7 @@ io.on("connection", (socket) => {
   let currentUsername = null;
 
   // ---- Kişisel hesap girişi ----
-  socket.on("login", async ({ username, password }, callback) => {
+  socket.on("login", async ({ username, password, rememberMe }, callback) => {
     // GÜVENLİK: sadece "boş mu" değil, "gerçekten metin mi" diye de
     // AÇIKÇA kontrol ediyoruz — biri kullanıcı adı yerine özel
     // hazırlanmış bir nesne gönderirse (MongoDB sorgu operatörü gibi),
@@ -341,6 +367,22 @@ io.on("connection", (socket) => {
       const token = crypto.randomUUID();
       sessionTokens.set(token, user.username);
 
+      // YENİ: "Beni hatırla" işaretliyse, bu belirteci veritabanında da
+      // kalıcı olarak saklıyoruz (bkz. resume-session) — uygulama
+      // kapanıp açılsa bile (sunucu yeniden başlasa bile) geçerliliğini
+      // koruyor.
+      if (rememberMe === true) {
+        try {
+          await Session.create({
+            token,
+            username: user.username,
+            expiresAt: new Date(Date.now() + REMEMBER_ME_DURATION_MS),
+          });
+        } catch (err) {
+          console.error("Oturum kaydedilirken hata:", err.message);
+        }
+      }
+
       // YENİ: Artık "üye olunan kanallar" değil, "ROLÜNE göre erişimi
       // olan kanallar" gönderiyoruz — istemci sadece bunları gösterecek,
       // şifre sorma diye bir şey yok artık.
@@ -365,6 +407,65 @@ io.on("connection", (socket) => {
     } catch (err) {
       console.error("Giriş sırasında hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: "Beni hatırla" ile kaydedilmiş bir oturumu devam ettirme —
+  // şifre GEREKMİYOR, çünkü elindeki token zaten önceki başarılı bir
+  // girişin kanıtı. Uygulama açılışında localStorage'da bir token varsa
+  // istemci bunu otomatik dener; başarısız olursa (süresi dolmuş/geçersiz)
+  // normal giriş ekranına döner.
+  socket.on("resume-session", async ({ token }, callback) => {
+    if (typeof callback !== "function") return;
+    if (typeof token !== "string" || !token) return callback({ success: false });
+    try {
+      const session = await Session.findOne({ token });
+      if (!session || session.expiresAt < new Date()) {
+        if (session) await Session.deleteOne({ token });
+        return callback({ success: false });
+      }
+      const user = await User.findOne({ username: session.username });
+      if (!user) {
+        await Session.deleteOne({ token });
+        return callback({ success: false });
+      }
+
+      sessionTokens.set(token, user.username);
+      // Kayan pencere: aktif kullanılan bir "beni hatırla" oturumu,
+      // gerçekten hiç kullanılmadığı sürece süresi dolmasın diye her
+      // devam ettirmede süreyi yeniden 30 güne uzatıyoruz.
+      session.expiresAt = new Date(Date.now() + REMEMBER_ME_DURATION_MS);
+      await session.save();
+
+      const userRoles = user.roles || [];
+      const accessibleChannels = CHANNELS_CONFIG.filter((c) =>
+        userCanAccessChannel(userRoles, c)
+      ).map((c) => c.name);
+
+      callback({
+        success: true,
+        username: user.username,
+        token,
+        iceServers: buildIceServers(),
+        channels: accessibleChannels,
+        avatarData: user.avatarData || null,
+        roles: userRoles,
+      });
+    } catch (err) {
+      console.error("Oturum devam ettirilirken hata:", err.message);
+      callback({ success: false });
+    }
+  });
+
+  // ---- YENİ: Çıkış yapma — hem bellek-içi hem kalıcı (Session)
+  // kaydını temizliyor, "beni hatırla" ile bir daha otomatik girmesin.
+  socket.on("logout", async ({ token }) => {
+    if (typeof token !== "string" || !token) return;
+    sessionTokens.delete(token);
+    try {
+      await Session.deleteOne({ token });
+    } catch (err) {
+      console.error("Oturum silinirken hata:", err.message);
     }
   });
 
