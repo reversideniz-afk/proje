@@ -517,6 +517,13 @@ function App() {
   const [onlineMembers, setOnlineMembers] = useState([])
   const [offlineMembers, setOfflineMembers] = useState([])
 
+  // YENİ: mobil düzen — kanal listesi ve üye listesi dar ekranlarda
+  // yatay kaydırma/yatay çevirme gerektirmesin diye kaydırmalı
+  // çekmecelere (drawer) dönüşüyor, bu ikisi onların açık/kapalı
+  // durumunu tutuyor.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [mobileMembersOpen, setMobileMembersOpen] = useState(false)
+
   // YENİ: sese girmek artık AYRI, isteğe bağlı bir adım.
   const [inVoice, setInVoice] = useState(false)
 
@@ -2656,10 +2663,42 @@ function App() {
 
   return (
     <div className="app-shell">
-      <aside className="channel-sidebar">
+      {/* YENİ: mobilde soldaki kanal çekmecesini açan sabit konumlu
+          düğme — dikey/yatay ekran fark etmeden her zaman erişilebilir
+          (kanal seçili olmasa bile görünür, "no-channel" ekranında da). */}
+      <button
+        type="button"
+        className="mobile-sidebar-toggle"
+        onClick={() => setMobileSidebarOpen(true)}
+        aria-label="Kanalları göster"
+      >
+        ☰
+      </button>
+
+      {/* YENİ: çekmecelerden biri açıkken arkaya karartma — üzerine
+          dokununca ikisini de kapatıyor. */}
+      {(mobileSidebarOpen || mobileMembersOpen) && (
+        <div
+          className="mobile-backdrop"
+          onClick={() => {
+            setMobileSidebarOpen(false)
+            setMobileMembersOpen(false)
+          }}
+        />
+      )}
+
+      <aside className={'channel-sidebar' + (mobileSidebarOpen ? ' channel-sidebar--open' : '')}>
         <div className="sidebar-brand">
           <img src={logoUrl} alt="Disco" className="app-logo app-logo--sidebar" />
           <h1 className="app-title">Disco</h1>
+          <button
+            type="button"
+            className="mobile-drawer-close"
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-label="Kapat"
+          >
+            ✕
+          </button>
         </div>
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
@@ -2672,7 +2711,10 @@ function App() {
                 className={
                   'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
                 }
-                onClick={() => joinChannel(channel)}
+                onClick={() => {
+                  joinChannel(channel)
+                  setMobileSidebarOpen(false)
+                }}
               >
                 # {channel}
                 {/* YENİ: sesin hangi kanalda olduğunu, o kanalı görüntülemesen
@@ -2755,6 +2797,16 @@ function App() {
                   )}
                   <button className="leave-button" onClick={leaveChannel}>
                     Kanaldan Ayrıl
+                  </button>
+                  {/* YENİ: mobilde sağdaki üye listesini açan düğme —
+                      liste artık kaydırmalı bir çekmece. */}
+                  <button
+                    type="button"
+                    className="mobile-members-toggle"
+                    onClick={() => setMobileMembersOpen(true)}
+                    aria-label="Üyeleri göster"
+                  >
+                    👥
                   </button>
                 </div>
               </div>
@@ -3155,7 +3207,19 @@ function App() {
             {/* YENİ: Discord tarzı üye listesi — online (seste olanlar
                 işaretli) + offline (daha önce burada olmuş ama şu an
                 bağlı olmayanlar). */}
-            <aside className="member-list-panel">
+            <aside
+              className={
+                'member-list-panel' + (mobileMembersOpen ? ' member-list-panel--open' : '')
+              }
+            >
+              <button
+                type="button"
+                className="mobile-drawer-close"
+                onClick={() => setMobileMembersOpen(false)}
+                aria-label="Kapat"
+              >
+                ✕
+              </button>
               <div className="member-list-section">
                 <h3>Çevrimiçi — {onlineMembers.length}</h3>
                 <ul>

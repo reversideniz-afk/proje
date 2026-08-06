@@ -80,6 +80,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 
 .app-title {
@@ -93,6 +94,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
 }
 
 .channel-button {
@@ -1703,4 +1707,139 @@
   background: var(--accent);
   border-radius: 4px;
   transition: width 0.08s linear;
+}
+
+/* ------------------------------------------------------------
+   YENİ: Mobil düzen — dar ekranlarda kanal listesi ve üye listesi
+   sabit genişlikli yan panel yerine, kaydırmalı ("drawer") panellere
+   dönüşüyor. Böylece dikey (portre) modda da sohbet ve "Sese Katıl"
+   gibi düğmeler yatay taşma/kaydırma olmadan görünür kalıyor.
+------------------------------------------------------------ */
+
+.mobile-sidebar-toggle,
+.mobile-members-toggle,
+.mobile-drawer-close,
+.mobile-backdrop {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .mobile-sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 70;
+  }
+
+  .mobile-members-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .mobile-drawer-close {
+    display: block;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px;
+  }
+
+  .sidebar-brand .mobile-drawer-close {
+    margin-left: auto;
+  }
+
+  .member-list-panel .mobile-drawer-close {
+    margin-bottom: 8px;
+  }
+
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 75;
+  }
+
+  .main-panel {
+    padding: 16px 12px 12px 12px;
+  }
+
+  .channel-header {
+    padding-left: 40px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .channel-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .channel-view {
+    gap: 0;
+  }
+
+  .channel-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 78vw;
+    max-width: 280px;
+    border-radius: 0;
+    z-index: 80;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .channel-sidebar--open {
+    transform: translateX(0);
+  }
+
+  .member-list-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 78vw;
+    max-width: 280px;
+    border-radius: 0;
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .member-list-panel--open {
+    transform: translateX(0);
+  }
+
+  .video-grid--has-enlarged .video-tile--enlarged {
+    width: 96vw;
+    height: 70vh;
+  }
 }
