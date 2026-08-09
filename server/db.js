@@ -47,7 +47,13 @@ const User = mongoose.models.User || mongoose.model("User", userSchema);
 // YENİ: Sohbet mesajları — kalıcı, hiç silinmiyor. Her kanalın kendi
 // mesaj geçmişi "channel" alanına göre ayrılıyor.
 const messageSchema = new mongoose.Schema({
-  channel: { type: String, required: true, index: true },
+  // ESKİ: kanal ismi düz metin olarak tutuluyordu — çoklu sunucuya
+  // geçişte iki farklı sunucunun aynı isimde kanal açması çakışma
+  // yaratacağından channelId'ye taşındı. Geçiş betiği tamamlanana kadar
+  // (ve bir süre sonrasında da güvenlik payı olarak) ikisi bir arada
+  // duruyor, artık asıl kaynak channelId.
+  channel: { type: String, index: true },
+  channelId: { type: mongoose.Schema.Types.ObjectId, ref: "Channel", index: true },
   username: { type: String, required: true },
   text: { type: String, required: true, maxlength: 2000, trim: true },
   createdAt: { type: Date, default: Date.now },
@@ -67,11 +73,13 @@ const Message = mongoose.models.Message || mongoose.model("Message", messageSche
 // üyeler) gösterebilmek için. Sesle hiç ilgisi yok, sadece "kanalı
 // hiç açmış mı" bilgisini tutuyor.
 const channelMemberSchema = new mongoose.Schema({
-  channel: { type: String, required: true },
+  // ESKİ alan — bkz. messageSchema'daki aynı not, artık asıl kaynak channelId.
+  channel: { type: String },
+  channelId: { type: mongoose.Schema.Types.ObjectId, ref: "Channel" },
   username: { type: String, required: true },
   lastSeenAt: { type: Date, default: Date.now },
 });
-channelMemberSchema.index({ channel: 1, username: 1 }, { unique: true });
+channelMemberSchema.index({ channelId: 1, username: 1 }, { unique: true, sparse: true });
 const ChannelMember =
   mongoose.models.ChannelMember || mongoose.model("ChannelMember", channelMemberSchema);
 
@@ -100,6 +108,46 @@ const sessionSchema = new mongoose.Schema({
 });
 const Session = mongoose.models.Session || mongoose.model("Session", sessionSchema);
 
+// YENİ: Çoklu sunucu desteği — her kullanıcı kendi bağımsız "sunucusunu"
+// (kendi kanalları, kendi üyeleri) açabiliyor, Discord'daki gibi. Sunucuyu
+// açan kişi o sunucunun tek adminidir (ADMIN_ROLE'deki platform admini
+// ayrıca her sunucuya otomatik erişir — bkz. server.js, üyelik satırına
+// ihtiyaç duymadan).
+const serverSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  ownerUsername: { type: String, required: true },
+  // Bu sunucuya katılmak için paylaşılan davet kodu/linki.
+  inviteCode: { type: String, required: true, unique: true },
+  createdAt: { type: Date, default: Date.now },
+});
+const Server = mongoose.models.Server || mongoose.model("Server", serverSchema);
+
+// YENİ: Bir kullanıcının hangi sunucu(lar)a üye olduğunu tutar. Sadece
+// üyelik kaydı olanlar (ya da platform admini) o sunucuyu/kanallarını
+// görebilir.
+const serverMemberSchema = new mongoose.Schema({
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
+  username: { type: String, required: true },
+  isOwner: { type: Boolean, default: false },
+  joinedAt: { type: Date, default: Date.now },
+});
+serverMemberSchema.index({ serverId: 1, username: 1 }, { unique: true });
+const ServerMember =
+  mongoose.models.ServerMember || mongoose.model("ServerMember", serverMemberSchema);
+
+// YENİ: Kanallar artık ortam değişkenlerinden değil, veritabanından
+// geliyor — her kanal bir sunucuya bağlı. allowedRoles boşsa o sunucunun
+// TÜM üyelerine açık demek (env tabanlı eski CHANNEL_N_ROLES ile aynı
+// mantık).
+const channelSchema = new mongoose.Schema({
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
+  name: { type: String, required: true, trim: true },
+  allowedRoles: { type: [String], default: [] },
+  createdAt: { type: Date, default: Date.now },
+});
+channelSchema.index({ serverId: 1, name: 1 }, { unique: true });
+const Channel = mongoose.models.Channel || mongoose.model("Channel", channelSchema);
+
 async function connectDB() {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -113,4 +161,14 @@ async function connectDB() {
   return true;
 }
 
-module.exports = { connectDB, User, Message, ChannelMember, BannedIp, Session };
+module.exports = {
+  connectDB,
+  User,
+  Message,
+  ChannelMember,
+  BannedIp,
+  Session,
+  Server,
+  ServerMember,
+  Channel,
+};

@@ -30,7 +30,20 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("YAKALANMAMIŞ PROMISE HATASI (sunucu ayakta kalıyor):", reason);
 });
-const { connectDB, User, Message, ChannelMember, BannedIp, Session } = require("./db");
+// NOT: db.js'teki Mongoose modeli "Server" olarak dışa aktarılıyor ama bu
+// isim, birkaç satır aşağıda socket.io'nun KENDİ "Server" sınıfıyla
+// çakışıyor — o yüzden burada "ServerModel" adıyla içe aktarıyoruz.
+const {
+  connectDB,
+  User,
+  Message,
+  ChannelMember,
+  BannedIp,
+  Session,
+  Server: ServerModel,
+  ServerMember,
+  Channel,
+} = require("./db");
 
 // YENİ: "!sil @kullanıcı" komutuyla BAŞKASININ mesajlarını topluca silme
 // yetkisi, sadece rolleri arasında bu ismi taşıyan hesap(lar)a ait. Rol
@@ -115,44 +128,59 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
-// YENİ: Kanallar artık ŞİFRE ile değil, ROL (etiket) ile korunuyor —
-// Discord'daki rol mantığı gibi. Render'ın Environment panelinden
-// CHANNEL_1_NAME / CHANNEL_1_ROLES (virgülle ayrılmış, ör.
-// "Yönetici,Arkadaş") şeklinde tanımlanıyor. Bir kanalın CHANNEL_N_ROLES
-// alanı BOŞSA, o kanal HERKESE açık demektir (bilerek — bir kanalı
-// yanlışlıkla erişilemez bırakmamak için).
-function loadChannelsConfig() {
-  const channels = [];
-  for (let i = 1; i <= 20; i++) {
-    const name = process.env[`CHANNEL_${i}_NAME`];
-    if (!name) continue;
-    const rolesRaw = process.env[`CHANNEL_${i}_ROLES`] || "";
-    const allowedRoles = rolesRaw
-      .split(",")
-      .map((r) => r.trim())
-      .filter(Boolean);
-    channels.push({ name, allowedRoles });
-  }
-  return channels;
+// YENİ: ÇOKLU SUNUCU — kanallar artık Render ortam değişkenlerinden değil,
+// veritabanından (Server/ServerMember/Channel, bkz. db.js) geliyor. Her
+// kullanıcı kendi sunucusunu açabiliyor (kişi başı 1 tane, bkz.
+// "create-server"); ADMIN_ROLE ("Alganis") rolündeki platform admini ise
+// HİÇBİR üyelik kaydına ihtiyaç duymadan her sunucuya otomatik erişir.
+function isPlatformAdmin(userRoles) {
+  return (userRoles || []).includes(ADMIN_ROLE);
 }
-const CHANNELS_CONFIG = loadChannelsConfig();
-if (CHANNELS_CONFIG.length === 0) {
-  console.warn(
-    "UYARI: Hiç kanal tanımlanmamış! Render'da CHANNEL_1_NAME, CHANNEL_1_ROLES vb. ekle."
-  );
-}
-CHANNELS_CONFIG.forEach((c) => {
-  if (c.allowedRoles.length === 0) {
-    console.warn(`UYARI: "${c.name}" kanalı için rol kısıtlaması yok — HERKESE açık!`);
+
+// Kullanıcının erişebildiği TÜM sunucular — üye olduğu sunucular, ya da
+// platform adminse (Alganis) hepsi.
+async function getAccessibleServers(username, userRoles) {
+  if (isPlatformAdmin(userRoles)) {
+    return ServerModel.find({}).sort({ createdAt: 1 }).lean();
   }
-});
+  const memberships = await ServerMember.find({ username }).select("serverId").lean();
+  const serverIds = memberships.map((m) => m.serverId);
+  if (serverIds.length === 0) return [];
+  return ServerModel.find({ _id: { $in: serverIds } })
+    .sort({ createdAt: 1 })
+    .lean();
+}
+
+async function canAccessServer(username, userRoles, serverId) {
+  if (isPlatformAdmin(userRoles)) return true;
+  const membership = await ServerMember.findOne({ serverId, username }).lean();
+  return !!membership;
+}
+
+// Bir sunucunun "admini" — o sunucuyu açan kişi (bugünkü tek-global-admin
+// deseninin sunucu bazına birebir yansıması), ya da platform admini.
+async function isServerOwner(username, userRoles, server) {
+  if (isPlatformAdmin(userRoles)) return true;
+  return !!server && server.ownerUsername === username;
+}
+
+// Bir kanalın bağlı olduğu sunucuyu yöneten kişi mi diye bakan, sadece
+// serverId'den yola çıkan kısayol (mesaj moderasyonu için — kanal
+// nesnesini elimizde tutmadan tek sorguyla kontrol edelim diye).
+async function canModerateServer(username, userRoles, serverId) {
+  if (isPlatformAdmin(userRoles)) return true;
+  if (!serverId) return false;
+  const server = await ServerModel.findById(serverId).select("ownerUsername").lean();
+  return server?.ownerUsername === username;
+}
 
 // Bir kullanıcının rollerinden en az biri, kanalın izinli rolleri
-// arasında mı diye bakan ortak yardımcı fonksiyon.
-function userCanAccessChannel(userRoles, channelConfig) {
-  if (!channelConfig) return false;
-  if (channelConfig.allowedRoles.length === 0) return true; // kısıtlama yok = herkese açık
-  return channelConfig.allowedRoles.some((role) => userRoles.includes(role));
+// arasında mı diye bakan ortak yardımcı fonksiyon (env yerine artık
+// veritabanındaki Channel dokümanı üzerinden).
+function userCanAccessChannelDoc(userRoles, channelDoc) {
+  if (!channelDoc) return false;
+  if (!channelDoc.allowedRoles || channelDoc.allowedRoles.length === 0) return true; // kısıtlama yok = herkese açık
+  return channelDoc.allowedRoles.some((role) => userRoles.includes(role));
 }
 
 // Veritabanına bağlan (kişisel hesaplar için).
@@ -270,17 +298,17 @@ function serializeMessage(msg) {
   };
 }
 
-async function buildMemberList(channel) {
-  const online = Object.values(textRooms[channel] || {}).map((u) => ({
+async function buildMemberList(channelId) {
+  const online = Object.values(textRooms[channelId] || {}).map((u) => ({
     username: u.username,
-    inVoice: Object.values(voiceRooms[channel] || {}).some((v) => v.username === u.username),
+    inVoice: Object.values(voiceRooms[channelId] || {}).some((v) => v.username === u.username),
   }));
 
   const onlineUsernames = new Set(online.map((m) => m.username));
 
   let offline = [];
   try {
-    const allMembers = await ChannelMember.find({ channel }).lean();
+    const allMembers = await ChannelMember.find({ channelId }).lean();
     offline = allMembers
       .filter((m) => !onlineUsernames.has(m.username))
       .map((m) => ({ username: m.username, lastSeenAt: m.lastSeenAt }));
@@ -315,6 +343,10 @@ async function buildMemberList(channel) {
 io.on("connection", (socket) => {
   let currentTextRoom = null;
   let currentVoiceRoom = null;
+  // YENİ: şu an içinde bulunulan kanalın bağlı olduğu sunucu — mesaj
+  // moderasyonu yetkisini (bkz. canModerateServer) her seferinde kanaldan
+  // sunucuya geri gitmeden kontrol edebilmek için.
+  let currentServerId = null;
   // YENİ: bu soketin kim olduğunu (join-channel'da belirleniyor) —
   // socketsByUsername kaydını doğru temizleyebilmek (disconnect'te) ve
   // adminlere anlık güvenlik uyarısı gönderebilmek için.
@@ -383,20 +415,23 @@ io.on("connection", (socket) => {
         }
       }
 
-      // YENİ: Artık "üye olunan kanallar" değil, "ROLÜNE göre erişimi
-      // olan kanallar" gönderiyoruz — istemci sadece bunları gösterecek,
-      // şifre sorma diye bir şey yok artık.
+      // YENİ: ÇOKLU SUNUCU — artık tek bir kanal listesi değil, kullanıcının
+      // erişebildiği SUNUCULARIN listesi gönderiliyor. İstemci, aktif
+      // sunucuyu seçtikten sonra "server-channels" ile o sunucunun kanal
+      // listesini ayrıca isteyecek.
       const userRoles = user.roles || [];
-      const accessibleChannels = CHANNELS_CONFIG.filter((c) =>
-        userCanAccessChannel(userRoles, c)
-      ).map((c) => c.name);
+      const myServers = await getAccessibleServers(user.username, userRoles);
 
       callback({
         success: true,
         username: user.username,
         token,
         iceServers: buildIceServers(),
-        channels: accessibleChannels,
+        myServers: myServers.map((s) => ({
+          id: s._id.toString(),
+          name: s.name,
+          isOwner: s.ownerUsername === user.username,
+        })),
         avatarData: user.avatarData || null,
         // YENİ: istemcinin "ben admin miyim (Alganis rolü var mı)"
         // kontrolünü yapıp arayüzü ona göre göstermesi için. Gerçek
@@ -438,16 +473,18 @@ io.on("connection", (socket) => {
       await session.save();
 
       const userRoles = user.roles || [];
-      const accessibleChannels = CHANNELS_CONFIG.filter((c) =>
-        userCanAccessChannel(userRoles, c)
-      ).map((c) => c.name);
+      const myServers = await getAccessibleServers(user.username, userRoles);
 
       callback({
         success: true,
         username: user.username,
         token,
         iceServers: buildIceServers(),
-        channels: accessibleChannels,
+        myServers: myServers.map((s) => ({
+          id: s._id.toString(),
+          name: s.name,
+          isOwner: s.ownerUsername === user.username,
+        })),
         avatarData: user.avatarData || null,
         roles: userRoles,
       });
@@ -562,10 +599,273 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ---- YENİ: Metin kanalına katılma (SES BAĞLANTISI KURMAZ) ----
-  socket.on("join-channel", async ({ roomId, token }) => {
+  // ---- YENİ: Sunucu oluşturma — hesabı olan herkes kişi başı 1 tane
+  // açabilir (spam'e karşı). Sunucuyu açan kişi otomatik olarak o
+  // sunucunun sahibi/tek adminidir.
+  socket.on("create-server", async ({ token, name }, callback) => {
     const username = resolveUsername(token);
-    if (typeof roomId !== "string" || !roomId || !username) {
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 50) {
+      return callback({ success: false, message: "Sunucu adı 1-50 karakter olmalı." });
+    }
+    try {
+      const existingOwned = await ServerModel.findOne({ ownerUsername: username }).lean();
+      if (existingOwned) {
+        return callback({
+          success: false,
+          message: "Zaten bir sunucun var — kişi başı yalnızca 1 sunucu açılabilir.",
+        });
+      }
+      const server = await ServerModel.create({
+        name: name.trim(),
+        ownerUsername: username,
+        inviteCode: crypto.randomBytes(9).toString("base64url"),
+      });
+      await ServerMember.create({ serverId: server._id, username, isOwner: true });
+      callback({
+        success: true,
+        server: {
+          id: server._id.toString(),
+          name: server.name,
+          isOwner: true,
+          inviteCode: server.inviteCode,
+        },
+      });
+    } catch (err) {
+      console.error("Sunucu oluşturulurken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Sunucu silme — sadece sahibi ya da platform admini. ----
+  socket.on("delete-server", async ({ token, serverId }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username || typeof serverId !== "string") {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const server = await ServerModel.findById(serverId).lean();
+      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
+      if (!(await isServerOwner(username, userRoles, server))) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      const channels = await Channel.find({ serverId }).select("_id").lean();
+      const channelIds = channels.map((c) => c._id);
+      await Message.deleteMany({ channelId: { $in: channelIds } });
+      await ChannelMember.deleteMany({ channelId: { $in: channelIds } });
+      await Channel.deleteMany({ serverId });
+      await ServerMember.deleteMany({ serverId });
+      await ServerModel.deleteOne({ _id: serverId });
+      callback({ success: true });
+    } catch (err) {
+      console.error("Sunucu silinirken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucuya davet koduyla katılma — hesap açma davetinden
+  // (REGISTER_INVITE_CODE) TAMAMEN AYRI bir mekanizma: bu, zaten hesabı
+  // olan birinin, arkadaşının sunucusuna katılması için.
+  socket.on("join-server-by-invite", async ({ token, inviteCode }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    if (typeof inviteCode !== "string" || !inviteCode.trim()) {
+      return callback({ success: false, message: "Davet kodu gerekli." });
+    }
+    try {
+      const server = await ServerModel.findOne({ inviteCode: inviteCode.trim() }).lean();
+      if (!server) return callback({ success: false, message: "Geçersiz davet kodu." });
+      const existing = await ServerMember.findOne({ serverId: server._id, username }).lean();
+      if (existing) {
+        return callback({ success: false, message: "Bu sunucuya zaten üyesin." });
+      }
+      await ServerMember.create({ serverId: server._id, username, isOwner: false });
+      callback({
+        success: true,
+        server: {
+          id: server._id.toString(),
+          name: server.name,
+          isOwner: server.ownerUsername === username,
+        },
+      });
+    } catch (err) {
+      console.error("Sunucuya katılırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Kullanıcının erişebildiği sunucuların listesi (login/resume
+  // sırasında zaten gönderiliyor — bu, ör. bir sunucu oluşturduktan/
+  // katıldıktan sonra listeyi anlık tazelemek için). ----
+  socket.on("list-my-servers", async ({ token }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const servers = await getAccessibleServers(username, userRoles);
+      callback({
+        success: true,
+        servers: servers.map((s) => ({
+          id: s._id.toString(),
+          name: s.name,
+          isOwner: s.ownerUsername === username,
+        })),
+      });
+    } catch (err) {
+      console.error("Sunucu listesi alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucunun davet kodunu getirme — sadece sahibi ya da
+  // platform admini görebilir (paylaşılacak link/kod). ----
+  socket.on("get-server-invite", async ({ token, serverId }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username || typeof serverId !== "string") return callback({ success: false });
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const server = await ServerModel.findById(serverId).lean();
+      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
+      if (!(await isServerOwner(username, userRoles, server))) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      callback({ success: true, inviteCode: server.inviteCode });
+    } catch (err) {
+      console.error("Davet kodu alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucunun kanal listesi — aktif sunucu seçildiğinde
+  // istemci bunu ayrıca istiyor (bkz. login/resume-session artık sadece
+  // "myServers" döndürüyor, kanallar değil). ----
+  socket.on("server-channels", async ({ token, serverId }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username || typeof serverId !== "string") {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      if (!(await canAccessServer(username, userRoles, serverId))) {
+        return callback({ success: false, message: "Bu sunucuya erişimin yok." });
+      }
+      const channels = await Channel.find({ serverId }).sort({ createdAt: 1 }).lean();
+      const accessible = channels.filter((c) => userCanAccessChannelDoc(userRoles, c));
+      callback({
+        success: true,
+        channels: accessible.map((c) => ({ id: c._id.toString(), name: c.name })),
+      });
+    } catch (err) {
+      console.error("Sunucu kanalları alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucuya kanal ekleme — sadece sahibi ya da platform
+  // admini. v1'de yeni sunucularda kanal-başına rol kısıtlaması yok
+  // (allowedRoles her zaman boş = sunucunun tüm üyelerine açık).
+  socket.on("create-channel", async ({ token, serverId, name }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
+    if (typeof serverId !== "string" || typeof name !== "string") {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    const trimmedName = name.trim();
+    if (!trimmedName || trimmedName.length > 50) {
+      return callback({ success: false, message: "Kanal adı 1-50 karakter olmalı." });
+    }
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const server = await ServerModel.findById(serverId).lean();
+      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
+      if (!(await isServerOwner(username, userRoles, server))) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [] });
+      callback({ success: true, channel: { id: channel._id.toString(), name: channel.name } });
+    } catch (err) {
+      if (err.code === 11000) {
+        return callback({ success: false, message: "Bu isimde bir kanal zaten var." });
+      }
+      console.error("Kanal oluşturulurken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucunun üye listesi — sadece sahibi ya da platform
+  // admini görebilir (bugünkü platform-geneli "Üye Yönetimi"nden AYRI,
+  // sadece BU sunucuya özel). ----
+  socket.on("list-server-members", async ({ token, serverId }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username || typeof serverId !== "string") return callback({ success: false });
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const server = await ServerModel.findById(serverId).lean();
+      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
+      if (!(await isServerOwner(username, userRoles, server))) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      const members = await ServerMember.find({ serverId }).sort({ joinedAt: 1 }).lean();
+      callback({
+        success: true,
+        members: members.map((m) => ({ username: m.username, isOwner: m.isOwner })),
+      });
+    } catch (err) {
+      console.error("Sunucu üyeleri alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Bir sunucudan üye çıkarma (kick) — sadece sahibi ya da
+  // platform admini; sunucu sahibi kendi kendini çıkaramaz (önce
+  // "Sunucuyu Sil"i kullanmalı). ----
+  socket.on("remove-server-member", async ({ token, serverId, targetUsername }, callback) => {
+    const username = resolveUsername(token);
+    if (typeof callback !== "function") return;
+    if (!username || typeof serverId !== "string" || typeof targetUsername !== "string") {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    try {
+      const requester = await User.findOne({ username }).lean();
+      const userRoles = requester?.roles || [];
+      const server = await ServerModel.findById(serverId).lean();
+      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
+      if (!(await isServerOwner(username, userRoles, server))) {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      if (targetUsername === server.ownerUsername) {
+        return callback({ success: false, message: "Sunucu sahibi çıkarılamaz." });
+      }
+      await ServerMember.deleteOne({ serverId, username: targetUsername });
+      callback({ success: true });
+    } catch (err) {
+      console.error("Üye çıkarılırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- YENİ: Metin kanalına katılma (SES BAĞLANTISI KURMAZ) ----
+  // ÇOKLU SUNUCU: artık kanal ismi değil, hangi SUNUCUdaki hangi KANAL
+  // (ikisi de ObjectId) belirtiliyor — oda/DB anahtarı olarak kanalın
+  // ObjectId'si (channelId) kullanılıyor, isim çakışması riski kalmıyor.
+  socket.on("join-channel", async ({ serverId, channelId, token }) => {
+    const username = resolveUsername(token);
+    if (typeof serverId !== "string" || typeof channelId !== "string" || !username) {
       socket.emit("join-error", "Önce giriş yapman gerekiyor.");
       return;
     }
@@ -580,14 +880,6 @@ io.on("connection", (socket) => {
       socketsByUsername.get(username).add(socket);
     }
 
-    const channelConfig = CHANNELS_CONFIG.find((c) => c.name === roomId);
-    if (!channelConfig) {
-      socket.emit("join-error", "Böyle bir kanal yok.");
-      return;
-    }
-
-    // YENİ: Şifre yerine ROL kontrolü — kullanıcının rollerinden en az
-    // biri, kanalın izinli rolleri arasında olmalı.
     let userRoles = [];
     try {
       const user = await User.findOne({ username }).lean();
@@ -595,10 +887,28 @@ io.on("connection", (socket) => {
     } catch (err) {
       console.error("Kullanıcı rolleri alınırken hata:", err.message);
     }
-    if (!userCanAccessChannel(userRoles, channelConfig)) {
+
+    if (!(await canAccessServer(username, userRoles, serverId))) {
+      socket.emit("join-error", "Bu sunucuya erişimin yok.");
+      return;
+    }
+
+    const channelDoc = await Channel.findOne({ _id: channelId, serverId }).lean();
+    if (!channelDoc) {
+      socket.emit("join-error", "Böyle bir kanal yok.");
+      return;
+    }
+
+    // YENİ: Şifre yerine ROL kontrolü — kullanıcının rollerinden en az
+    // biri, kanalın izinli rolleri arasında olmalı.
+    if (!userCanAccessChannelDoc(userRoles, channelDoc)) {
       socket.emit("join-error", "Bu kanala erişim yetkin yok.");
       return;
     }
+
+    // roomId artık kanalın ObjectId'sinin metin hali — hem Socket.io oda
+    // adı hem de Message/ChannelMember sorgu anahtarı olarak kullanılıyor.
+    const roomId = channelId;
 
     // DÜZELTME: artık istemci sesteyken kanal değiştirdiğinde (sesi
     // koparmadan başka bir kanalın mesajlarını okuyabilmek için) AYNI
@@ -611,6 +921,7 @@ io.on("connection", (socket) => {
       socket.leave(textRoomName(currentTextRoom));
     }
     currentTextRoom = roomId;
+    currentServerId = serverId;
     socket.join(textRoomName(roomId));
     if (!textRooms[roomId]) textRooms[roomId] = {};
     textRooms[roomId][socket.id] = { username };
@@ -619,7 +930,7 @@ io.on("connection", (socket) => {
     // üyeler" listesinde görünebilmek için (kim bu kanalı hiç açmış).
     try {
       await ChannelMember.findOneAndUpdate(
-        { channel: roomId, username },
+        { channelId: roomId, username },
         { lastSeenAt: new Date() },
         { upsert: true }
       );
@@ -627,14 +938,20 @@ io.on("connection", (socket) => {
       console.error("Kanal üyeliği kaydedilirken hata:", err.message);
     }
 
-    // YENİ: Bu kişiyi, ROLÜNE GÖRE ERİŞİMİ OLAN TÜM kanalların "bildirim"
-    // odalarına katıyoruz — böylece o an başka bir kanaldayken bile,
-    // erişimi olan diğer kanallarda yeni mesaj gelirse haberdar olabiliyor.
-    CHANNELS_CONFIG.forEach((c) => {
-      if (userCanAccessChannel(userRoles, c)) {
-        socket.join(`member-notify:${c.name}`);
-      }
-    });
+    // YENİ: Bu kişiyi, ROLÜNE GÖRE ERİŞİMİ OLAN, AYNI SUNUCUDAKİ TÜM
+    // kanalların "bildirim" odalarına katıyoruz — böylece o an başka bir
+    // kanaldayken bile, erişimi olan diğer kanallarda yeni mesaj gelirse
+    // haberdar olabiliyor.
+    try {
+      const serverChannels = await Channel.find({ serverId }).lean();
+      serverChannels.forEach((c) => {
+        if (userCanAccessChannelDoc(userRoles, c)) {
+          socket.join(`member-notify:${c._id}`);
+        }
+      });
+    } catch (err) {
+      console.error("Bildirim odalarına katılırken hata:", err.message);
+    }
 
     // Diğer metin-kanalı üyelerine bildir.
     socket.to(textRoomName(roomId)).emit("member-online", { username });
@@ -646,7 +963,7 @@ io.on("connection", (socket) => {
 
     // Mesaj geçmişi (sadece yeni katılana).
     try {
-      const history = await Message.find({ channel: roomId })
+      const history = await Message.find({ channelId: roomId })
         .sort({ createdAt: -1 })
         .limit(50)
         .lean();
@@ -730,7 +1047,7 @@ io.on("connection", (socket) => {
 
     try {
       const message = await Message.create({
-        channel: currentTextRoom,
+        channelId: currentTextRoom,
         username,
         text: trimmedText,
       });
@@ -747,7 +1064,7 @@ io.on("connection", (socket) => {
       // okunmamış kanal işareti için. Kendisi zaten mesajı gördüğü
       // için göndereni hariç tutuyoruz.
       socket.to(`member-notify:${currentTextRoom}`).emit("channel-activity", {
-        channel: currentTextRoom,
+        channelId: currentTextRoom,
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
@@ -774,7 +1091,7 @@ io.on("connection", (socket) => {
     if (emoji.length > 8) return; // tek bir emoji karakteri için fazlasıyla yeterli
 
     try {
-      const message = await Message.findOne({ _id: messageId, channel: currentTextRoom });
+      const message = await Message.findOne({ _id: messageId, channelId: currentTextRoom });
       if (!message) return;
 
       const existingIndex = message.reactions.findIndex(
@@ -805,14 +1122,16 @@ io.on("connection", (socket) => {
     if (!username || !currentTextRoom || typeof messageId !== "string") return;
 
     try {
-      // YENİ: Alganis rolündeki hesaplar BAŞKASININ tek bir mesajını da
-      // silebilir (moderasyon, arayüzden tek tıkla) — normal kullanıcılar
-      // hâlâ sadece kendi mesajını silebiliyor.
+      // YENİ: bu kanalın bağlı olduğu SUNUCUNUN sahibi (ya da platform
+      // admini) BAŞKASININ tek bir mesajını da silebilir (moderasyon,
+      // arayüzden tek tıkla) — normal kullanıcılar hâlâ sadece kendi
+      // mesajını silebiliyor.
       const requester = await User.findOne({ username }).lean();
-      const isAdmin = (requester?.roles || []).includes(ADMIN_ROLE);
-      const filter = isAdmin
-        ? { _id: messageId, channel: currentTextRoom }
-        : { _id: messageId, channel: currentTextRoom, username };
+      const userRoles = requester?.roles || [];
+      const canModerate = await canModerateServer(username, userRoles, currentServerId);
+      const filter = canModerate
+        ? { _id: messageId, channelId: currentTextRoom }
+        : { _id: messageId, channelId: currentTextRoom, username };
       const result = await Message.deleteOne(filter);
       if (result.deletedCount > 0) {
         io.to(textRoomName(currentTextRoom)).emit("messages-deleted", { messageIds: [messageId] });
@@ -834,7 +1153,7 @@ io.on("connection", (socket) => {
     try {
       const message = await Message.findOne({
         _id: messageId,
-        channel: currentTextRoom,
+        channelId: currentTextRoom,
         username,
       });
       if (!message) return;
@@ -864,7 +1183,7 @@ io.on("connection", (socket) => {
     const cappedCount = Math.min(count, 200); // aşırı büyük bir değere karşı makul bir tavan
 
     try {
-      const toDelete = await Message.find({ channel: currentTextRoom, username })
+      const toDelete = await Message.find({ channelId: currentTextRoom, username })
         .sort({ createdAt: -1 })
         .limit(cappedCount)
         .select("_id")
@@ -914,7 +1233,8 @@ io.on("connection", (socket) => {
 
     try {
       const requester = await User.findOne({ username }).lean();
-      if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
+      const userRoles = requester?.roles || [];
+      if (!(await canModerateServer(username, userRoles, currentServerId))) {
         socket.emit("new-message", {
           username: "Sistem",
           text: "Bu komutu kullanma yetkin yok.",
@@ -923,7 +1243,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const toDelete = await Message.find({ channel: currentTextRoom, username: target })
+      const toDelete = await Message.find({ channelId: currentTextRoom, username: target })
         .sort({ createdAt: -1 })
         .limit(cappedCount)
         .select("_id")
@@ -973,7 +1293,7 @@ io.on("connection", (socket) => {
     try {
       const requester = await User.findOne({ username }).lean();
       const requesterRoles = requester?.roles || [];
-      if (!requesterRoles.includes(ADMIN_ROLE)) {
+      if (!(await canModerateServer(username, requesterRoles, currentServerId))) {
         socket.emit("new-message", {
           username: "Sistem",
           text: "Bu komutu kullanma yetkin yok.",
@@ -982,7 +1302,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const toDelete = await Message.find({ channel: currentTextRoom, username: target })
+      const toDelete = await Message.find({ channelId: currentTextRoom, username: target })
         .select("_id")
         .lean();
       const idsToDelete = toDelete.map((m) => m._id);
@@ -1186,7 +1506,7 @@ io.on("connection", (socket) => {
       createdAt: new Date(),
     });
     socket.to(`member-notify:${currentTextRoom}`).emit("channel-activity", {
-      channel: currentTextRoom,
+      channelId: currentTextRoom,
     });
 
     // Küçük bir nezaket: o an kanalda gönderenden başka kimse yoksa,
@@ -1219,7 +1539,7 @@ io.on("connection", (socket) => {
       return;
     }
     try {
-      const query = { channel: currentTextRoom };
+      const query = { channelId: currentTextRoom };
       if (before) query.createdAt = { $lt: new Date(before) };
       const older = await Message.find(query).sort({ createdAt: -1 }).limit(50).lean();
       if (typeof callback === "function")
@@ -1320,7 +1640,7 @@ io.on("connection", (socket) => {
       if (username) {
         try {
           await ChannelMember.findOneAndUpdate(
-            { channel: roomId, username },
+            { channelId: roomId, username },
             { lastSeenAt: new Date() }
           );
         } catch (err) {

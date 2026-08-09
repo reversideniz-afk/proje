@@ -493,9 +493,30 @@ function App() {
     iceServersRef.current = iceServers
   }, [iceServers])
 
-  // YENİ: kanal listesi artık sunucudan geliyor (koda gömülü değil) —
-  // ve artık SADECE erişimi olan kanallar geliyor (rol tabanlı erişim).
+  // YENİ: ÇOKLU SUNUCU — kanal listesi artık AKTİF SUNUCUYA bağlı (bkz.
+  // fetchServerChannels), her öğe {id, name} — id, oda/DB anahtarı olarak
+  // kullanılan kanalın ObjectId'si. myServers, giriş yapan kullanıcının
+  // erişebildiği sunucuların listesi ({id, name, isOwner}).
   const [channels, setChannels] = useState([])
+  const [myServers, setMyServers] = useState([])
+  const [activeServerId, setActiveServerId] = useState(
+    () => window.localStorage?.getItem('activeServerId') || null
+  )
+  const activeServerIdRef = useRef(activeServerId)
+  useEffect(() => {
+    activeServerIdRef.current = activeServerId
+  }, [activeServerId])
+  // YENİ: sunucu oluştur/katıl modalı.
+  const [showServerModal, setShowServerModal] = useState(false)
+  const [serverModalTab, setServerModalTab] = useState('create') // 'create' | 'join'
+  const [newServerName, setNewServerName] = useState('')
+  const [joinInviteCode, setJoinInviteCode] = useState('')
+  const [serverModalError, setServerModalError] = useState(null)
+  const [serverModalBusy, setServerModalBusy] = useState(false)
+  // YENİ: sunucu davet kodu popover'ı (sadece sahibiyken açılabiliyor).
+  const [serverInvitePopover, setServerInvitePopover] = useState(null) // { code } | null
+  // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
+  const [serverMembers, setServerMembers] = useState([])
 
   // --- Kanal (metin) durumu ---
   const [activeChannel, setActiveChannel] = useState(null)
@@ -1428,8 +1449,10 @@ function App() {
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
   // YENİ: Kanala (METİN) katılma — ses bağlantısı burada HİÇ kurulmuyor.
+  // ÇOKLU SUNUCU: channelId artık kanalın ObjectId'si (ismi değil);
+  // hangi sunucuya ait olduğu activeServerIdRef'ten alınıyor.
   const joinChannel = useCallback(
-    (channelName) => {
+    (channelId) => {
       // DÜZELTME: sesteyken başka bir kanala TIKLAYIP sadece mesajlarına
       // göz atmak istiyorsan, soketi/mikrofonu/eş bağlantılarını YIKMAMIZ
       // gerekmiyor — sadece HANGİ kanalın mesajlarını izlediğimizi
@@ -1437,19 +1460,20 @@ function App() {
       // gönderilir). Ses bağlantısı olduğu kanalda (voiceChannel) kalmaya
       // devam eder. Sunucu tarafında da metin/ses odaları zaten ayrı
       // (bkz. server.js — currentTextRoom / currentVoiceRoom).
-      if (inVoice && socketRef.current?.connected && channelName !== activeChannelRef.current) {
+      if (inVoice && socketRef.current?.connected && channelId !== activeChannelRef.current) {
         setMessages([])
         setEphemeralPhotos([])
         setTypingUsers([])
-        setUnreadChannels((prev) => prev.filter((c) => c !== channelName))
+        setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
         setHasMoreHistory(true)
         setOnlineMembers([])
         setOfflineMembers([])
         setConnectionError(null)
         setEnlargedTile(null)
-        setActiveChannel(channelName)
+        setActiveChannel(channelId)
         socketRef.current.emit('join-channel', {
-          roomId: channelName,
+          serverId: activeServerIdRef.current,
+          channelId,
           token: sessionTokenRef.current,
         })
         return
@@ -1462,7 +1486,7 @@ function App() {
       setMessages([])
       setEphemeralPhotos([])
       setTypingUsers([])
-      setUnreadChannels((prev) => prev.filter((c) => c !== channelName))
+      setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
       setHasMoreHistory(true)
       setOnlineMembers([])
       setOfflineMembers([])
@@ -1475,7 +1499,7 @@ function App() {
       setInVoice(false)
       setVoiceChannel(null)
       setEnlargedTile(null)
-      setActiveChannel(channelName)
+      setActiveChannel(channelId)
 
       const socket = io(SERVER_URL)
       socketRef.current = socket
@@ -1483,7 +1507,8 @@ function App() {
       socket.on('connect', () => {
         setConnectionStatus('connected')
         socket.emit('join-channel', {
-          roomId: channelName,
+          serverId: activeServerIdRef.current,
+          channelId,
           token: sessionTokenRef.current,
         })
       })
@@ -1583,9 +1608,11 @@ function App() {
       // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
       // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
       // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
-      socket.on('channel-activity', ({ channel }) => {
-        if (channel === activeChannelRef.current) return
-        setUnreadChannels((prev) => (prev.includes(channel) ? prev : [...prev, channel]))
+      socket.on('channel-activity', ({ channelId: activityChannelId }) => {
+        if (activityChannelId === activeChannelRef.current) return
+        setUnreadChannels((prev) =>
+          prev.includes(activityChannelId) ? prev : [...prev, activityChannelId]
+        )
       })
 
       // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
@@ -1993,12 +2020,190 @@ function App() {
       setIceServers(response.iceServers)
     }
     console.log('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
-    setChannels(Array.isArray(response.channels) ? response.channels : [])
+    // YENİ: artık tek bir kanal listesi değil, erişilen SUNUCULARIN
+    // listesi geliyor — hangi sunucunun kanallarının gösterileceğine
+    // aşağıdaki myServers izleyen useEffect karar veriyor.
+    setMyServers(Array.isArray(response.myServers) ? response.myServers : [])
     setMyAvatar(response.avatarData || null)
     console.log('[giriş] sunucudan gelen roller:', response.roles)
     setMyRoles(Array.isArray(response.roles) ? response.roles : [])
     setLoggedIn(true)
   }, [])
+
+  // YENİ: ÇOKLU SUNUCU — bir kanala bağlı olmadan yapılan istekler
+  // (sunucu oluştur/katıl/kanal listesi vb.), login/register'daki AYNI
+  // desenle kısa ömürlü bir soket üzerinden tek seferlik gönderiliyor.
+  const emitViaTempSocket = useCallback((event, payload) => {
+    return new Promise((resolve) => {
+      const tempSocket = io(SERVER_URL)
+      tempSocket.on('connect', () => {
+        tempSocket.emit(event, payload, (response) => {
+          tempSocket.disconnect()
+          resolve(response)
+        })
+      })
+      tempSocket.on('connect_error', () => {
+        tempSocket.disconnect()
+        resolve({ success: false, message: 'Sunucuya bağlanılamadı.' })
+      })
+    })
+  }, [])
+
+  const fetchServerChannels = useCallback(
+    async (serverId) => {
+      const response = await emitViaTempSocket('server-channels', {
+        token: sessionTokenRef.current,
+        serverId,
+      })
+      setChannels(response?.success ? response.channels || [] : [])
+    },
+    [emitViaTempSocket]
+  )
+
+  // YENİ: aktif sunucuyu değiştir — mevcut kanaldan/sesten çık (başka bir
+  // sunucunun sesine/kanalına "sızmasın"), yeni sunucunun kanal listesini
+  // getir.
+  const selectServer = useCallback(
+    (serverId) => {
+      setActiveServerId(serverId)
+      window.localStorage?.setItem('activeServerId', serverId)
+      leaveChannel()
+      setChannels([])
+      fetchServerChannels(serverId)
+      setMobileSidebarOpen(false)
+    },
+    [leaveChannel, fetchServerChannels]
+  )
+
+  const refreshMyServers = useCallback(async () => {
+    const response = await emitViaTempSocket('list-my-servers', {
+      token: sessionTokenRef.current,
+    })
+    if (response?.success) setMyServers(response.servers || [])
+    return response
+  }, [emitViaTempSocket])
+
+  const handleCreateServer = useCallback(async () => {
+    if (!newServerName.trim()) return
+    setServerModalBusy(true)
+    setServerModalError(null)
+    const response = await emitViaTempSocket('create-server', {
+      token: sessionTokenRef.current,
+      name: newServerName.trim(),
+    })
+    setServerModalBusy(false)
+    if (response?.success) {
+      setNewServerName('')
+      setShowServerModal(false)
+      await refreshMyServers()
+      selectServer(response.server.id)
+    } else {
+      setServerModalError(response?.message || 'Sunucu oluşturulamadı.')
+    }
+  }, [newServerName, emitViaTempSocket, refreshMyServers, selectServer])
+
+  const handleJoinServer = useCallback(async () => {
+    if (!joinInviteCode.trim()) return
+    setServerModalBusy(true)
+    setServerModalError(null)
+    const response = await emitViaTempSocket('join-server-by-invite', {
+      token: sessionTokenRef.current,
+      inviteCode: joinInviteCode.trim(),
+    })
+    setServerModalBusy(false)
+    if (response?.success) {
+      setJoinInviteCode('')
+      setShowServerModal(false)
+      await refreshMyServers()
+      selectServer(response.server.id)
+    } else {
+      setServerModalError(response?.message || 'Sunucuya katılamadın.')
+    }
+  }, [joinInviteCode, emitViaTempSocket, refreshMyServers, selectServer])
+
+  // YENİ: sunucuyu tamamen sil — sadece sahibi/platform admini
+  // çağırabiliyor (arayüzden de sadece onlara gösteriliyor).
+  const handleDeleteServer = useCallback(async () => {
+    if (!activeServerIdRef.current) return
+    if (
+      !window.confirm(
+        'Bu sunucuyu tamamen silmek istediğine emin misin? Tüm kanalları ve mesajları da silinecek.'
+      )
+    ) {
+      return
+    }
+    const response = await emitViaTempSocket('delete-server', {
+      token: sessionTokenRef.current,
+      serverId: activeServerIdRef.current,
+    })
+    if (response?.success) {
+      setServerInvitePopover(null)
+      leaveChannel()
+      setActiveServerId(null)
+      window.localStorage?.removeItem('activeServerId')
+      await refreshMyServers()
+    }
+  }, [emitViaTempSocket, leaveChannel, refreshMyServers])
+
+  const openServerInvitePopover = useCallback(async () => {
+    const response = await emitViaTempSocket('get-server-invite', {
+      token: sessionTokenRef.current,
+      serverId: activeServerIdRef.current,
+    })
+    if (response?.success) setServerInvitePopover({ code: response.inviteCode })
+  }, [emitViaTempSocket])
+
+  // YENİ: sunucu sahibi kanal eklesin diye — v1'de basit bir prompt()
+  // yeterli, kanalın kendine has bir ayar ekranı yok henüz.
+  const handleCreateChannel = useCallback(async () => {
+    const name = window.prompt('Yeni kanalın adı:')
+    if (!name || !name.trim()) return
+    const response = await emitViaTempSocket('create-channel', {
+      token: sessionTokenRef.current,
+      serverId: activeServerIdRef.current,
+      name: name.trim(),
+    })
+    if (response?.success) {
+      fetchServerChannels(activeServerIdRef.current)
+    } else {
+      window.alert(response?.message || 'Kanal oluşturulamadı.')
+    }
+  }, [emitViaTempSocket, fetchServerChannels])
+
+  const fetchServerMembers = useCallback(async () => {
+    if (!activeServerIdRef.current) return
+    const response = await emitViaTempSocket('list-server-members', {
+      token: sessionTokenRef.current,
+      serverId: activeServerIdRef.current,
+    })
+    if (response?.success) setServerMembers(response.members || [])
+  }, [emitViaTempSocket])
+
+  const removeServerMember = useCallback(
+    async (targetUsername) => {
+      const response = await emitViaTempSocket('remove-server-member', {
+        token: sessionTokenRef.current,
+        serverId: activeServerIdRef.current,
+        targetUsername,
+      })
+      if (response?.success) fetchServerMembers()
+    },
+    [emitViaTempSocket, fetchServerMembers]
+  )
+
+  // YENİ: erişilebilen sunucular geldiğinde (girişte / oturum devamında),
+  // son kalınan sunucuya (localStorage'da saklı) ya da yoksa ilkine
+  // otomatik geç — kullanıcı her açılışta yeniden seçmek zorunda kalmasın.
+  useEffect(() => {
+    if (myServers.length === 0) return
+    const stored = activeServerIdRef.current
+    if (stored && myServers.some((s) => s.id === stored)) {
+      fetchServerChannels(stored)
+      return
+    }
+    selectServer(myServers[0].id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myServers])
 
   // YENİ: uygulama açılışında, "beni hatırla" ile kaydedilmiş bir
   // belirteç varsa şifre sormadan otomatik giriş yapmayı dene. Bu, ayrı
@@ -2044,6 +2249,7 @@ function App() {
     setPassword('')
     setSessionToken(null)
     setChannels([])
+    setMyServers([])
     setMyAvatar(null)
     setMyRoles([])
     setRememberMe(false)
@@ -2342,6 +2548,14 @@ function App() {
   useEffect(() => {
     if (showAppSettings && isAdmin) fetchAllUsers()
   }, [showAppSettings, isAdmin, fetchAllUsers])
+
+  // YENİ: aktif sunucunun sahibiyse, Ayarlar açıkken "Sunucu Üyeleri"
+  // listesini getir — platform-geneli "Üye Yönetimi"nden AYRI, sadece
+  // BU sunucuya özel bir üye/kick listesi.
+  useEffect(() => {
+    const isOwnerOfActiveServer = myServers.find((s) => s.id === activeServerId)?.isOwner
+    if (showAppSettings && isOwnerOfActiveServer) fetchServerMembers()
+  }, [showAppSettings, myServers, activeServerId, fetchServerMembers])
 
   const addRoleToUser = (targetUsername) => {
     const role = (roleInputByUser[targetUsername] || '').trim()
@@ -2661,6 +2875,15 @@ function App() {
     ...ephemeralPhotos.map((p) => ({ ...p, kind: 'photo' })),
   ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
 
+  // YENİ: activeChannel/voiceChannel artık isim değil, kanalın ObjectId'si —
+  // görüntülemek için ada bakıyoruz. activeServer* de aktif sunucunun
+  // görüntü adı/sahiplik durumu için.
+  const activeChannelName = channels.find((c) => c.id === activeChannel)?.name || ''
+  const voiceChannelName = channels.find((c) => c.id === voiceChannel)?.name || ''
+  const activeServer = myServers.find((s) => s.id === activeServerId)
+  const activeServerName = activeServer?.name || ''
+  const activeServerIsOwner = !!activeServer?.isOwner
+
   return (
     <div className="app-shell">
       {/* YENİ: mobilde soldaki kanal çekmecesini açan sabit konumlu
@@ -2687,10 +2910,50 @@ function App() {
         />
       )}
 
+      {/* YENİ: sunucu şeridi — Discord'daki gibi, her sunucu bir ikon.
+          Kanal listesinden AYRI: burası hangi sunucudayım, kanal listesi o
+          sunucunun kanalları. */}
+      <nav className="server-rail">
+        {myServers.map((server) => (
+          <button
+            key={server.id}
+            type="button"
+            className={
+              'server-rail-icon' + (activeServerId === server.id ? ' server-rail-icon--active' : '')
+            }
+            title={server.name}
+            onClick={() => selectServer(server.id)}
+          >
+            {server.name.charAt(0).toUpperCase()}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="server-rail-icon server-rail-icon--add"
+          title="Sunucu oluştur / katıl"
+          onClick={() => {
+            setServerModalTab(myServers.some((s) => s.isOwner) ? 'join' : 'create')
+            setShowServerModal(true)
+          }}
+        >
+          +
+        </button>
+      </nav>
+
       <aside className={'channel-sidebar' + (mobileSidebarOpen ? ' channel-sidebar--open' : '')}>
         <div className="sidebar-brand">
           <img src={logoUrl} alt="Disco" className="app-logo app-logo--sidebar" />
-          <h1 className="app-title">Disco</h1>
+          <h1 className="app-title">{activeServerName || 'Disco'}</h1>
+          {activeServerIsOwner && (
+            <button
+              type="button"
+              className="server-invite-button"
+              title="Davet kodunu göster"
+              onClick={openServerInvitePopover}
+            >
+              🔗
+            </button>
+          )}
           <button
             type="button"
             className="mobile-drawer-close"
@@ -2703,20 +2966,21 @@ function App() {
         <p className="whoami">{displayName} olarak bağlısın</p>
         <nav className="channel-list">
           {channels.map((channel) => {
-            const hasUnread = unreadChannels.includes(channel)
-            const isVoiceHere = voiceChannel === channel
+            const hasUnread = unreadChannels.includes(channel.id)
+            const isVoiceHere = voiceChannel === channel.id
             return (
               <button
-                key={channel}
+                key={channel.id}
                 className={
-                  'channel-button' + (activeChannel === channel ? ' channel-button--active' : '')
+                  'channel-button' +
+                  (activeChannel === channel.id ? ' channel-button--active' : '')
                 }
                 onClick={() => {
-                  joinChannel(channel)
+                  joinChannel(channel.id)
                   setMobileSidebarOpen(false)
                 }}
               >
-                # {channel}
+                # {channel.name}
                 {/* YENİ: sesin hangi kanalda olduğunu, o kanalı görüntülemesen
                     bile listede görebilesin diye. */}
                 {isVoiceHere && <span className="channel-voice-indicator">🎙️</span>}
@@ -2724,6 +2988,18 @@ function App() {
               </button>
             )
           })}
+          {/* YENİ: aktif sunucunun sahibiyse (ya da platform adminse), yeni
+              kanal ekleyebilme düğmesi — çoklu sunucuda kanal artık env
+              yerine veritabanından, sahibi ekleyebiliyor. */}
+          {activeServerIsOwner && (
+            <button
+              type="button"
+              className="channel-button channel-button--add"
+              onClick={handleCreateChannel}
+            >
+              + Kanal ekle
+            </button>
+          )}
         </nav>
 
         {/* YENİ: Discord tarzı güncelleme bildirimi — indirilirken küçük
@@ -2765,7 +3041,13 @@ function App() {
           </div>
         )}
 
-        {!activeChannel && !connectionError && (
+        {!activeChannel && !connectionError && myServers.length === 0 && (
+          <div className="no-channel-placeholder">
+            <p>Henüz bir sunucun yok — sağdaki "+" ile kendi sunucunu oluştur ya da bir davet koduyla katıl.</p>
+          </div>
+        )}
+
+        {!activeChannel && !connectionError && myServers.length > 0 && (
           <div className="no-channel-placeholder">
             <p>Başlamak için soldan bir kanal seç.</p>
           </div>
@@ -2779,7 +3061,7 @@ function App() {
 
             <div className="channel-main">
               <div className="channel-header">
-                <h2># {activeChannel}</h2>
+                <h2># {activeChannelName}</h2>
                 <div className="channel-header-actions">
                   {/* YENİ: sesteyken BAŞKA bir kanala bakıyorsan burada ne
                       "Sese Katıl" (zaten sestesin, başka kanalda ses
@@ -2818,7 +3100,7 @@ function App() {
               {inVoice && voiceChannel && voiceChannel !== activeChannel && (
                 <div className="voice-elsewhere-banner">
                   <span>
-                    🎙️ Sesli sohbettesin: <strong># {voiceChannel}</strong>
+                    🎙️ Sesli sohbettesin: <strong># {voiceChannelName}</strong>
                   </span>
                   <div className="voice-elsewhere-banner-actions">
                     <button onClick={() => joinChannel(voiceChannel)}>Kanala dön</button>
@@ -3474,6 +3756,44 @@ function App() {
               </div>
             </section>
 
+            {/* YENİ: aktif sunucunun sahibiyse (platform-geneli "Üye
+                Yönetimi"nden AYRI) sadece BU sunucunun üyelerini gösterip
+                çıkarabilme (kick) imkânı. */}
+            {activeServerIsOwner && (
+              <section className="app-settings-section">
+                <h4>Sunucu Üyeleri — {activeServerName}</h4>
+                <p className="app-settings-hint">
+                  Bu sunucudaki üyeler. Sunucu sahibi çıkarılamaz.
+                </p>
+                <div className="user-management-list">
+                  {serverMembers.map((m) => (
+                    <div key={m.username} className="user-management-row">
+                      <span>
+                        {m.username}
+                        {m.isOwner && ' 👑'}
+                      </span>
+                      {!m.isOwner && (
+                        <button
+                          type="button"
+                          className="device-settings-test-button"
+                          onClick={() => removeServerMember(m.username)}
+                        >
+                          Çıkar
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="device-settings-test-button"
+                  onClick={handleDeleteServer}
+                >
+                  🗑️ Sunucuyu Sil
+                </button>
+              </section>
+            )}
+
             {/* YENİ: Discord tarzı otomatik güncelleme durumu + manuel
                 kontrol düğmesi. Kenar çubuğundaki bildirim otomatik
                 çıkıyor zaten — bu sadece "şu an hangi sürümdeyim, elle
@@ -3608,6 +3928,132 @@ function App() {
                 </div>
               </section>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* YENİ: sunucu oluştur/katıl modalı — sunucu şeridindeki "+" ile
+          açılıyor. */}
+      {showServerModal && (
+        <div className="app-settings-backdrop" onClick={() => setShowServerModal(false)}>
+          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="app-settings-modal-header">
+              <h3>Sunucu Oluştur / Katıl</h3>
+              <button className="app-settings-close" onClick={() => setShowServerModal(false)}>
+                ✕
+              </button>
+            </div>
+            <div className="server-modal-tabs">
+              <button
+                type="button"
+                className={
+                  'server-modal-tab' + (serverModalTab === 'create' ? ' server-modal-tab--active' : '')
+                }
+                onClick={() => {
+                  setServerModalTab('create')
+                  setServerModalError(null)
+                }}
+              >
+                Oluştur
+              </button>
+              <button
+                type="button"
+                className={
+                  'server-modal-tab' + (serverModalTab === 'join' ? ' server-modal-tab--active' : '')
+                }
+                onClick={() => {
+                  setServerModalTab('join')
+                  setServerModalError(null)
+                }}
+              >
+                Katıl
+              </button>
+            </div>
+            {serverModalTab === 'create' ? (
+              <section className="app-settings-section">
+                {myServers.some((s) => s.isOwner) ? (
+                  <p className="app-settings-hint">
+                    Zaten bir sunucun var — kişi başı yalnızca 1 sunucu açılabilir.
+                  </p>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      className="app-settings-input"
+                      value={newServerName}
+                      onChange={(e) => setNewServerName(e.target.value)}
+                      placeholder="Sunucu adı"
+                      maxLength={50}
+                    />
+                    <button
+                      type="button"
+                      className="device-settings-test-button"
+                      onClick={handleCreateServer}
+                      disabled={serverModalBusy}
+                    >
+                      Sunucu Oluştur
+                    </button>
+                  </>
+                )}
+              </section>
+            ) : (
+              <section className="app-settings-section">
+                <input
+                  type="text"
+                  className="app-settings-input"
+                  value={joinInviteCode}
+                  onChange={(e) => setJoinInviteCode(e.target.value)}
+                  placeholder="Davet kodu"
+                />
+                <button
+                  type="button"
+                  className="device-settings-test-button"
+                  onClick={handleJoinServer}
+                  disabled={serverModalBusy}
+                >
+                  Sunucuya Katıl
+                </button>
+              </section>
+            )}
+            {serverModalError && <p className="device-settings-error">{serverModalError}</p>}
+          </div>
+        </div>
+      )}
+
+      {/* YENİ: sunucu davet kodu popover'ı — sadece sahibiyken (🔗
+          düğmesiyle) açılabiliyor. */}
+      {serverInvitePopover && (
+        <div className="app-settings-backdrop" onClick={() => setServerInvitePopover(null)}>
+          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="app-settings-modal-header">
+              <h3>Sunucu Daveti</h3>
+              <button
+                className="app-settings-close"
+                onClick={() => setServerInvitePopover(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <section className="app-settings-section">
+              <p className="app-settings-hint">
+                Bu kodu paylaş — hesabı olan biri "Sunucu Oluştur / Katıl" &gt; "Katıl" ile bu
+                sunucuya katılabilir.
+              </p>
+              <input
+                type="text"
+                className="app-settings-input"
+                value={serverInvitePopover.code}
+                readOnly
+                onClick={(e) => e.target.select()}
+              />
+              <button
+                type="button"
+                className="device-settings-test-button"
+                onClick={() => navigator.clipboard?.writeText(serverInvitePopover.code)}
+              >
+                📋 Kopyala
+              </button>
+            </section>
           </div>
         </div>
       )}

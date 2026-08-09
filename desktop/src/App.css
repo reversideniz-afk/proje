@@ -71,6 +71,122 @@
   background: var(--bg-void);
 }
 
+/* YENİ: sunucu şeridi — Discord'daki gibi, en solda dar bir ikon
+   sütunu. Kanal listesinden (.channel-sidebar) AYRI ve ondan ÖNCE gelir:
+   burası "hangi sunucudayım", kanal listesi o sunucunun kanalları. */
+.server-rail {
+  width: 64px;
+  flex-shrink: 0;
+  background: var(--bg-void);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  overflow-y: auto;
+}
+
+.server-rail-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-radius 0.15s ease, background 0.15s ease;
+}
+
+.server-rail-icon:hover {
+  background: var(--bg-panel-hover);
+  border-radius: 16px;
+}
+
+.server-rail-icon--active {
+  background: var(--accent);
+  color: #1c1a19;
+  border-radius: 16px;
+}
+
+.server-rail-icon--add {
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+.server-rail-icon--add:hover {
+  border-radius: 16px;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.server-invite-button {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px;
+}
+
+.server-invite-button:hover {
+  color: var(--accent);
+}
+
+.channel-button--add {
+  color: var(--text-faint);
+  border: 1px dashed var(--border-subtle);
+}
+
+.channel-button--add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.server-modal-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.server-modal-tab {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.server-modal-tab--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.app-settings-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.app-settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .channel-sidebar {
   width: 220px;
   flex-shrink: 0;
@@ -1730,7 +1846,9 @@
     justify-content: center;
     position: fixed;
     top: 12px;
-    left: 12px;
+    /* YENİ: sunucu şeridi (.server-rail) mobilde de her zaman görünür
+       kalıyor (64px) — bu düğme onun ÜZERİNE değil, sağına oturuyor. */
+    left: 76px;
     width: 34px;
     height: 34px;
     border-radius: 8px;
