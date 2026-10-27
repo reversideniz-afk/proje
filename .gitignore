@@ -13,6 +13,17 @@ node_modules/
 dist/
 release/
 
+# Oyun ROM'ları ve arşiv dosyaları — projeye ait değiller, yanlışlıkla
+# GitHub'a (herkese açık depo) gitmeleri telif sorunu yaratır.
+*.zip
+*.gba
+*.gb
+*.gbc
+*.nds
+*.nes
+*.sfc
+*.smc
+
 # İşletim sistemi / editör dosyaları
 .DS_Store
 Thumbs.db
