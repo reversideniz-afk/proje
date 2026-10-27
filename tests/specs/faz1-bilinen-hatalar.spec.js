@@ -203,7 +203,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     expect(observer.voiceUsernames()).toEqual(['Mert'])
   })
 
-  test.fail('H5: sesteyken kanal gezip uygulamayı kapatan kişi çevrimiçi görünmüyor', async ({ disco }) => {
+  test('H5: sesteyken kanal gezip uygulamayı kapatan kişi çevrimiçi görünmüyor', async ({ disco }) => {
     const observer = await disco.observer('genel')
     const mert = await disco.user('Mert')
     await mert.openChannel('genel')
@@ -215,6 +215,32 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect
       .poll(async () => names(await observer.refreshMembers()), { timeout: 10_000 })
       .not.toContain('Mert')
+  })
+
+  test('H5: sesteyken başka kanala bakan kişi sesin olduğu kanalda görünüyor, baktığı kanaldan çıkınca oradan düşüyor', async ({ disco }) => {
+    const genel = await disco.observer('genel')
+    const oyun = await disco.observer('oyun')
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await mert.joinVoice()
+
+    await mert.openChannel('oyun')
+    await expect.poll(async () => names(await oyun.refreshMembers())).toContain('Mert')
+    await expect.poll(async () => voiceNames(await genel.refreshMembers())).toEqual(['Mert'])
+
+    await mert.channelButton('genel').click()
+    await expect(mert.page.locator('.channel-header h2')).toHaveText('# genel')
+    await expect.poll(async () => names(await oyun.refreshMembers())).not.toContain('Mert')
+    await expect.poll(async () => voiceNames(await genel.refreshMembers())).toEqual(['Mert'])
+  })
+
+  test('H5: iki cihazdan bağlanan kişi listede bir kez görünüyor', async ({ disco }) => {
+    const observer = await disco.observer('genel')
+    for (let i = 0; i < 2; i++) {
+      const device = await disco.client('Mert')
+      await device.joinChannel(disco.serverId, disco.channels.genel)
+    }
+    await expect.poll(async () => names(await observer.refreshMembers())).toEqual(['Gozcu', 'Mert'])
   })
 
   test.fail('H9: kendi mesajın için bildirim sesi çalmıyor', async ({ disco }) => {

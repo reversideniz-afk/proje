@@ -434,12 +434,21 @@ function serializeMessage(msg) {
 }
 
 async function buildMemberList(channelId) {
-  const online = Object.values(textRooms[channelId] || {}).map((u) => ({
-    username: u.username,
-    inVoice: Object.values(voiceRooms[channelId] || {}).some((v) => v.username === u.username),
+  // Kanalda "çevrimiçi": kanalı o an açık tutan ya da kanalın sesinde olan
+  // herkes (sesteyken başka bir kanala bakan da sesin olduğu kanalda
+  // görünmeye devam ediyor). Liste kişi başına: iki cihazdan bağlanan biri
+  // iki kez görünmüyor.
+  const voiceUsernames = new Set(
+    Object.values(voiceRooms[channelId] || {}).map((v) => v.username)
+  );
+  const onlineUsernames = new Set([
+    ...Object.values(textRooms[channelId] || {}).map((u) => u.username),
+    ...voiceUsernames,
+  ]);
+  const online = [...onlineUsernames].map((username) => ({
+    username,
+    inVoice: voiceUsernames.has(username),
   }));
-
-  const onlineUsernames = new Set(online.map((m) => m.username));
 
   let offline = [];
   try {
@@ -1029,8 +1038,17 @@ io.on("connection", (socket) => {
     // geldiğinde bu soket hâlâ dinlemeye devam eder ve mesaj yanlışlıkla
     // görüntülenen YENİ kanalın sohbetine karışır. Ses odası (voiceRoomName)
     // bundan tamamen ayrı bir isim alanı olduğu için etkilenmiyor.
+    // Eski kanalın çevrimiçi kaydı da siliniyor ve oradakilere güncel liste
+    // gidiyor; eskiden kayıt kalıyor, kişi gezdiği kanallarda uygulamayı
+    // kapattıktan sonra da çevrimiçi görünüyordu (H5).
+    let previousTextRoom = null;
     if (currentTextRoom && currentTextRoom !== roomId) {
-      socket.leave(textRoomName(currentTextRoom));
+      previousTextRoom = currentTextRoom;
+      socket.leave(textRoomName(previousTextRoom));
+      if (textRooms[previousTextRoom]) {
+        delete textRooms[previousTextRoom][socket.id];
+        if (Object.keys(textRooms[previousTextRoom]).length === 0) delete textRooms[previousTextRoom];
+      }
     }
     currentTextRoom = roomId;
     currentServerId = serverId;
@@ -1072,6 +1090,12 @@ io.on("connection", (socket) => {
     // güncel listeyi gönderiyoruz (basit ve tutarlı kalsın diye).
     const memberList = await buildMemberList(roomId);
     io.to(textRoomName(roomId)).emit("channel-members", memberList);
+    if (previousTextRoom) {
+      io.to(textRoomName(previousTextRoom)).emit(
+        "channel-members",
+        await buildMemberList(previousTextRoom)
+      );
+    }
 
     // Mesaj geçmişi (sadece yeni katılana).
     try {
@@ -1773,26 +1797,30 @@ io.on("connection", (socket) => {
 
   // ---- Ayrılma (bağlantı tamamen kopunca) ----
   socket.on("disconnect", async () => {
-    if (currentVoiceRoom) removeVoiceMember(currentVoiceRoom, socket.id);
-    if (currentTextRoom) {
-      const roomId = currentTextRoom;
-      const username = textRooms[roomId]?.[socket.id]?.username;
-      if (textRooms[roomId]) {
-        delete textRooms[roomId][socket.id];
-        if (Object.keys(textRooms[roomId]).length === 0) delete textRooms[roomId];
-      }
-      if (username) {
+    // Hem baktığı metin kanalından hem (farklıysa) sesin olduğu kanaldan
+    // çıkıyor; ikisine de güncel liste gidiyor.
+    const leftRooms = new Set();
+    if (currentVoiceRoom && removeVoiceMember(currentVoiceRoom, socket.id)) {
+      leftRooms.add(currentVoiceRoom);
+    }
+    if (currentTextRoom && textRooms[currentTextRoom]?.[socket.id]) {
+      delete textRooms[currentTextRoom][socket.id];
+      if (Object.keys(textRooms[currentTextRoom]).length === 0) delete textRooms[currentTextRoom];
+      leftRooms.add(currentTextRoom);
+    }
+    for (const roomId of leftRooms) {
+      if (currentUsername) {
         try {
           await ChannelMember.findOneAndUpdate(
-            { channelId: roomId, username },
+            { channelId: roomId, username: currentUsername },
             { lastSeenAt: new Date() }
           );
         } catch (err) {
           console.error("lastSeenAt güncellenirken hata:", err.message);
         }
-        const memberList = await buildMemberList(roomId);
-        io.to(textRoomName(roomId)).emit("channel-members", memberList);
       }
+      const memberList = await buildMemberList(roomId);
+      io.to(textRoomName(roomId)).emit("channel-members", memberList);
     }
     // YENİ: socketsByUsername kaydını temizle (bkz. join-channel).
     if (currentUsername) {
