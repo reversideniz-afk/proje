@@ -243,16 +243,30 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect.poll(async () => names(await observer.refreshMembers())).toEqual(['Gozcu', 'Mert'])
   })
 
-  test.fail('H9: kendi mesajın için bildirim sesi çalmıyor', async ({ disco }) => {
+  test('H9: kendi mesajın için bildirim sesi çalmıyor, başkasınınki çalıyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
     await mert.openChannel('genel')
     await ece.openChannel('genel')
     for (const text of ['bir', 'iki', 'üç']) await mert.send(text)
     await expect(mert.chat).toContainText('üç')
+    await expect(ece.chat).toContainText('üç')
 
-    const messageTicks = await mert.probe(() => window.__disco.tones.filter((f) => f === 700).length)
-    expect(messageTicks).toBe(0)
+    const ticks = (user) => user.probe(() => window.__disco.tones.filter((f) => f === 700).length)
+    expect(await ticks(mert)).toBe(0)
+    await expect.poll(() => ticks(ece)).toBe(3)
+  })
+
+  test('H9: pencere arkadayken @adın geçince bahsetme sesi çalıyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    // Mert'in penceresi arka planda.
+    await mert.page.evaluate(() => Object.defineProperty(document, 'hidden', { get: () => true }))
+    await ece.send('@Mert seste misin?')
+    await expect(mert.chat).toContainText('seste misin?')
+    await expect.poll(() => mert.probe(() => window.__disco.tones.filter((f) => f === 880).length)).toBe(1)
   })
 
   test.fail('H10: efekt sesleri yeni ses motoru biriktirmiyor', async ({ disco }) => {

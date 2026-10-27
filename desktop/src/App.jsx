@@ -461,6 +461,14 @@ function App() {
   const [loginError, setLoginError] = useState(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const displayName = username
+  // Kanal soketinin dinleyicileri kanala girerken bir kez kuruluyor ve o
+  // anki değerleri hatırlıyor; güncel adı oradan bu ref ile okuyoruz.
+  // Eskiden ilk açılıştaki boş adı görüyorlardı: kendi mesajında bildirim
+  // sesi çalıyor, @adın geçince özel ses çalmıyordu (H9).
+  const displayNameRef = useRef(displayName)
+  useEffect(() => {
+    displayNameRef.current = displayName
+  }, [displayName])
 
   // YENİ: "Beni hatırla" — işaretlenirse giriş belirteci localStorage'da
   // saklanıp bir dahaki açılışta otomatik oturum devam ettiriliyor (bkz.
@@ -1634,12 +1642,13 @@ function App() {
         // pencere görünür değilse) daha belirgin olan bahsetme sesi,
         // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
         // aynı anda çalmıyor.
-        const isOwnMessage = message.username === displayName
+        const myName = displayNameRef.current
+        const isOwnMessage = message.username === myName
         // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
         // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
         // kişiye değil.
         const isMention =
-          (displayName && message.text?.toLowerCase().includes(`@${displayName.toLowerCase()}`)) ||
+          (myName && message.text?.toLowerCase().includes(`@${myName.toLowerCase()}`)) ||
           message.text?.toLowerCase().includes('@all')
         if (!isOwnMessage) {
           if (isMention && document.hidden) {
@@ -1659,7 +1668,7 @@ function App() {
       // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
       socket.on('new-photo', (photo) => {
         setEphemeralPhotos((prev) => [...prev, photo])
-        if (photo.username !== displayName) playMessageSound()
+        if (photo.username !== displayNameRef.current) playMessageSound()
         requestAnimationFrame(() => {
           if (chatMessagesRef.current) {
             chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
