@@ -1,0 +1,152 @@
+// Testlerin kullandığı ortam. Her test şunlarla başlar:
+//   - bellek içi MongoDB'de, örnek verilerle doldurulmuş YEPYENİ bir veritabanı,
+//   - o veritabanına bağlı, değiştirilmemiş server/server.js süreci,
+//   - tarayıcıyla sunucu arasında bağlantı kesmeye yarayan bir vekil.
+// Gerçek Render sunucusuna ve Atlas veritabanına hiçbir zaman bağlanılmaz.
+import { test as base, expect } from '@playwright/test'
+import { MongoMemoryServer } from 'mongodb-memory-server-core'
+import { instrumentPage } from './instrument.js'
+import { clientBuildDir } from './paths.js'
+import { createProxy } from './proxy.js'
+import { REGISTER_INVITE_CODE, seedDatabase } from './seed.js'
+import { ServerProcess } from './server-process.js'
+import { TestClient } from './socket-client.js'
+import { startStaticServer } from './static-server.js'
+import { UserSession } from './user-session.js'
+
+// MongoDB 7.0.24 ikili dosyası ilk çalıştırmada bir kez indirilir
+// (~600 MB, kullanıcı önbelleğine), sonraki çalıştırmalarda hazır gelir.
+const MONGODB_VERSION = '7.0.24'
+
+export const test = base.extend({
+  harness: [
+    async ({}, use) => {
+      const mongo = await MongoMemoryServer.create({ binary: { version: MONGODB_VERSION } })
+      // appProxy: tarayıcıların bağlandığı adres (istemci bu porta göre derlendi).
+      const appProxy = createProxy()
+      await appProxy.listen(Number(process.env.DISCO_PROXY_PORT))
+      // clientProxy: testlerin protokol istemcileri için; dropAll'dan etkilenmez.
+      const clientProxy = createProxy()
+      const clientProxyPort = await clientProxy.listen()
+      const web = await startStaticServer(clientBuildDir)
+      let dbCounter = 0
+
+      await use({
+        async newEnvironment() {
+          const mongoUri = mongo.getUri(`disco-test-${++dbCounter}`)
+          const seed = await seedDatabase(mongoUri)
+          const server = new ServerProcess({
+            mongoUri,
+            extraEnv: { REGISTER_INVITE_CODE, ALLOW_TEST_TOKENS: 'true' },
+          })
+          const pointProxiesAt = (port) => {
+            appProxy.setTarget(port)
+            clientProxy.setTarget(port)
+          }
+          pointProxiesAt(await server.start())
+          return {
+            ...seed,
+            server,
+            clientUrl: web.url,
+            socketUrl: `http://127.0.0.1:${clientProxyPort}`,
+            // İnternetin bir an gidip gelmesi: tarayıcıların bütün bağlantıları kopar.
+            dropConnections: () => appProxy.dropAll(),
+            // Render'ın deploy ya da uyku sonrası yeniden başlaması.
+            async restartServer() {
+              pointProxiesAt(await server.restart())
+            },
+            async dispose() {
+              await server.stop()
+              appProxy.dropAll()
+              clientProxy.dropAll()
+            },
+          }
+        },
+      })
+
+      await web.close()
+      await appProxy.close()
+      await clientProxy.close()
+      await mongo.stop()
+    },
+    { scope: 'worker', timeout: 180_000 },
+  ],
+
+  disco: async ({ harness, browser }, use, testInfo) => {
+    const env = await harness.newEnvironment()
+    const users = []
+    const clients = []
+
+    const disco = {
+      ...env,
+
+      // Tarayıcıda yeni bir kullanıcı açar (kendi çerezleri/localStorage'ı ile)
+      // ve varsayılan olarak arayüzden giriş yaptırır.
+      async user(name, { login = true, rememberMe = false, viewport } = {}) {
+        const context = await browser.newContext({
+          permissions: ['microphone', 'camera'],
+          locale: 'tr-TR',
+          viewport: viewport || { width: 1280, height: 800 },
+        })
+        await context.addInitScript(instrumentPage)
+        const page = await context.newPage()
+        const session = new UserSession(name, context, page)
+        session.consoleLines = []
+        page.on('console', (msg) => session.consoleLines.push(`[${msg.type()}] ${msg.text()}`))
+        page.on('pageerror', (err) => session.consoleLines.push(`[sayfa hatası] ${err.message}`))
+        users.push(session)
+        await page.goto(env.clientUrl)
+        if (login) await session.login({ rememberMe })
+        return session
+      },
+
+      // Tarayıcısız protokol istemcisi; kullanıcı adı verilirse giriş yapar.
+      async client(username) {
+        const client = new TestClient(env.socketUrl)
+        clients.push(client)
+        await client.connected()
+        if (username) await client.login(username)
+        return client
+      },
+
+      // Sunucunun gözünden bir kanalı izleyen gözlemci (Gozcu hesabı).
+      // TEST_BYPASS belirteci sunucu yeniden başlasa bile geçerli kalıyor.
+      async observer(channelName) {
+        const client = new TestClient(env.socketUrl)
+        clients.push(client)
+        client.token = 'TEST_BYPASS:Gozcu'
+        client.rejoinOnReconnect()
+        await client.connected()
+        await client.joinChannel(env.serverId, env.channels[channelName])
+        return client
+      },
+    }
+
+    await use(disco)
+
+    // Kanıt: her kullanıcının son ekranı, tarayıcı konsolu ve sunucu kayıtları
+    // test raporuna ekleniyor (npm run report ile görülebilir).
+    for (const session of users) {
+      if (!session.page.isClosed()) {
+        const screenshot = await session.page.screenshot().catch(() => null)
+        if (screenshot) {
+          await testInfo.attach(`${session.name}-ekran.png`, { body: screenshot, contentType: 'image/png' })
+        }
+      }
+      await testInfo.attach(`${session.name}-konsol.txt`, {
+        body: session.consoleLines.join('\n'),
+        contentType: 'text/plain',
+      })
+    }
+    await testInfo.attach('sunucu-kayitlari.txt', {
+      body: env.server.logs.join('\n'),
+      contentType: 'text/plain',
+    })
+
+    clients.forEach((client) => client.close())
+    await Promise.all(users.map((session) => session.context.close().catch(() => {})))
+    await env.dispose()
+  },
+})
+
+export { expect }

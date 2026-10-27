@@ -1,0 +1,18 @@
+{
+  "name": "disco-tests",
+  "private": true,
+  "description": "Disco için uçtan uca test düzeneği: bellek içi MongoDB, gerçek sunucu kodu, bağlantı kesme vekili ve sahte kamera/mikrofonlu tarayıcı",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @temel",
+    "test:faz1": "playwright test --grep @faz1",
+    "test:faz2": "playwright test --grep @faz2",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "mongodb-memory-server-core": "10.4.3",
+    "socket.io-client": "4.8.3"
+  }
+}

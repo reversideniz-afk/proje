@@ -1,0 +1,104 @@
+// Tarayıcıdaki bir kullanıcıyı arayüz üzerinden yöneten yardımcı: tıpkı
+// gerçek bir kullanıcı gibi giriş yapar, kanala girer, sese katılır.
+import { expect } from '@playwright/test'
+import { readIncomingAudioBytes, readSpeakerPeak } from './instrument.js'
+import { PASSWORD } from './seed.js'
+
+export class UserSession {
+  constructor(name, context, page) {
+    this.name = name
+    this.context = context
+    this.page = page
+    this.chat = page.locator('.chat-messages')
+  }
+
+  async login({ rememberMe = false } = {}) {
+    const { page } = this
+    await page.getByPlaceholder('Kullanıcı adı').fill(this.name)
+    await page.getByPlaceholder('Şifre', { exact: true }).fill(PASSWORD)
+    if (rememberMe) await page.getByLabel('Beni hatırla').check()
+    await page.getByRole('button', { name: 'Giriş Yap' }).click()
+    await expect(page.locator('.whoami')).toContainText(this.name)
+  }
+
+  channelButton(channelName) {
+    return this.page.locator('.channel-button', { hasText: new RegExp(`^#\\s${channelName}`) })
+  }
+
+  async openChannel(channelName) {
+    await this.channelButton(channelName).click()
+    await expect(this.page.locator('.channel-header h2')).toHaveText(`# ${channelName}`)
+    // Sunucu kanala katıldığımızı onaylayınca kendimizi çevrimiçi listesinde görürüz.
+    await expect(this.page.locator('.member-item--online', { hasText: this.name })).toBeVisible()
+  }
+
+  async joinVoice() {
+    await this.page.getByRole('button', { name: /Sese Katıl/ }).click()
+    await expect(this.leaveVoiceButton()).toBeVisible()
+  }
+
+  leaveVoiceButton() {
+    return this.page.locator('.leave-voice-button')
+  }
+
+  mediaButton(title) {
+    return this.page.locator('.media-controls').getByTitle(title, { exact: true })
+  }
+
+  async micOn() {
+    await this.mediaButton('Mikrofonu aç').click()
+    await expect(this.mediaButton('Mikrofonu kapat')).toBeVisible()
+  }
+
+  async cameraOn() {
+    await this.mediaButton('Kamerayı aç').click()
+    await expect(this.mediaButton('Kamerayı kapat')).toBeVisible()
+  }
+
+  async send(text) {
+    await this.page.getByPlaceholder(/^Mesaj yaz/).fill(text)
+    await this.page.getByRole('button', { name: 'Gönder' }).click()
+  }
+
+  peerTile(peerName) {
+    return this.page.locator('.remote-video-wrapper', {
+      has: this.page.locator('.remote-video-label', { hasText: peerName }),
+    })
+  }
+
+  // Ağ katmanı: karşıdan ses paketleri geliyor mu?
+  async expectAudioPacketsArriving({ timeout = 15_000 } = {}) {
+    const before = await this.page.evaluate(readIncomingAudioBytes)
+    await expect
+      .poll(async () => (await this.page.evaluate(readIncomingAudioBytes)) - before, {
+        message: `${this.name} karşı taraftan ses paketi almıyor`,
+        timeout,
+      })
+      .toBeGreaterThan(0)
+  }
+
+  speakerPeak() {
+    return this.page.evaluate(readSpeakerPeak)
+  }
+
+  // Kullanıcı katmanı: hoparlörden gerçekten ses çıkıyor mu? Kısa efekt
+  // seslerini (katılma/mesaj tıkı) saymamak için art arda iki ölçüm
+  // penceresinde de ses olmalı.
+  async expectHearingSomeone({ timeout = 15_000 } = {}) {
+    await expect
+      .poll(
+        async () => {
+          const first = await this.speakerPeak()
+          const second = await this.speakerPeak()
+          return Math.min(first, second)
+        },
+        { message: `${this.name} hoparlöründen ses gelmiyor`, timeout }
+      )
+      .toBeGreaterThan(0.01)
+  }
+
+  // Sayfadaki gözlem kaydından (bkz. instrument.js) bir değer okur.
+  probe(fn) {
+    return this.page.evaluate(fn)
+  }
+}
