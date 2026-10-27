@@ -1741,12 +1741,18 @@ io.on("connection", (socket) => {
   });
 
   // ---- Mikrofon / kamera / ekran paylaşımı durum güncellemesi ----
+  // Sadece mikrofon/kamera/ekran alanları ve sadece true/false kabul
+  // ediliyor. Eskiden gelen nesne olduğu gibi kayda kopyalanıyordu:
+  // kurcalanmış bir istemci seste adını "Alganis" gösterebiliyor, avatar
+  // alanına dış bir adres (takip pikseli) koyabiliyordu (H6).
   socket.on("state-update", (partialState) => {
     if (!currentVoiceRoom || !voiceRooms[currentVoiceRoom]?.[socket.id]) return;
-    Object.assign(voiceRooms[currentVoiceRoom][socket.id], partialState);
+    const state = pickVoiceState(partialState);
+    if (Object.keys(state).length === 0) return;
+    Object.assign(voiceRooms[currentVoiceRoom][socket.id], state);
     socket.to(voiceRoomName(currentVoiceRoom)).emit("user-state-update", {
       socketId: socket.id,
-      state: partialState,
+      state,
     });
   });
 

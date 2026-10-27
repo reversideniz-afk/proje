@@ -8,26 +8,29 @@ import { PASSWORD, REGISTER_INVITE_CODE } from '../harness/seed.js'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
-  test.fail('H6: seste başkasının adına ve dış avatar adresine bürünülemiyor', async ({ disco }) => {
+  test('H6: seste başkasının adına ve dış avatar adresine bürünülemiyor', async ({ disco }) => {
     const mert = await disco.client('Mert')
     const ece = await disco.client('Ece')
     const bora = await disco.client('Bora')
     for (const client of [mert, ece, bora]) await client.joinChannel(disco.serverId, disco.channels.genel)
     for (const client of [mert, ece]) {
-      const joined = client.nextEvent('existing-voice-users')
-      client.socket.emit('join-voice', { token: client.token })
-      await joined
+      await client.emitAck('join-voice', { token: client.token, channelId: disco.channels.genel })
     }
 
+    // Geçerli alan (muted) iletiliyor, kalanlar sessizce atılıyor.
     const forwarded = ece.nextEvent('user-state-update')
-    mert.socket.emit('state-update', { username: 'Alganis', avatarData: 'https://ornek.invalid/iz.png' })
-    await forwarded
+    mert.socket.emit('state-update', {
+      muted: false,
+      cameraOn: 'evet',
+      username: 'Alganis',
+      avatarData: 'https://ornek.invalid/iz.png',
+    })
+    expect((await forwarded).state).toEqual({ muted: false })
 
     const existing = bora.nextEvent('existing-voice-users')
     bora.socket.emit('join-voice', { token: bora.token })
     const mertAsSeenByBora = (await existing).find((u) => u.socketId === mert.socket.id)
-    expect(mertAsSeenByBora.username).toBe('Mert')
-    expect(mertAsSeenByBora.avatarData).toBeNull()
+    expect(mertAsSeenByBora).toMatchObject({ username: 'Mert', avatarData: null, muted: false, cameraOn: false })
   })
 
   test.fail('H7: sunucudan atılan kişi artık mesaj gönderemiyor', async ({ disco }) => {
