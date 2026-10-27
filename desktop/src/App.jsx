@@ -1642,9 +1642,14 @@ function App() {
         setConnectionStatus('reconnecting')
       })
 
+      // Kanala girilemedi (ör. sunucudan çıkarıldıktan sonra yeniden
+      // bağlanırken): sesi de tamamen kapatıyoruz. Eskiden sadece soket
+      // kapanıyor; mikrofon/kamera açık, eş bağlantıları ayakta ve
+      // kenar çubuğundaki 🎙️ işareti asılı kalıyordu (H14).
       socket.on('join-error', (message) => {
         setConnectionError(message || 'Kanala katılamadın.')
         cleanupSocket()
+        resetVoiceState()
         setActiveChannel(null)
       })
 

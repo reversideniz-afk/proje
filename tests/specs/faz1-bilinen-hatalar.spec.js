@@ -332,11 +332,9 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
   })
 
 
-  test.fail('H14: kanala geri dönüş reddedilince mikrofon ve ses durumu temizleniyor', async ({ disco }) => {
-    const mert = await disco.user('Mert')
-    await mert.openChannel('genel')
-    await mert.joinVoice()
-    await mert.micOn()
+  test('H14: kanala geri dönüş reddedilince mikrofon, kamera ve ses bağlantıları kapanıyor', async ({ disco }) => {
+    const { mert } = await mertVeEceSeste(disco, { mic: true })
+    await mert.cameraOn()
 
     const alganis = await disco.client('Alganis')
     const kicked = await alganis.emitAck('remove-server-member', {
@@ -351,6 +349,10 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect
       .poll(() => mert.probe(() => window.__disco.mediaTracks.filter((t) => t.readyState === 'live').length))
       .toBe(0)
+    await expect
+      .poll(() => mert.probe(() => window.__disco.pcs.filter((pc) => pc.connectionState !== 'closed').length))
+      .toBe(0)
     await expect(mert.page.locator('.channel-voice-indicator')).toHaveCount(0)
   })
+
 })
