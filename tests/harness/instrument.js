@@ -53,11 +53,50 @@ export function instrumentPage() {
     return nativeStart.apply(this, args)
   }
 
+  // Kamera: Chromium'un sahte kamera aygıtı başsız Edge'de zaman zaman hiç
+  // kare üretmiyor ya da kendiliğinden kapanıyor. Testler kararsız olmasın
+  // diye görüntüyü hareketli bir tuvalden üretiyoruz; mikrofon yine
+  // tarayıcının sahte (bip sesli) aygıtından geliyor.
+  function canvasCameraTrack() {
+    const canvas = document.createElement('canvas')
+    canvas.width = 640
+    canvas.height = 480
+    const ctx = canvas.getContext('2d')
+    let frame = 0
+    const draw = () => {
+      ctx.fillStyle = `hsl(${(frame * 7) % 360} 55% 40%)`
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = '#fff'
+      ctx.font = '64px sans-serif'
+      ctx.fillText(`test kamerası ${frame++}`, 32, 96)
+    }
+    draw()
+    const timer = setInterval(draw, 66)
+    const track = canvas.captureStream(15).getVideoTracks()[0]
+    const nativeStop = track.stop.bind(track)
+    track.stop = () => {
+      clearInterval(timer)
+      nativeStop()
+    }
+    return track
+  }
+
+  // Ekran paylaşımı: başsız tarayıcıda seçilecek bir ekran yok, aynı
+  // tuval kaynağını "ekran" olarak veriyoruz.
+  MediaDevices.prototype.getDisplayMedia = async function () {
+    const track = canvasCameraTrack()
+    disco.mediaTracks.push(track)
+    return new MediaStream([track])
+  }
+
   const nativeGetUserMedia = MediaDevices.prototype.getUserMedia
-  MediaDevices.prototype.getUserMedia = async function (...args) {
-    const stream = await nativeGetUserMedia.apply(this, args)
-    disco.mediaTracks.push(...stream.getTracks())
-    return stream
+  MediaDevices.prototype.getUserMedia = async function (constraints = {}) {
+    const audioTracks = constraints.audio
+      ? (await nativeGetUserMedia.call(this, { audio: constraints.audio })).getTracks()
+      : []
+    const tracks = [...audioTracks, ...(constraints.video ? [canvasCameraTrack()] : [])]
+    disco.mediaTracks.push(...tracks)
+    return new MediaStream(tracks)
   }
 }
 
@@ -72,6 +111,21 @@ export async function readIncomingAudioBytes() {
     })
   }
   return bytes
+}
+
+// Sayfada çalışır: açık her bağlantı için ayrı ayrı gelen ses paketleri.
+export async function readIncomingAudioBytesPerConnection() {
+  const result = []
+  for (const pc of window.__disco.pcs) {
+    if (pc.connectionState === 'closed') continue
+    let bytes = 0
+    const stats = await pc.getStats()
+    stats.forEach((report) => {
+      if (report.type === 'inbound-rtp' && report.kind === 'audio') bytes += report.bytesReceived || 0
+    })
+    result.push(bytes)
+  }
+  return result
 }
 
 // Sayfada çalışır: ~1 saniye boyunca hoparlöre giden sesin en yüksek

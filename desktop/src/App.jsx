@@ -921,12 +921,9 @@ function App() {
     audioContextReadyRef.current.then(() => {
       if (cancelled) return
       Object.entries(remoteStreams).forEach(([peerSocketId, streams]) => {
-        // Ek güvence: birden fazla ses track'i varsa (ör. renegotiation'ın
-        // tam ortasında, syncReceiversToStream henüz temizlik yapmadan
-        // önceki bir an), her zaman CANLI (muted olmayan) olanı tercih et —
-        // [0] körü körüne eski/sessiz bir track'i seçebilirdi.
-        const audioTracks = streams.mainStream?.getAudioTracks() ?? []
-        const audioTrack = audioTracks.find((t) => !t.muted) ?? audioTracks[0]
+        // Ana bağlantıda tek ses alıcısı var (bkz. startMainConnection);
+        // karşı taraf mikrofonunu açınca aynı ize veri akmaya başlıyor.
+        const audioTrack = streams.mainStream?.getAudioTracks()[0]
         if (!audioTrack) return
         if (connectedAudioTracksRef.current.get(peerSocketId) === audioTrack) return
 
@@ -1190,19 +1187,9 @@ function App() {
     }
   }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
 
-  // DÜZELTME (BULUNAN ASIL SES BUGI): bu fonksiyon adının aksine daha
-  // önce SADECE ekliyordu, hiç ÇIKARMIYORDU. Bir alıcının (receiver)
-  // track'i renegotiation sırasında YENİ bir track nesnesiyle
-  // değiştiğinde (ör. biri mikrofonu ilk kez açtığında), ESKİ (hiçbir
-  // zaman canlı veri taşımamış, sonsuza dek sessiz) track hâlâ
-  // MediaStream'in İÇİNDE kalıyordu — ve İLK eklenen o olduğu için
-  // `getAudioTracks()[0]` HER ZAMAN o eski/sessiz track'i döndürüyordu,
-  // gerçek/canlı track ikinci sıraya düşüp hiç kullanılmıyordu. Bu da
-  // tam olarak gözlemlenen belirtiyi açıklıyor: WebRTC istatistiklerinde
-  // bytesReceived artıyor (ses paketleri GERÇEKTEN geliyor) ama Web Audio
-  // grafiğindeki analiz hep 0 gösteriyordu (yanlış/eski track'i dinliyorduk).
-  // Artık MediaStream'i pc.getReceivers()'ın GÜNCEL haliyle tam senkronize
-  // ediyoruz: artık orada olmayan track'leri çıkarıyoruz, yenilerini ekliyoruz.
+  // Karşı tarafın akışını (MediaStream) bağlantının alıcı izleriyle
+  // eşitliyor. Ana bağlantıda her türden TEK alıcı olduğu için (bkz.
+  // startMainConnection) akışta tam olarak bir ses ve bir görüntü izi var.
   const syncReceiversToStream = useCallback((pc, peerSocketId, connectionType) => {
     const streamKey = connectionType === 'screen' ? 'screenStream' : 'mainStream'
     const receivers = pc.getReceivers()
@@ -1263,6 +1250,10 @@ function App() {
       }
       pc.onconnectionstatechange = () => {
         debugLog(`[WebRTC ${peerSocketId}/${connectionType}] durum: ${pc.connectionState}`)
+        // Ağ değişince (Wi-Fi'den mobil veriye geçmek gibi) bağlantı
+        // "failed" olabiliyor; başlatan taraf ICE'yi yeniden başlatıp yeni
+        // bir yol arıyor (teklif negotiationneeded ile kendiliğinden gider).
+        if (pc.connectionState === 'failed' && pc.isInitiator) pc.restartIce()
       }
       // YENİ (teşhis): connectionState DTLS+ICE'yi birlikte özetliyor —
       // sadece ICE'nin kendisinin (NAT geçişi) başarılı olup olmadığını
@@ -1294,35 +1285,87 @@ function App() {
     [syncReceiversToStream]
   )
 
-  const getOrCreateMainConnection = useCallback(
+  const getPeerEntry = useCallback((peerSocketId) => {
+    let entry = peerConnectionsRef.current.get(peerSocketId)
+    if (!entry) {
+      entry = { mainPc: null, screenPc: null }
+      peerConnectionsRef.current.set(peerSocketId, entry)
+    }
+    return entry
+  }, [])
+
+  // ANA BAĞLANTI (mikrofon + kamera): her eşle SABİT iki kanal, bir ses
+  // ve bir görüntü. Mikrofon/kamera açılıp kapanınca yeni kanal eklenmiyor,
+  // sadece kanalın izi değiştiriliyor (replaceTrack), yeniden pazarlık da
+  // gerekmiyor. Eskiden iki taraf da kendi "sadece al" kanallarını
+  // ekliyor, her aç-kapa yenilerini doğuruyordu; karşı tarafta aynı
+  // türden birden çok iz birikiyor ve uygulama veri taşımayanı seçiyordu
+  // (H30: karşı taraf duyulmuyor, H3: kamera siyah).
+  //
+  // Kanalları sadece bağlantıyı BAŞLATAN taraf ekliyor: sese yeni biri
+  // girince, zaten seste olanlar (bkz. 'voice-user-joined'). Karşı taraf
+  // aynı kanalları teklifle birlikte alıyor ve kendi izlerini onlara
+  // takıyor (bkz. attachLocalMedia, 'signal' içinde).
+  const attachLocalMedia = useCallback((pc) => {
+    const stream = localMainStreamRef.current
+    pc.getTransceivers().forEach((transceiver) => {
+      if (transceiver.currentDirection === 'stopped') return
+      if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
+      const kind = transceiver.receiver.track.kind
+      const track =
+        (kind === 'audio' ? stream?.getAudioTracks()[0] : stream?.getVideoTracks()[0]) ?? null
+      if (transceiver.sender.track !== track) {
+        transceiver.sender.replaceTrack(track).catch((err) => {
+          console.error('[replaceTrack] hata:', err)
+        })
+      }
+    })
+  }, [])
+
+  const startMainConnection = useCallback(
     (peerSocketId) => {
-      let entry = peerConnectionsRef.current.get(peerSocketId)
-      if (!entry) {
-        entry = { mainPc: null, screenPc: null }
-        peerConnectionsRef.current.set(peerSocketId, entry)
-      }
-      if (!entry.mainPc) {
-        const pc = createSubConnection(peerSocketId, 'main')
-        pc.addTransceiver('audio', { direction: 'recvonly' })
-        pc.addTransceiver('video', { direction: 'recvonly' })
-        const audioTrack = localMainStreamRef.current?.getAudioTracks()[0]
-        const videoTrack = localMainStreamRef.current?.getVideoTracks()[0]
-        if (audioTrack) pc.addTrack(audioTrack, localMainStreamRef.current)
-        if (videoTrack) pc.addTrack(videoTrack, localMainStreamRef.current)
-        entry.mainPc = pc
-      }
+      const entry = getPeerEntry(peerSocketId)
+      if (entry.mainPc) return entry.mainPc
+      const pc = createSubConnection(peerSocketId, 'main')
+      pc.isInitiator = true
+      pc.addTransceiver('audio', { direction: 'sendrecv' })
+      pc.addTransceiver('video', { direction: 'sendrecv' })
+      attachLocalMedia(pc)
+      entry.mainPc = pc
+      syncReceiversToStream(pc, peerSocketId, 'main')
+      return pc
+    },
+    [getPeerEntry, createSubConnection, attachLocalMedia, syncReceiversToStream]
+  )
+
+  // Teklifi alan taraf: kanallar setRemoteDescription ile oluşuyor.
+  const acceptMainConnection = useCallback(
+    (peerSocketId) => {
+      const entry = getPeerEntry(peerSocketId)
+      if (!entry.mainPc) entry.mainPc = createSubConnection(peerSocketId, 'main')
       return entry.mainPc
     },
-    [createSubConnection]
+    [getPeerEntry, createSubConnection]
   )
+
+  // Mikrofon/kamera açılıp kapanınca bütün ana bağlantılarda o türün
+  // kanalına yeni izi (ya da kapatırken null) takıyor.
+  const setLocalTrackOnMainConnections = useCallback((kind, track) => {
+    peerConnectionsRef.current.forEach(({ mainPc }, peerSocketId) => {
+      const transceiver = mainPc
+        ?.getTransceivers()
+        .find((t) => t.receiver.track.kind === kind && t.currentDirection !== 'stopped')
+      if (!transceiver) return
+      transceiver.sender.replaceTrack(track).catch((err) => {
+        console.error(`[replaceTrack] ${peerSocketId} - ${kind} hata:`, err)
+      })
+      debugLog(`[replaceTrack] ${peerSocketId} - ${kind} ${track ? 'açıldı' : 'kapandı'}`)
+    })
+  }, [])
 
   const getOrCreateScreenConnection = useCallback(
     (peerSocketId) => {
-      let entry = peerConnectionsRef.current.get(peerSocketId)
-      if (!entry) {
-        entry = { mainPc: null, screenPc: null }
-        peerConnectionsRef.current.set(peerSocketId, entry)
-      }
+      const entry = getPeerEntry(peerSocketId)
       if (!entry.screenPc) {
         const pc = createSubConnection(peerSocketId, 'screen')
         const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0]
@@ -1335,44 +1378,8 @@ function App() {
       }
       return entry.screenPc
     },
-    [createSubConnection]
+    [getPeerEntry, createSubConnection]
   )
-
-  const ensureMainConnectionsForAllPeers = useCallback(() => {
-    peers.forEach((peer) => {
-      const entry = peerConnectionsRef.current.get(peer.socketId)
-      if (!entry || !entry.mainPc) {
-        getOrCreateMainConnection(peer.socketId)
-      }
-    })
-  }, [peers, getOrCreateMainConnection])
-
-  const addTrackToMainConnections = useCallback(
-    (track, stream) => {
-      ensureMainConnectionsForAllPeers()
-      peerConnectionsRef.current.forEach(({ mainPc }, peerSocketId) => {
-        if (!mainPc) return
-        try {
-          mainPc.addTrack(track, stream)
-          debugLog(`[addTrack/main] ${peerSocketId} - ${track.kind} eklendi`)
-        } catch (err) {
-          console.error(`[addTrack/main] ${peerSocketId} hata:`, err)
-        }
-      })
-    },
-    [ensureMainConnectionsForAllPeers]
-  )
-
-  const removeTrackFromMainConnections = useCallback((track) => {
-    peerConnectionsRef.current.forEach(({ mainPc }, peerSocketId) => {
-      if (!mainPc) return
-      const sender = mainPc.getSenders().find((s) => s.track === track)
-      if (sender) {
-        mainPc.removeTrack(sender)
-        debugLog(`[removeTrack/main] ${peerSocketId} - ${track.kind} çıkarıldı`)
-      }
-    })
-  }, [])
 
   const addTrackToScreenConnections = useCallback(
     (track, stream) => {
@@ -1636,7 +1643,7 @@ function App() {
 
       socket.on('voice-user-joined', (user) => {
         setPeers((prev) => [...prev, user])
-        getOrCreateMainConnection(user.socketId)
+        startMainConnection(user.socketId)
         playJoinSound()
       })
 
@@ -1658,15 +1665,23 @@ function App() {
 
       socket.on('signal', async ({ from, data }) => {
         const connectionType = data.connectionType === 'screen' ? 'screen' : 'main'
-        let entry = peerConnectionsRef.current.get(from)
-        if (!entry) {
-          entry = { mainPc: null, screenPc: null }
-          peerConnectionsRef.current.set(from, entry)
+        const entry = getPeerEntry(from)
+
+        // Karşı taraf ana bağlantısını bir hata yüzünden kapattı ve yenisini
+        // istiyor: başlatan taraf olarak sıfırdan kuruyoruz.
+        if (data.type === 'restart-request') {
+          entry.mainPc?.close()
+          entry.mainPc = null
+          startMainConnection(from)
+          return
         }
+
         const pc =
           connectionType === 'screen'
             ? entry.screenPc || getOrCreateScreenConnection(from)
-            : entry.mainPc || getOrCreateMainConnection(from)
+            : entry.mainPc || (data.type === 'offer' ? acceptMainConnection(from) : null)
+        // Kapatılmış bir bağlantıya ait geç gelen cevap ya da aday.
+        if (!pc) return
 
         try {
           if (data.type === 'offer') {
@@ -1690,6 +1705,9 @@ function App() {
             // signalingState "have-local-offer" ise tarayıcı tarafından
             // otomatik olarak rollback yapılmasını sağlar (spec gereği).
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
+            // Teklifle gelen ses/görüntü kanallarına kendi izlerimizi tak,
+            // cevap da "ikisi de gönderiyor" (sendrecv) olarak gitsin.
+            if (connectionType === 'main') attachLocalMedia(pc)
             const answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             socket.emit('signal', {
@@ -1722,6 +1740,16 @@ function App() {
             delete updated[connectionType === 'screen' ? 'screenStream' : 'mainStream']
             return { ...prev, [from]: updated }
           })
+          // Ana bağlantı olmadan ses gelmez: başlatan tarafsak yenisini
+          // kuruyoruz, değilsek karşı taraftan istiyoruz. Sonsuz döngüye
+          // girmesin diye kişi başı en fazla 3 kez.
+          if (connectionType === 'main') {
+            entry.mainRestarts = (entry.mainRestarts || 0) + 1
+            if (entry.mainRestarts <= 3) {
+              if (pc.isInitiator) startMainConnection(from)
+              else socket.emit('signal', { to: from, data: { type: 'restart-request' } })
+            }
+          }
         }
       })
 
@@ -1773,7 +1801,10 @@ function App() {
       cleanupSocket,
       stopLocalMedia,
       cleanupPeerConnections,
-      getOrCreateMainConnection,
+      getPeerEntry,
+      startMainConnection,
+      acceptMainConnection,
+      attachLocalMedia,
       getOrCreateScreenConnection,
       syncReceiversToStream,
       inVoice,
@@ -1817,9 +1848,12 @@ function App() {
           )
           const otherTracks = localMainStream ? localMainStream.getTracks() : []
           const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
+          // Ref'i hemen güncelliyoruz: bu arada kurulan bir bağlantı da
+          // (bkz. attachLocalMedia) yeni izi bulsun.
+          localMainStreamRef.current = newLocalStream
           setLocalMainStream(newLocalStream)
           setIsMicOn(true)
-          addTrackToMainConnections(newAudioTrack, newLocalStream)
+          setLocalTrackOnMainConnections('audio', newAudioTrack)
           debugLog(
             '[mikrofon] Şu an açık bağlantı sayısı:',
             peerConnectionsRef.current.size
@@ -1835,7 +1869,7 @@ function App() {
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
     },
-    [localMainStream, addTrackToMainConnections, selectedAudioInput]
+    [localMainStream, setLocalTrackOnMainConnections, selectedAudioInput]
   )
 
   // YENİ: Herkesin sesini, kayıtlı tercihine (peerVolumes) göre geri
@@ -1944,12 +1978,12 @@ function App() {
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
     if (existingVideoTrack && isCameraOn) {
-      removeTrackFromMainConnections(existingVideoTrack)
+      setLocalTrackOnMainConnections('video', null)
       existingVideoTrack.stop()
-      setLocalMainStream((prev) => {
-        const remaining = prev.getTracks().filter((t) => t !== existingVideoTrack)
-        return remaining.length > 0 ? new MediaStream(remaining) : null
-      })
+      const remaining = localMainStream.getTracks().filter((t) => t !== existingVideoTrack)
+      const newLocalStream = remaining.length > 0 ? new MediaStream(remaining) : null
+      localMainStreamRef.current = newLocalStream
+      setLocalMainStream(newLocalStream)
       setIsCameraOn(false)
       socketRef.current?.emit('state-update', { cameraOn: false })
       return
@@ -1959,14 +1993,15 @@ function App() {
       const newVideoTrack = camStream.getVideoTracks()[0]
       const otherTracks = localMainStream ? localMainStream.getTracks() : []
       const newLocalStream = new MediaStream([...otherTracks, newVideoTrack])
+      localMainStreamRef.current = newLocalStream
       setLocalMainStream(newLocalStream)
       setIsCameraOn(true)
-      addTrackToMainConnections(newVideoTrack, newLocalStream)
+      setLocalTrackOnMainConnections('video', newVideoTrack)
       socketRef.current?.emit('state-update', { cameraOn: true })
     } catch (err) {
       setMediaError(describeMediaError(err))
     }
-  }, [localMainStream, isCameraOn, addTrackToMainConnections, removeTrackFromMainConnections])
+  }, [localMainStream, isCameraOn, setLocalTrackOnMainConnections])
 
   const stopScreenShare = useCallback(() => {
     const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0]

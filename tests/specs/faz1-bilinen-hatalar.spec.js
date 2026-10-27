@@ -33,7 +33,7 @@ async function mertVeEceSeste(disco, { mic = false } = {}) {
 }
 
 test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
-  test.fail('H30: mikrofonunu ilk kez açan kişi karşı taraftan duyuluyor', async ({ disco }) => {
+  test('H30: mikrofonunu ilk kez açan kişi karşı taraftan duyuluyor', async ({ disco }) => {
     const { mert, ece } = await mertVeEceSeste(disco, { mic: true })
     await mert.expectHearingSomeone()
     await ece.expectHearingSomeone()
@@ -73,7 +73,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect(mert.chat).toContainText('Sunucu yeniden başladı ama buradayız')
   })
 
-  test.fail('H3: kamerasını açan kişinin görüntüsü karşı tarafta görünüyor', async ({ disco }) => {
+  test('H3: kamerasını açan kişinin görüntüsü karşı tarafta görünüyor', async ({ disco }) => {
     const { mert, ece } = await mertVeEceSeste(disco)
     await ece.cameraOn()
     const video = mert.peerTile('Ece').locator('video.remote-video')

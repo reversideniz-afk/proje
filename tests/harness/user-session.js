@@ -1,7 +1,11 @@
 // Tarayıcıdaki bir kullanıcıyı arayüz üzerinden yöneten yardımcı: tıpkı
 // gerçek bir kullanıcı gibi giriş yapar, kanala girer, sese katılır.
 import { expect } from '@playwright/test'
-import { readIncomingAudioBytes, readSpeakerPeak } from './instrument.js'
+import {
+  readIncomingAudioBytes,
+  readIncomingAudioBytesPerConnection,
+  readSpeakerPeak,
+} from './instrument.js'
 import { PASSWORD } from './seed.js'
 
 export class UserSession {
@@ -75,6 +79,22 @@ export class UserSession {
         timeout,
       })
       .toBeGreaterThan(0)
+  }
+
+  // Seste N kişi daha varsa: N ayrı bağlantının HER BİRİNDEN ses geliyor mu?
+  async expectAudioFromEachPeer(peerCount, { timeout = 15_000 } = {}) {
+    const before = await this.page.evaluate(readIncomingAudioBytesPerConnection)
+    await expect
+      .poll(
+        async () => {
+          const now = await this.page.evaluate(readIncomingAudioBytesPerConnection)
+          if (now.length !== before.length) return `bağlantı sayısı değişti: ${now.length}`
+          return now.filter((bytes, i) => bytes > before[i]).length
+        },
+        { message: `${this.name} her eşten ses almıyor`, timeout }
+      )
+      .toBe(peerCount)
+    expect(before).toHaveLength(peerCount)
   }
 
   speakerPeak() {

@@ -69,9 +69,6 @@ test.describe('Temel akışlar', { tag: '@temel' }, () => {
     expect(mert.consoleLines.filter((line) => line.startsWith('[log]'))).toEqual([])
   })
 
-  // Bugün mikrofonu ilk açışta karşı taraf duymuyor (H30); kapatıp açmak
-  // düzeltiyor. Bu test, ses çalma yolunun (Web Audio, kişi başı ses
-  // seviyesi) kendisinin çalıştığını güvenceye alıyor.
   test('mikrofonunu kapatıp açan kişi karşı taraftan duyuluyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
@@ -86,5 +83,37 @@ test.describe('Temel akışlar', { tag: '@temel' }, () => {
     await ece.mediaButton('Mikrofonu kapat').click()
     await ece.micOn()
     await mert.expectHearingSomeone()
+  })
+
+  test('üç kişi seste, herkes diğer ikisinden ses alıyor ve duyuyor', async ({ disco }) => {
+    const users = []
+    for (const name of ['Mert', 'Ece', 'Bora']) {
+      const user = await disco.user(name)
+      await user.openChannel('genel')
+      await user.joinVoice()
+      users.push(user)
+    }
+    for (const user of users) await user.micOn()
+    for (const user of users) {
+      await user.expectAudioFromEachPeer(2)
+      await user.expectHearingSomeone()
+    }
+  })
+
+  test('ekran paylaşımı karşı tarafta görünüyor ve durdurulabiliyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.joinVoice()
+    await ece.joinVoice()
+
+    await mert.mediaButton('Ekranı paylaş').click()
+    const screen = ece.page.locator('video.remote-video--screen')
+    await expect(screen).toBeVisible()
+    await expect.poll(() => screen.evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+
+    await mert.mediaButton('Ekran paylaşımını durdur').click()
+    await expect(screen).toHaveCount(0)
   })
 })
