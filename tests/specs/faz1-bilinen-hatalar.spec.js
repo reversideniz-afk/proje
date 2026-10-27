@@ -190,7 +190,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
       .toBeGreaterThan(0)
   })
 
-  test.fail('H4: seste iken bulunduğun kanala tekrar tıklamak sesten atmıyor', async ({ disco }) => {
+  test('H4: seste iken bulunduğun kanala tekrar tıklamak sesten atmıyor', async ({ disco }) => {
     const observer = await disco.observer('genel')
     const mert = await disco.user('Mert')
     await mert.openChannel('genel')

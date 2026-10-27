@@ -1524,14 +1524,20 @@ function App() {
   // hangi sunucuya ait olduğu activeServerIdRef'ten alınıyor.
   const joinChannel = useCallback(
     (channelId) => {
+      // Zaten açık olan kanala tıklamak hiçbir şey yapmıyor. Eskiden aşağıdaki
+      // sıfırlama yoluna düşüp sesteki kişiyi sesten atıyordu (H4).
+      if (channelId === activeChannelRef.current && socketRef.current) return
+
       // DÜZELTME: sesteyken başka bir kanala TIKLAYIP sadece mesajlarına
       // göz atmak istiyorsan, soketi/mikrofonu/eş bağlantılarını YIKMAMIZ
       // gerekmiyor — sadece HANGİ kanalın mesajlarını izlediğimizi
       // değiştiriyoruz (var olan soket üzerinden 'join-channel' tekrar
       // gönderilir). Ses bağlantısı olduğu kanalda (voiceChannel) kalmaya
       // devam eder. Sunucu tarafında da metin/ses odaları zaten ayrı
-      // (bkz. server.js — currentTextRoom / currentVoiceRoom).
-      if (inVoice && socketRef.current?.connected && channelId !== activeChannelRef.current) {
+      // (bkz. server.js — currentTextRoom / currentVoiceRoom). Bağlantı o an
+      // yeniden kuruluyorsa da sesi koparmıyoruz: yeniden bağlanınca yeni
+      // kanala girilir (bkz. 'connect').
+      if (inVoice && socketRef.current) {
         setMessages([])
         setEphemeralPhotos([])
         setTypingUsers([])
