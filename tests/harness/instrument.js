@@ -10,7 +10,16 @@ export function instrumentPage() {
     tones: [],
     mediaTracks: [],
     speakerTaps: [],
+    webSockets: [],
   })
+
+  const NativeWebSocket = window.WebSocket
+  window.WebSocket = class extends NativeWebSocket {
+    constructor(...args) {
+      super(...args)
+      disco.webSockets.push(String(args[0]))
+    }
+  }
 
   // Hoparlöre (ctx.destination) bağlanan her düğümü ayrıca bir ölçere de
   // bağlıyoruz: kullanıcının gerçekten ne duyacağını buradan okuyoruz.

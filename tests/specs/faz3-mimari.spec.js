@@ -35,6 +35,33 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     expect((await mert.emitAck('server-channels', { serverId: disco.serverId })).success).toBe(false)
   })
 
+  test('uygulama baştan sona tek bağlantı kullanıyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.send('merhaba')
+    await mert.openChannel('oyun')
+    await mert.openChannel('genel')
+    await ece.joinVoice()
+    await mert.joinVoice()
+    await expect(ece.peerTile('Mert')).toBeVisible()
+    await mert.leaveVoiceButton().click()
+    await mert.page.getByRole('button', { name: 'Kanaldan Ayrıl' }).click()
+    await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
+
+    const sockets = await mert.probe(() => window.__disco.webSockets.filter((url) => url.includes('/socket.io/')))
+    expect(sockets).toHaveLength(1)
+  })
+
+  test('H16: arkadaşın açtığı yeni kanal kenar çubuğunda hemen görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    const alganis = await disco.client('Alganis')
+    await alganis.emitAck('create-channel', { token: alganis.token, serverId: disco.serverId, name: 'yeni-kanal' })
+    await expect(mert.channelButton('yeni-kanal')).toBeVisible()
+  })
+
   test('H16: yeni kanal ve yeni üye sunucudaki herkese anında bildiriliyor', async ({ disco }) => {
     const alganis = await disco.client('Alganis')
     const mertLogin = await disco.client('Mert')

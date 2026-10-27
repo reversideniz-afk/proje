@@ -594,6 +594,8 @@ function App() {
   // Kanal soketindeki 'server-list-changed' dinleyicisi, daha aşağıda
   // tanımlanan liste yenileme fonksiyonlarına bu ref üzerinden ulaşıyor.
   const refreshServerDataRef = useRef(null)
+  // Aynısı, Ayarlar'daki "Sunucu Üyeleri" listesi için (sadece açıkken).
+  const refreshServerMembersRef = useRef(null)
 
   // YENİ: üye listesi (Discord tarzı, sağda) — online (metin kanalına
   // bağlı herkes, seste olanlar ayrıca işaretli) + offline (daha önce
@@ -1075,7 +1077,23 @@ function App() {
     [peers]
   )
 
+  // Uygulama başına TEK bağlantı: açılışta kuruluyor, uygulama kapanana
+  // kadar açık kalıyor. Giriş, kanallar, ses ve bütün istekler bundan
+  // gidiyor; her (yeniden) bağlanışta oturum anahtarı el sıkışmada
+  // gönderiliyor ve sunucu bağlantıyı bize bağlıyor. Eskiden her kanal için
+  // ayrı, her istek (giriş, sunucu listesi…) için de geçici bir bağlantı
+  // açılıyordu. Olay dinleyicileri aşağıda, joinChannel'ın yanında.
   const socketRef = useRef(null)
+  useEffect(() => {
+    const socket = io(SERVER_URL, {
+      auth: (callback) => callback({ token: sessionTokenRef.current }),
+    })
+    socketRef.current = socket
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [])
   const localVideoRef = useRef(null)
   const chatMessagesRef = useRef(null)
   const localScreenVideoRef = useRef(null)
@@ -1215,13 +1233,6 @@ function App() {
     setScreenSourceOptions(null)
   }, [])
 
-  const cleanupSocket = useCallback(() => {
-    if (socketRef.current) {
-      socketRef.current.disconnect()
-      socketRef.current = null
-    }
-  }, [])
-
   const cleanupPeerConnections = useCallback(() => {
     peerConnectionsRef.current.forEach(({ mainPc, screenPc }) => {
       if (mainPc) mainPc.close()
@@ -1244,11 +1255,10 @@ function App() {
 
   useEffect(() => {
     return () => {
-      cleanupSocket()
       stopLocalMedia()
       cleanupPeerConnections()
     }
-  }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
+  }, [stopLocalMedia, cleanupPeerConnections])
 
   // Karşı tarafın akışını (MediaStream) bağlantının alıcı izleriyle
   // eşitliyor. Ana bağlantıda her türden TEK alıcı olduğu için (bkz.
@@ -1556,10 +1566,9 @@ function App() {
   )
 
   const leaveChannel = useCallback(() => {
-    cleanupSocket()
-    stopLocalMedia()
-    cleanupPeerConnections()
-    setPeers([])
+    socketRef.current?.emit('leave-channel')
+    resetVoiceState()
+    activeChannelRef.current = null
     setMessages([])
     setEphemeralPhotos([])
     setTypingUsers([])
@@ -1576,401 +1585,379 @@ function App() {
     setVoiceChannel(null)
     setEnlargedTile(null)
     setActiveChannel(null)
-  }, [cleanupSocket, stopLocalMedia, cleanupPeerConnections])
+  }, [resetVoiceState])
 
-  // YENİ: Kanala (METİN) katılma — ses bağlantısı burada HİÇ kurulmuyor.
-  // ÇOKLU SUNUCU: channelId artık kanalın ObjectId'si (ismi değil);
-  // hangi sunucuya ait olduğu activeServerIdRef'ten alınıyor.
-  const joinChannel = useCallback(
-    (channelId) => {
-      // Zaten açık olan kanala tıklamak hiçbir şey yapmıyor. Eskiden aşağıdaki
-      // sıfırlama yoluna düşüp sesteki kişiyi sesten atıyordu (H4).
-      if (channelId === activeChannelRef.current && socketRef.current) return
+  // Kanala (METİN) girme — ses bağlantısı burada HİÇ kurulmuyor. Kanal
+  // değiştirmek bağlantıya ve sese dokunmuyor: sadece hangi kanalın
+  // mesajlarını izlediğimiz değişiyor. Sesteysek ses olduğu kanalda
+  // (voiceChannel) kalıyor, başka kanalın mesajlarına göz atılabiliyor.
+  // Bağlantı o an yeniden kuruluyorsa istek bekliyor, bağlanınca gidiyor.
+  const joinChannel = useCallback((channelId) => {
+    // Zaten açık olan kanala tıklamak hiçbir şey yapmıyor; eskiden sesteki
+    // kişiyi sesten atıyordu (H4).
+    if (channelId === activeChannelRef.current) return
+    setMessages([])
+    setEphemeralPhotos([])
+    setTypingUsers([])
+    setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
+    setHasMoreHistory(true)
+    setOnlineMembers([])
+    setOfflineMembers([])
+    setConnectionError(null)
+    setEnlargedTile(null)
+    setActiveChannel(channelId)
+    activeChannelRef.current = channelId
+    socketRef.current?.emit('join-channel', {
+      serverId: activeServerIdRef.current,
+      channelId,
+      token: sessionTokenRef.current,
+    })
+  }, [])
 
-      // DÜZELTME: sesteyken başka bir kanala TIKLAYIP sadece mesajlarına
-      // göz atmak istiyorsan, soketi/mikrofonu/eş bağlantılarını YIKMAMIZ
-      // gerekmiyor — sadece HANGİ kanalın mesajlarını izlediğimizi
-      // değiştiriyoruz (var olan soket üzerinden 'join-channel' tekrar
-      // gönderilir). Ses bağlantısı olduğu kanalda (voiceChannel) kalmaya
-      // devam eder. Sunucu tarafında da metin/ses odaları zaten ayrı
-      // (bkz. server.js — currentTextRoom / currentVoiceRoom). Bağlantı o an
-      // yeniden kuruluyorsa da sesi koparmıyoruz: yeniden bağlanınca yeni
-      // kanala girilir (bkz. 'connect').
-      if (inVoice && socketRef.current) {
-        setMessages([])
-        setEphemeralPhotos([])
-        setTypingUsers([])
-        setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
-        setHasMoreHistory(true)
-        setOnlineMembers([])
-        setOfflineMembers([])
-        setConnectionError(null)
-        setEnlargedTile(null)
-        setActiveChannel(channelId)
-        socketRef.current.emit('join-channel', {
-          serverId: activeServerIdRef.current,
-          channelId,
-          token: sessionTokenRef.current,
-        })
+  // Tek bağlantının olay dinleyicileri. Bağlantı uygulama boyunca açık
+  // kalıyor; dinleyiciler burada takılıyor (kullandıkları fonksiyonlar
+  // değişirse yeniden takılıyor).
+  const hasConnectedBeforeRef = useRef(false)
+  useEffect(() => {
+    const socket = socketRef.current
+    if (!socket) return
+
+    // Yeniden bağlanınca (internet bir an gidip geldiğinde, sunucu yeniden
+    // başladığında) o sırada açık olan kanala giriliyor, sesteysek kanala
+    // girer girmez sese de dönülüyor. İlk bağlantıda henüz kanal yok.
+    socket.on('connect', () => {
+      setConnectionStatus('connected')
+      const isReconnect = hasConnectedBeforeRef.current
+      hasConnectedBeforeRef.current = true
+      const channelId = activeChannelRef.current
+      if (!isReconnect || !channelId || !sessionTokenRef.current) return
+      socket.emit(
+        'join-channel',
+        { serverId: activeServerIdRef.current, channelId, token: sessionTokenRef.current },
+        (response) => {
+          if (response?.success && voiceChannelRef.current) rejoinVoice(socket)
+        }
+      )
+    })
+
+    socket.on('disconnect', () => {
+      setConnectionStatus('reconnecting')
+    })
+
+    // Kanala girilemedi (ör. sunucudan çıkarıldıktan sonra yeniden
+    // bağlanırken): sesi de tamamen kapatıyoruz. Eskiden sadece soket
+    // kapanıyor; mikrofon/kamera açık, eş bağlantıları ayakta ve
+    // kenar çubuğundaki 🎙️ işareti asılı kalıyordu (H14).
+    socket.on('join-error', (message) => {
+      setConnectionError(message || 'Kanala katılamadın.')
+      // Sunucudan atılınca başka bir sunucuya geçiliyor ve hata alanı
+      // temizleniyor; neden çıkarıldığımız bildirim şeridinde kalsın.
+      setNotice(message || 'Kanala katılamadın.')
+      socket.emit('leave-channel')
+      resetVoiceState()
+      setActiveChannel(null)
+    })
+
+    // YENİ: üye listesi (online + offline) — tek doğru kaynak.
+    socket.on('channel-members', ({ online, offline }) => {
+      setOnlineMembers(online || [])
+      setOfflineMembers(offline || [])
+    })
+
+    socket.on('message-history', (history) => {
+      setMessages(history)
+      setHasMoreHistory(history.length >= 50)
+      requestAnimationFrame(() => {
+        if (chatMessagesRef.current) {
+          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+        }
+      })
+    })
+
+    socket.on('new-message', (message) => {
+      setMessages((prev) => [...prev, message])
+      // YENİ: Kendi mesajım değilse ses çal — beni @bahsetmişse (ve
+      // pencere görünür değilse) daha belirgin olan bahsetme sesi,
+      // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
+      // aynı anda çalmıyor.
+      const myName = displayNameRef.current
+      const isOwnMessage = message.username === myName
+      // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
+      // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
+      // kişiye değil.
+      const isMention =
+        (myName && message.text?.toLowerCase().includes(`@${myName.toLowerCase()}`)) ||
+        message.text?.toLowerCase().includes('@all')
+      if (!isOwnMessage) {
+        if (isMention && document.hidden) {
+          playMentionSound()
+        } else {
+          playMessageSound()
+        }
+      }
+      requestAnimationFrame(() => {
+        if (chatMessagesRef.current) {
+          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+        }
+      })
+    })
+
+    // YENİ: fotoğraf geldiğinde — kalıcı 'messages' listesine DEĞİL,
+    // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
+    socket.on('new-photo', (photo) => {
+      setEphemeralPhotos((prev) => [...prev, photo])
+      if (photo.username !== displayNameRef.current) playMessageSound()
+      requestAnimationFrame(() => {
+        if (chatMessagesRef.current) {
+          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+        }
+      })
+    })
+
+    // YENİ: Yazıyor göstergesi.
+    socket.on('user-typing', ({ username }) => {
+      setTypingUsers((prev) => (prev.includes(username) ? prev : [...prev, username]))
+    })
+    socket.on('user-stopped-typing', ({ username }) => {
+      setTypingUsers((prev) => prev.filter((u) => u !== username))
+    })
+
+    // YENİ: Bir mesajın tepkileri değiştiğinde, o mesajı güncelle.
+    socket.on('reactions-updated', ({ messageId, reactions }) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+      )
+    })
+
+    // YENİ: Mesaj(lar) silindiğinde, listeden kaldır.
+    socket.on('messages-deleted', ({ messageIds }) => {
+      setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)))
+    })
+
+    // YENİ: Bir mesaj düzenlendiğinde, metnini güncelle.
+    socket.on('message-edited', ({ messageId, newText, editedAt }) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, text: newText, editedAt } : m))
+      )
+    })
+
+    // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
+    // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
+    // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
+    socket.on('channel-activity', ({ channelId: activityChannelId }) => {
+      if (activityChannelId === activeChannelRef.current) return
+      setUnreadChannels((prev) =>
+        prev.includes(activityChannelId) ? prev : [...prev, activityChannelId]
+      )
+    })
+
+    // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
+    // tetiklenmezler ama baştan hazır olmaları lazım. ----
+    // Ekran paylaşıyorsak, seste olan (ya da sonradan giren) herkese ekran
+    // bağlantısını biz başlatıyoruz; yoksa paylaşım başladıktan sonra sese
+    // giren kişi ekranı hiç görmüyordu (H31).
+    socket.on('existing-voice-users', (users) => {
+      setPeers(users)
+      if (localScreenStreamRef.current) {
+        users.forEach((user) => getOrCreateScreenConnection(user.socketId))
+      }
+    })
+
+    socket.on('voice-user-joined', (user) => {
+      setPeers((prev) => [...prev.filter((p) => p.socketId !== user.socketId), user])
+      startMainConnection(user.socketId)
+      if (localScreenStreamRef.current) getOrCreateScreenConnection(user.socketId)
+      playJoinSound()
+    })
+
+    // Aynı hesapla başka bir yerden sese girildi; sunucu bu bağlantıyı
+    // sesten çıkardı.
+    // Sunucu bizi sesten çıkardı: aynı hesapla başka bir yerden sese
+    // girildi ya da bu kanala erişim kalktı.
+    socket.on('voice-ended', ({ message } = {}) => {
+      resetVoiceState()
+      if (message) setNotice(message)
+    })
+
+    // Sunucudan atıldık, sunucu silindi ya da rolümüz değişti: sunucu ve
+    // kanal listeleri yenilensin.
+    socket.on('server-list-changed', () => {
+      refreshServerDataRef.current?.()
+    })
+
+    // Sunucudaki biri kanal ekledi ya da sunucuya biri katıldı/çıkarıldı:
+    // listeler anında yenilensin (H16; eskiden sunucu değiştirip geri
+    // gelene kadar görünmüyordu).
+    socket.on('channels-changed', ({ serverId } = {}) => {
+      if (serverId === activeServerIdRef.current) refreshServerDataRef.current?.()
+    })
+    socket.on('members-changed', ({ serverId } = {}) => {
+      if (serverId === activeServerIdRef.current) refreshServerMembersRef.current?.()
+    })
+
+    socket.on('voice-user-left', ({ socketId }) => {
+      playLeaveSound()
+      setPeers((prev) => prev.filter((p) => p.socketId !== socketId))
+      const entry = peerConnectionsRef.current.get(socketId)
+      if (entry) {
+        if (entry.mainPc) entry.mainPc.close()
+        if (entry.screenPc) entry.screenPc.close()
+        peerConnectionsRef.current.delete(socketId)
+      }
+      setRemoteStreams((prev) => {
+        const updated = { ...prev }
+        delete updated[socketId]
+        return updated
+      })
+    })
+
+    socket.on('signal', async ({ from, data }) => {
+      const connectionType = data.connectionType === 'screen' ? 'screen' : 'main'
+      const entry = getPeerEntry(from)
+
+      // Karşı taraf ana bağlantısını bir hata yüzünden kapattı ve yenisini
+      // istiyor: başlatan taraf olarak sıfırdan kuruyoruz.
+      if (data.type === 'restart-request') {
+        entry.mainPc?.close()
+        entry.mainPc = null
+        startMainConnection(from)
         return
       }
 
-      cleanupSocket()
-      stopLocalMedia()
-      cleanupPeerConnections()
-      setPeers([])
-      setMessages([])
-      setEphemeralPhotos([])
-      setTypingUsers([])
-      setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
-      setHasMoreHistory(true)
-      setOnlineMembers([])
-      setOfflineMembers([])
-      setConnectionError(null)
-      setMediaError(null)
-      setIsMicOn(false)
-      setIsCameraOn(false)
-      setIsScreenSharing(false)
-      setConnectionStatus('connected')
-      setInVoice(false)
-      setVoiceChannel(null)
-      setEnlargedTile(null)
-      setActiveChannel(channelId)
+      const pc =
+        connectionType === 'screen'
+          ? entry.screenPc || getOrCreateScreenConnection(from)
+          : entry.mainPc || (data.type === 'offer' ? acceptMainConnection(from) : null)
+      // Kapatılmış bir bağlantıya ait geç gelen cevap ya da aday.
+      if (!pc) return
 
-      const socket = io(SERVER_URL)
-      socketRef.current = socket
-
-      // İlk bağlantıda seçilen kanala, yeniden bağlanınca (internet bir an
-      // gidip geldiğinde, sunucu yeniden başladığında) o sırada bakılan
-      // kanala giriliyor. Sesteysek kanala girer girmez sese de dönüyoruz.
-      let hasConnectedBefore = false
-      socket.on('connect', () => {
-        setConnectionStatus('connected')
-        const isReconnect = hasConnectedBefore
-        hasConnectedBefore = true
-        socket.emit(
-          'join-channel',
-          {
-            serverId: activeServerIdRef.current,
-            channelId: isReconnect ? activeChannelRef.current : channelId,
-            token: sessionTokenRef.current,
-          },
-          (response) => {
-            if (isReconnect && response?.success && voiceChannelRef.current) rejoinVoice(socket)
+      try {
+        if (data.type === 'offer') {
+          // Perfect Negotiation: aynı anda iki taraf da teklif göndermiş
+          // olabilir (glare) — biz de kendi teklifimizi gönderiyorsak ya
+          // da zaten "stable" olmayan bir durumdaysak bu bir çakışmadır.
+          // "Kibar" (polite) taraf kendi teklifinden vazgeçip karşı
+          // tarafınkini kabul eder; "kaba" (impolite) taraf ise kendi
+          // teklifinde ısrar edip geleni yok sayar.
+          const offerCollision =
+            pc.makingOffer ||
+            (!pc.isSettingRemoteAnswerPending && pc.signalingState !== 'stable')
+          pc.ignoreOffer = !pc.polite && offerCollision
+          if (pc.ignoreOffer) {
+            debugLog(
+              `[signal] ${from}/${connectionType} - çakışan teklif yok sayıldı (impolite taraf)`
+            )
+            return
           }
-        )
-      })
-
-      socket.on('disconnect', () => {
-        setConnectionStatus('reconnecting')
-      })
-
-      // Kanala girilemedi (ör. sunucudan çıkarıldıktan sonra yeniden
-      // bağlanırken): sesi de tamamen kapatıyoruz. Eskiden sadece soket
-      // kapanıyor; mikrofon/kamera açık, eş bağlantıları ayakta ve
-      // kenar çubuğundaki 🎙️ işareti asılı kalıyordu (H14).
-      socket.on('join-error', (message) => {
-        setConnectionError(message || 'Kanala katılamadın.')
-        // Sunucudan atılınca başka bir sunucuya geçiliyor ve hata alanı
-        // temizleniyor; neden çıkarıldığımız bildirim şeridinde kalsın.
-        setNotice(message || 'Kanala katılamadın.')
-        cleanupSocket()
-        resetVoiceState()
-        setActiveChannel(null)
-      })
-
-      // YENİ: üye listesi (online + offline) — tek doğru kaynak.
-      socket.on('channel-members', ({ online, offline }) => {
-        setOnlineMembers(online || [])
-        setOfflineMembers(offline || [])
-      })
-
-      socket.on('message-history', (history) => {
-        setMessages(history)
-        setHasMoreHistory(history.length >= 50)
-        requestAnimationFrame(() => {
-          if (chatMessagesRef.current) {
-            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
-          }
-        })
-      })
-
-      socket.on('new-message', (message) => {
-        setMessages((prev) => [...prev, message])
-        // YENİ: Kendi mesajım değilse ses çal — beni @bahsetmişse (ve
-        // pencere görünür değilse) daha belirgin olan bahsetme sesi,
-        // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
-        // aynı anda çalmıyor.
-        const myName = displayNameRef.current
-        const isOwnMessage = message.username === myName
-        // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
-        // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
-        // kişiye değil.
-        const isMention =
-          (myName && message.text?.toLowerCase().includes(`@${myName.toLowerCase()}`)) ||
-          message.text?.toLowerCase().includes('@all')
-        if (!isOwnMessage) {
-          if (isMention && document.hidden) {
-            playMentionSound()
-          } else {
-            playMessageSound()
-          }
-        }
-        requestAnimationFrame(() => {
-          if (chatMessagesRef.current) {
-            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
-          }
-        })
-      })
-
-      // YENİ: fotoğraf geldiğinde — kalıcı 'messages' listesine DEĞİL,
-      // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
-      socket.on('new-photo', (photo) => {
-        setEphemeralPhotos((prev) => [...prev, photo])
-        if (photo.username !== displayNameRef.current) playMessageSound()
-        requestAnimationFrame(() => {
-          if (chatMessagesRef.current) {
-            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
-          }
-        })
-      })
-
-      // YENİ: Yazıyor göstergesi.
-      socket.on('user-typing', ({ username }) => {
-        setTypingUsers((prev) => (prev.includes(username) ? prev : [...prev, username]))
-      })
-      socket.on('user-stopped-typing', ({ username }) => {
-        setTypingUsers((prev) => prev.filter((u) => u !== username))
-      })
-
-      // YENİ: Bir mesajın tepkileri değiştiğinde, o mesajı güncelle.
-      socket.on('reactions-updated', ({ messageId, reactions }) => {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
-        )
-      })
-
-      // YENİ: Mesaj(lar) silindiğinde, listeden kaldır.
-      socket.on('messages-deleted', ({ messageIds }) => {
-        setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)))
-      })
-
-      // YENİ: Bir mesaj düzenlendiğinde, metnini güncelle.
-      socket.on('message-edited', ({ messageId, newText, editedAt }) => {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, text: newText, editedAt } : m))
-        )
-      })
-
-      // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
-      // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
-      // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
-      socket.on('channel-activity', ({ channelId: activityChannelId }) => {
-        if (activityChannelId === activeChannelRef.current) return
-        setUnreadChannels((prev) =>
-          prev.includes(activityChannelId) ? prev : [...prev, activityChannelId]
-        )
-      })
-
-      // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
-      // tetiklenmezler ama baştan hazır olmaları lazım. ----
-      // Ekran paylaşıyorsak, seste olan (ya da sonradan giren) herkese ekran
-      // bağlantısını biz başlatıyoruz; yoksa paylaşım başladıktan sonra sese
-      // giren kişi ekranı hiç görmüyordu (H31).
-      socket.on('existing-voice-users', (users) => {
-        setPeers(users)
-        if (localScreenStreamRef.current) {
-          users.forEach((user) => getOrCreateScreenConnection(user.socketId))
-        }
-      })
-
-      socket.on('voice-user-joined', (user) => {
-        setPeers((prev) => [...prev.filter((p) => p.socketId !== user.socketId), user])
-        startMainConnection(user.socketId)
-        if (localScreenStreamRef.current) getOrCreateScreenConnection(user.socketId)
-        playJoinSound()
-      })
-
-      // Aynı hesapla başka bir yerden sese girildi; sunucu bu bağlantıyı
-      // sesten çıkardı.
-      // Sunucu bizi sesten çıkardı: aynı hesapla başka bir yerden sese
-      // girildi ya da bu kanala erişim kalktı.
-      socket.on('voice-ended', ({ message } = {}) => {
-        resetVoiceState()
-        if (message) setNotice(message)
-      })
-
-      // Sunucudan atıldık, sunucu silindi ya da rolümüz değişti: sunucu ve
-      // kanal listeleri yenilensin.
-      socket.on('server-list-changed', () => {
-        refreshServerDataRef.current?.()
-      })
-
-      socket.on('voice-user-left', ({ socketId }) => {
-        playLeaveSound()
-        setPeers((prev) => prev.filter((p) => p.socketId !== socketId))
-        const entry = peerConnectionsRef.current.get(socketId)
-        if (entry) {
-          if (entry.mainPc) entry.mainPc.close()
-          if (entry.screenPc) entry.screenPc.close()
-          peerConnectionsRef.current.delete(socketId)
-        }
-        setRemoteStreams((prev) => {
-          const updated = { ...prev }
-          delete updated[socketId]
-          return updated
-        })
-      })
-
-      socket.on('signal', async ({ from, data }) => {
-        const connectionType = data.connectionType === 'screen' ? 'screen' : 'main'
-        const entry = getPeerEntry(from)
-
-        // Karşı taraf ana bağlantısını bir hata yüzünden kapattı ve yenisini
-        // istiyor: başlatan taraf olarak sıfırdan kuruyoruz.
-        if (data.type === 'restart-request') {
-          entry.mainPc?.close()
-          entry.mainPc = null
-          startMainConnection(from)
-          return
-        }
-
-        const pc =
-          connectionType === 'screen'
-            ? entry.screenPc || getOrCreateScreenConnection(from)
-            : entry.mainPc || (data.type === 'offer' ? acceptMainConnection(from) : null)
-        // Kapatılmış bir bağlantıya ait geç gelen cevap ya da aday.
-        if (!pc) return
-
-        try {
-          if (data.type === 'offer') {
-            // Perfect Negotiation: aynı anda iki taraf da teklif göndermiş
-            // olabilir (glare) — biz de kendi teklifimizi gönderiyorsak ya
-            // da zaten "stable" olmayan bir durumdaysak bu bir çakışmadır.
-            // "Kibar" (polite) taraf kendi teklifinden vazgeçip karşı
-            // tarafınkini kabul eder; "kaba" (impolite) taraf ise kendi
-            // teklifinde ısrar edip geleni yok sayar.
-            const offerCollision =
-              pc.makingOffer ||
-              (!pc.isSettingRemoteAnswerPending && pc.signalingState !== 'stable')
-            pc.ignoreOffer = !pc.polite && offerCollision
-            if (pc.ignoreOffer) {
-              debugLog(
-                `[signal] ${from}/${connectionType} - çakışan teklif yok sayıldı (impolite taraf)`
-              )
-              return
-            }
-            // Not: pc.polite true iken burada setRemoteDescription çağrılması,
-            // signalingState "have-local-offer" ise tarayıcı tarafından
-            // otomatik olarak rollback yapılmasını sağlar (spec gereği).
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
-            // Teklifle gelen ses/görüntü kanallarına kendi izlerimizi tak,
-            // cevap da "ikisi de gönderiyor" (sendrecv) olarak gitsin.
-            if (connectionType === 'main') attachLocalMedia(pc)
-            const answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            socket.emit('signal', {
-              to: from,
-              data: { type: 'answer', sdp: pc.localDescription, connectionType },
-            })
-            syncReceiversToStream(pc, from, connectionType)
-          } else if (data.type === 'answer') {
-            pc.isSettingRemoteAnswerPending = true
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
-            pc.isSettingRemoteAnswerPending = false
-            syncReceiversToStream(pc, from, connectionType)
-          } else if (data.type === 'ice-candidate') {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
-            } catch (err) {
-              // Kibar tarafın az önce yok saydığı bir teklife ait aday
-              // gelmiş olabilir — bu durumda hata beklenen bir şeydir.
-              if (!pc.ignoreOffer) throw err
-            }
-          }
-        } catch (err) {
-          console.error(`[signal] ${from}/${connectionType} - hata (bağlantı sıfırlanıyor):`, err)
-          pc.close()
-          if (connectionType === 'screen') entry.screenPc = null
-          else entry.mainPc = null
-          setRemoteStreams((prev) => {
-            const peerEntry = prev[from] || {}
-            const updated = { ...peerEntry }
-            delete updated[connectionType === 'screen' ? 'screenStream' : 'mainStream']
-            return { ...prev, [from]: updated }
+          // Not: pc.polite true iken burada setRemoteDescription çağrılması,
+          // signalingState "have-local-offer" ise tarayıcı tarafından
+          // otomatik olarak rollback yapılmasını sağlar (spec gereği).
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
+          // Teklifle gelen ses/görüntü kanallarına kendi izlerimizi tak,
+          // cevap da "ikisi de gönderiyor" (sendrecv) olarak gitsin.
+          if (connectionType === 'main') attachLocalMedia(pc)
+          const answer = await pc.createAnswer()
+          await pc.setLocalDescription(answer)
+          socket.emit('signal', {
+            to: from,
+            data: { type: 'answer', sdp: pc.localDescription, connectionType },
           })
-          // Ana bağlantı olmadan ses gelmez: başlatan tarafsak yenisini
-          // kuruyoruz, değilsek karşı taraftan istiyoruz. Sonsuz döngüye
-          // girmesin diye kişi başı en fazla 3 kez.
-          if (connectionType === 'main') {
-            entry.mainRestarts = (entry.mainRestarts || 0) + 1
-            if (entry.mainRestarts <= 3) {
-              if (pc.isInitiator) startMainConnection(from)
-              else socket.emit('signal', { to: from, data: { type: 'restart-request' } })
-            }
+          syncReceiversToStream(pc, from, connectionType)
+        } else if (data.type === 'answer') {
+          pc.isSettingRemoteAnswerPending = true
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
+          pc.isSettingRemoteAnswerPending = false
+          syncReceiversToStream(pc, from, connectionType)
+        } else if (data.type === 'ice-candidate') {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+          } catch (err) {
+            // Kibar tarafın az önce yok saydığı bir teklife ait aday
+            // gelmiş olabilir — bu durumda hata beklenen bir şeydir.
+            if (!pc.ignoreOffer) throw err
           }
         }
-      })
-
-      socket.on('user-state-update', ({ socketId, state }) => {
-        setPeers((prev) => prev.map((p) => (p.socketId === socketId ? { ...p, ...state } : p)))
-      })
-
-      // YENİ: profil fotoğrafını değiştirince sunucudan kesin onay —
-      // kendi görünümümüzü de anında güncelliyoruz.
-      socket.on('avatar-saved', ({ avatarData }) => {
-        setMyAvatar(avatarData || null)
-        setIsUploadingAvatar(false)
-      })
-
-      // YENİ: Alganis rolü bir kullanıcının rollerini ekleyip/çıkarınca,
-      // Üye Yönetimi listesindeki o satırı yerel olarak da güncelle.
-      socket.on('user-role-updated', ({ username: targetUsername, roles }) => {
-        setAllUsers((prev) =>
-          prev.map((u) => (u.username === targetUsername ? { ...u, roles } : u))
-        )
-      })
-
-      // YENİ: kilitli bir hesabın girişi (Üye Yönetimi'nden) açılınca.
-      socket.on('user-login-unlocked', ({ username: targetUsername }) => {
-        setAllUsers((prev) =>
-          prev.map((u) => (u.username === targetUsername ? { ...u, isLoginLocked: false } : u))
-        )
-      })
-
-      // YENİ: bir IP'nin banı kaldırılınca, Güvenlik listesinden de düş.
-      socket.on('ip-unbanned', ({ ip }) => {
-        setBannedIps((prev) => prev.filter((b) => b.ip !== ip))
-      })
-
-      // YENİ: bir IP kalıcı banlandığında (kayıt ekranına saldırı
-      // niteliğinde deneme), ŞU AN bağlıysak anlık uyarı al.
-      socket.on('security-alert', (alert) => {
-        setSecurityAlert(alert)
-        setBannedIps((prev) => {
-          if (prev.some((b) => b.ip === alert.ip)) return prev
-          return [
-            { ip: alert.ip, reason: alert.reason, attemptCount: alert.attemptCount, bannedAt: new Date() },
-            ...prev,
-          ]
+      } catch (err) {
+        console.error(`[signal] ${from}/${connectionType} - hata (bağlantı sıfırlanıyor):`, err)
+        pc.close()
+        if (connectionType === 'screen') entry.screenPc = null
+        else entry.mainPc = null
+        setRemoteStreams((prev) => {
+          const peerEntry = prev[from] || {}
+          const updated = { ...peerEntry }
+          delete updated[connectionType === 'screen' ? 'screenStream' : 'mainStream']
+          return { ...prev, [from]: updated }
         })
+        // Ana bağlantı olmadan ses gelmez: başlatan tarafsak yenisini
+        // kuruyoruz, değilsek karşı taraftan istiyoruz. Sonsuz döngüye
+        // girmesin diye kişi başı en fazla 3 kez.
+        if (connectionType === 'main') {
+          entry.mainRestarts = (entry.mainRestarts || 0) + 1
+          if (entry.mainRestarts <= 3) {
+            if (pc.isInitiator) startMainConnection(from)
+            else socket.emit('signal', { to: from, data: { type: 'restart-request' } })
+          }
+        }
+      }
+    })
+
+    socket.on('user-state-update', ({ socketId, state }) => {
+      setPeers((prev) => prev.map((p) => (p.socketId === socketId ? { ...p, ...state } : p)))
+    })
+
+    // YENİ: profil fotoğrafını değiştirince sunucudan kesin onay —
+    // kendi görünümümüzü de anında güncelliyoruz.
+    socket.on('avatar-saved', ({ avatarData }) => {
+      setMyAvatar(avatarData || null)
+      setIsUploadingAvatar(false)
+    })
+
+    // YENİ: Alganis rolü bir kullanıcının rollerini ekleyip/çıkarınca,
+    // Üye Yönetimi listesindeki o satırı yerel olarak da güncelle.
+    socket.on('user-role-updated', ({ username: targetUsername, roles }) => {
+      setAllUsers((prev) =>
+        prev.map((u) => (u.username === targetUsername ? { ...u, roles } : u))
+      )
+    })
+
+    // YENİ: kilitli bir hesabın girişi (Üye Yönetimi'nden) açılınca.
+    socket.on('user-login-unlocked', ({ username: targetUsername }) => {
+      setAllUsers((prev) =>
+        prev.map((u) => (u.username === targetUsername ? { ...u, isLoginLocked: false } : u))
+      )
+    })
+
+    // YENİ: bir IP'nin banı kaldırılınca, Güvenlik listesinden de düş.
+    socket.on('ip-unbanned', ({ ip }) => {
+      setBannedIps((prev) => prev.filter((b) => b.ip !== ip))
+    })
+
+    // YENİ: bir IP kalıcı banlandığında (kayıt ekranına saldırı
+    // niteliğinde deneme), ŞU AN bağlıysak anlık uyarı al.
+    socket.on('security-alert', (alert) => {
+      setSecurityAlert(alert)
+      setBannedIps((prev) => {
+        if (prev.some((b) => b.ip === alert.ip)) return prev
+        return [
+          { ip: alert.ip, reason: alert.reason, attemptCount: alert.attemptCount, bannedAt: new Date() },
+          ...prev,
+        ]
       })
-    },
-    [
-      cleanupSocket,
-      stopLocalMedia,
-      cleanupPeerConnections,
-      getPeerEntry,
-      startMainConnection,
-      acceptMainConnection,
-      attachLocalMedia,
-      getOrCreateScreenConnection,
-      syncReceiversToStream,
-      resetVoiceState,
-      rejoinVoice,
-      inVoice,
-    ]
-  )
+    })
+
+    return () => {
+      socket.removeAllListeners()
+    }
+  }, [
+    getPeerEntry,
+    startMainConnection,
+    acceptMainConnection,
+    attachLocalMedia,
+    getOrCreateScreenConnection,
+    syncReceiversToStream,
+    resetVoiceState,
+    rejoinVoice,
+  ])
 
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = localMainStream
@@ -2230,6 +2217,8 @@ function App() {
   const applyLoginResponse = useCallback((response) => {
     setUsername(response.username)
     setSessionToken(response.token)
+    // Bağlantı yeniden kurulursa el sıkışmada hemen bu anahtar gitsin.
+    sessionTokenRef.current = response.token
     if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
       setIceServers(response.iceServers)
     }
@@ -2244,34 +2233,27 @@ function App() {
     setLoggedIn(true)
   }, [])
 
-  // YENİ: ÇOKLU SUNUCU — bir kanala bağlı olmadan yapılan istekler
-  // (sunucu oluştur/katıl/kanal listesi vb.), login/register'daki AYNI
-  // desenle kısa ömürlü bir soket üzerinden tek seferlik gönderiliyor.
-  const emitViaTempSocket = useCallback((event, payload) => {
-    return new Promise((resolve) => {
-      const tempSocket = io(SERVER_URL)
-      tempSocket.on('connect', () => {
-        tempSocket.emit(event, payload, (response) => {
-          tempSocket.disconnect()
-          resolve(response)
-        })
-      })
-      tempSocket.on('connect_error', () => {
-        tempSocket.disconnect()
-        resolve({ success: false, message: 'Sunucuya bağlanılamadı.' })
-      })
-    })
+  // Cevap bekleyen istekler (giriş, sunucu oluştur/katıl, kanal listesi…)
+  // uygulamanın tek bağlantısı üzerinden gidiyor. Bağlantı o an kopuksa
+  // istek bekliyor ve bağlanınca gidiyor; Render'ın ücretsiz planı uykudan
+  // uyanırken bu bir dakikaya yaklaşabildiği için süre uzun.
+  const emitRequest = useCallback(async (event, payload) => {
+    try {
+      return await socketRef.current.timeout(60_000).emitWithAck(event, payload)
+    } catch {
+      return { success: false, message: 'Sunucuya bağlanılamadı.' }
+    }
   }, [])
 
   const fetchServerChannels = useCallback(
     async (serverId) => {
-      const response = await emitViaTempSocket('server-channels', {
+      const response = await emitRequest('server-channels', {
         token: sessionTokenRef.current,
         serverId,
       })
       setChannels(response?.success ? response.channels || [] : [])
     },
-    [emitViaTempSocket]
+    [emitRequest]
   )
 
   // YENİ: aktif sunucuyu değiştir — mevcut kanaldan/sesten çık (başka bir
@@ -2290,12 +2272,12 @@ function App() {
   )
 
   const refreshMyServers = useCallback(async () => {
-    const response = await emitViaTempSocket('list-my-servers', {
+    const response = await emitRequest('list-my-servers', {
       token: sessionTokenRef.current,
     })
     if (response?.success) setMyServers(response.servers || [])
     return response
-  }, [emitViaTempSocket])
+  }, [emitRequest])
 
   useEffect(() => {
     refreshServerDataRef.current = () => {
@@ -2308,7 +2290,7 @@ function App() {
     if (!newServerName.trim()) return
     setServerModalBusy(true)
     setServerModalError(null)
-    const response = await emitViaTempSocket('create-server', {
+    const response = await emitRequest('create-server', {
       token: sessionTokenRef.current,
       name: newServerName.trim(),
     })
@@ -2321,13 +2303,13 @@ function App() {
     } else {
       setServerModalError(response?.message || 'Sunucu oluşturulamadı.')
     }
-  }, [newServerName, emitViaTempSocket, refreshMyServers, selectServer])
+  }, [newServerName, emitRequest, refreshMyServers, selectServer])
 
   const handleJoinServer = useCallback(async () => {
     if (!joinInviteCode.trim()) return
     setServerModalBusy(true)
     setServerModalError(null)
-    const response = await emitViaTempSocket('join-server-by-invite', {
+    const response = await emitRequest('join-server-by-invite', {
       token: sessionTokenRef.current,
       inviteCode: joinInviteCode.trim(),
     })
@@ -2340,7 +2322,7 @@ function App() {
     } else {
       setServerModalError(response?.message || 'Sunucuya katılamadın.')
     }
-  }, [joinInviteCode, emitViaTempSocket, refreshMyServers, selectServer])
+  }, [joinInviteCode, emitRequest, refreshMyServers, selectServer])
 
   // YENİ: sunucuyu tamamen sil — sadece sahibi/platform admini
   // çağırabiliyor (arayüzden de sadece onlara gösteriliyor).
@@ -2353,7 +2335,7 @@ function App() {
     ) {
       return
     }
-    const response = await emitViaTempSocket('delete-server', {
+    const response = await emitRequest('delete-server', {
       token: sessionTokenRef.current,
       serverId: activeServerIdRef.current,
     })
@@ -2364,22 +2346,22 @@ function App() {
       window.localStorage?.removeItem('activeServerId')
       await refreshMyServers()
     }
-  }, [emitViaTempSocket, leaveChannel, refreshMyServers])
+  }, [emitRequest, leaveChannel, refreshMyServers])
 
   const openServerInvitePopover = useCallback(async () => {
-    const response = await emitViaTempSocket('get-server-invite', {
+    const response = await emitRequest('get-server-invite', {
       token: sessionTokenRef.current,
       serverId: activeServerIdRef.current,
     })
     if (response?.success) setServerInvitePopover({ code: response.inviteCode })
-  }, [emitViaTempSocket])
+  }, [emitRequest])
 
   // YENİ: sunucu sahibi kanal eklesin diye — v1'de basit bir prompt()
   // yeterli, kanalın kendine has bir ayar ekranı yok henüz.
   const handleCreateChannel = useCallback(async () => {
     const name = window.prompt('Yeni kanalın adı:')
     if (!name || !name.trim()) return
-    const response = await emitViaTempSocket('create-channel', {
+    const response = await emitRequest('create-channel', {
       token: sessionTokenRef.current,
       serverId: activeServerIdRef.current,
       name: name.trim(),
@@ -2389,27 +2371,27 @@ function App() {
     } else {
       window.alert(response?.message || 'Kanal oluşturulamadı.')
     }
-  }, [emitViaTempSocket, fetchServerChannels])
+  }, [emitRequest, fetchServerChannels])
 
   const fetchServerMembers = useCallback(async () => {
     if (!activeServerIdRef.current) return
-    const response = await emitViaTempSocket('list-server-members', {
+    const response = await emitRequest('list-server-members', {
       token: sessionTokenRef.current,
       serverId: activeServerIdRef.current,
     })
     if (response?.success) setServerMembers(response.members || [])
-  }, [emitViaTempSocket])
+  }, [emitRequest])
 
   const removeServerMember = useCallback(
     async (targetUsername) => {
-      const response = await emitViaTempSocket('remove-server-member', {
+      const response = await emitRequest('remove-server-member', {
         token: sessionTokenRef.current,
         serverId: activeServerIdRef.current,
         targetUsername,
       })
       if (response?.success) fetchServerMembers()
     },
-    [emitViaTempSocket, fetchServerMembers]
+    [emitRequest, fetchServerMembers]
   )
 
   // YENİ: erişilebilen sunucular geldiğinde (girişte / oturum devamında),
@@ -2427,33 +2409,23 @@ function App() {
   }, [myServers])
 
   // YENİ: uygulama açılışında, "beni hatırla" ile kaydedilmiş bir
-  // belirteç varsa şifre sormadan otomatik giriş yapmayı dene. Bu, ayrı
-  // bir "geçici" soket üzerinden oluyor (login'deki gibi) — başarılı
+  // belirteç varsa şifre sormadan otomatik giriş yapmayı dene; başarılı
   // olursa normal giriş akışıyla AYNI şekilde devam ediyoruz.
   useEffect(() => {
     const storedToken = window.localStorage?.getItem('rememberedSessionToken')
     if (!storedToken) return
 
-    const tempSocket = io(SERVER_URL)
-    tempSocket.on('connect', () => {
-      tempSocket.emit('resume-session', { token: storedToken }, (response) => {
-        tempSocket.disconnect()
-        setIsRestoringSession(false)
-        if (response?.success) {
-          setRememberMe(true)
-          applyLoginResponse(response)
-        } else {
-          // Belirteç artık geçersiz (süresi dolmuş, ya da çıkış yapılmış) —
-          // bir daha denemeyelim diye temizliyoruz.
-          window.localStorage?.removeItem('rememberedSessionToken')
-        }
-      })
-    })
-    tempSocket.on('connect_error', () => {
-      // NOT: localStorage'ı SİLMİYORUZ — sadece o an internete/sunucuya
-      // erişilemiyor olabilir, bir dahaki açılışta tekrar denenir.
+    emitRequest('resume-session', { token: storedToken }).then((response) => {
       setIsRestoringSession(false)
-      tempSocket.disconnect()
+      if (response?.success) {
+        setRememberMe(true)
+        applyLoginResponse(response)
+      } else if (response?.message !== 'Sunucuya bağlanılamadı.') {
+        // Belirteç artık geçersiz (süresi dolmuş, ya da çıkış yapılmış) —
+        // bir daha denemeyelim diye temizliyoruz. Sunucuya hiç
+        // ulaşılamadıysa silmiyoruz, bir dahaki açılışta tekrar denenir.
+        window.localStorage?.removeItem('rememberedSessionToken')
+      }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -2462,11 +2434,13 @@ function App() {
   // FARKLI), "beni hatırla" kaydını da temizler ki bir dahaki açılışta
   // otomatik girmesin.
   const handleLogout = () => {
-    // Çıkış her zaman ayrı, kısa ömürlü bir bağlantıdan gidiyor. Eskiden
-    // sadece açık bir kanal bağlantısı varsa gönderiliyordu; kanalda
-    // değilken çıkış yapınca oturum sunucuda geçerli kalıyordu (H18).
-    emitViaTempSocket('logout', { token: sessionTokenRef.current })
+    // Çıkış, kanalda olup olmamaktan bağımsız olarak her zaman sunucuya
+    // gidiyor (eskiden sadece açık bir kanal bağlantısı varsa gidiyordu,
+    // H18). Sunucu oturumu siliyor ve bağlantıyı bizden ayırıyor; bağlantı
+    // açık kalıyor, yeniden bağlanırken de artık anahtar gönderilmiyor.
     leaveChannel()
+    emitRequest('logout', { token: sessionTokenRef.current })
+    sessionTokenRef.current = null
     window.localStorage?.removeItem('rememberedSessionToken')
     setLoggedIn(false)
     setUsername('')
@@ -2486,31 +2460,18 @@ function App() {
     setIsLoggingIn(true)
     setLoginError(null)
 
-    const tempSocket = io(SERVER_URL)
-    tempSocket.on('connect', () => {
-      tempSocket.emit(
-        'login',
-        { username: username.trim(), password, rememberMe },
-        (response) => {
-          tempSocket.disconnect()
-          setIsLoggingIn(false)
-          if (response?.success) {
-            // YENİ: "beni hatırla" işaretliyse, belirteci kalıcı olarak
-            // sakla — bir dahaki açılışta şifre sormadan otomatik girer.
-            if (rememberMe) {
-              window.localStorage?.setItem('rememberedSessionToken', response.token)
-            }
-            applyLoginResponse(response)
-          } else {
-            setLoginError(response?.message || 'Giriş başarısız.')
-          }
-        }
-      )
-    })
-    tempSocket.on('connect_error', () => {
+    emitRequest('login', { username: username.trim(), password, rememberMe }).then((response) => {
       setIsLoggingIn(false)
-      setLoginError('Sunucuya bağlanılamadı.')
-      tempSocket.disconnect()
+      if (response?.success) {
+        // YENİ: "beni hatırla" işaretliyse, belirteci kalıcı olarak
+        // sakla — bir dahaki açılışta şifre sormadan otomatik girer.
+        if (rememberMe) {
+          window.localStorage?.setItem('rememberedSessionToken', response.token)
+        }
+        applyLoginResponse(response)
+      } else {
+        setLoginError(response?.message || 'Giriş başarısız.')
+      }
     })
   }
 
@@ -2524,29 +2485,20 @@ function App() {
     setRegisterError(null)
     setRegisterSuccessMessage(null)
 
-    const tempSocket = io(SERVER_URL)
-    tempSocket.on('connect', () => {
-      tempSocket.emit(
-        'register',
-        { username: username.trim(), password, inviteCode: inviteCode.trim() },
-        (response) => {
-          tempSocket.disconnect()
-          setIsRegistering(false)
-          if (response?.success) {
-            setAuthMode('login')
-            setPassword('')
-            setInviteCode('')
-            setRegisterSuccessMessage('Kayıt başarılı! Şimdi giriş yapabilirsin.')
-          } else {
-            setRegisterError(response?.message || 'Kayıt başarısız.')
-          }
-        }
-      )
-    })
-    tempSocket.on('connect_error', () => {
+    emitRequest('register', {
+      username: username.trim(),
+      password,
+      inviteCode: inviteCode.trim(),
+    }).then((response) => {
       setIsRegistering(false)
-      setRegisterError('Sunucuya bağlanılamadı.')
-      tempSocket.disconnect()
+      if (response?.success) {
+        setAuthMode('login')
+        setPassword('')
+        setInviteCode('')
+        setRegisterSuccessMessage('Kayıt başarılı! Şimdi giriş yapabilirsin.')
+      } else {
+        setRegisterError(response?.message || 'Kayıt başarısız.')
+      }
     })
   }
 
@@ -2795,7 +2747,10 @@ function App() {
   // BU sunucuya özel bir üye/kick listesi.
   useEffect(() => {
     const isOwnerOfActiveServer = myServers.find((s) => s.id === activeServerId)?.isOwner
-    if (showAppSettings && isOwnerOfActiveServer) fetchServerMembers()
+    const showsServerMembers = showAppSettings && isOwnerOfActiveServer
+    if (showsServerMembers) fetchServerMembers()
+    // Sunucuya biri katılınca/çıkarılınca liste açıksa yenilensin (H16).
+    refreshServerMembersRef.current = showsServerMembers ? fetchServerMembers : null
   }, [showAppSettings, myServers, activeServerId, fetchServerMembers])
 
   const addRoleToUser = (targetUsername) => {
