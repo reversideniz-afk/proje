@@ -596,6 +596,8 @@ function App() {
   const refreshServerDataRef = useRef(null)
   // Aynısı, Ayarlar'daki "Sunucu Üyeleri" listesi için (sadece açıkken).
   const refreshServerMembersRef = useRef(null)
+  // Aynısı, sağdaki üye listesi (kim çevrimiçi, kim seste) için.
+  const refreshPresenceRef = useRef(null)
 
   // YENİ: üye listesi (Discord tarzı, sağda) — online (metin kanalına
   // bağlı herkes, seste olanlar ayrıca işaretli) + offline (daha önce
@@ -1601,8 +1603,6 @@ function App() {
     setTypingUsers([])
     setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
     setHasMoreHistory(true)
-    setOnlineMembers([])
-    setOfflineMembers([])
     setConnectionError(null)
     setEnlargedTile(null)
     setActiveChannel(channelId)
@@ -1629,6 +1629,7 @@ function App() {
       setConnectionStatus('connected')
       const isReconnect = hasConnectedBeforeRef.current
       hasConnectedBeforeRef.current = true
+      if (isReconnect) refreshPresenceRef.current?.()
       const channelId = activeChannelRef.current
       if (!isReconnect || !channelId || !sessionTokenRef.current) return
       socket.emit(
@@ -1658,10 +1659,11 @@ function App() {
       setActiveChannel(null)
     })
 
-    // YENİ: üye listesi (online + offline) — tek doğru kaynak.
-    socket.on('channel-members', ({ online, offline }) => {
-      setOnlineMembers(online || [])
-      setOfflineMembers(offline || [])
+    // Sunucudaki biri çevrimiçi oldu/çıktı ya da sese girdi/çıktı: sağdaki
+    // üye listesi yenilensin. (Sunucu eski istemciler için kanal başına
+    // 'channel-members' de gönderiyor; liste artık ondan çizilmiyor.)
+    socket.on('presence-changed', ({ serverId } = {}) => {
+      if (serverId === activeServerIdRef.current) refreshPresenceRef.current?.()
     })
 
     socket.on('message-history', (history) => {
@@ -2255,6 +2257,40 @@ function App() {
     },
     [emitRequest]
   )
+
+  // Sağdaki üye listesi: aktif sunucunun üyelerinden kim çevrimiçi (herhangi
+  // bir yerden bağlı), kim çevrimdışı, kim hangi kanalın sesinde. Eskiden
+  // sadece o kanalı o an açık tutanlar "çevrimiçi" sayılıyordu.
+  const fetchServerPresence = useCallback(
+    async (serverId) => {
+      const response = await emitRequest('server-presence', {
+        token: sessionTokenRef.current,
+        serverId,
+      })
+      if (!response?.success || serverId !== activeServerIdRef.current) return
+      const byName = (a, b) => a.username.localeCompare(b.username, 'tr')
+      const members = response.members.map((m) => ({ ...m, inVoice: !!m.voiceChannelId }))
+      setOnlineMembers(members.filter((m) => m.online).sort(byName))
+      setOfflineMembers(members.filter((m) => !m.online).sort(byName))
+    },
+    [emitRequest]
+  )
+
+  // Aktif sunucu değişince ve giriş yapılınca listeyi getir; art arda gelen
+  // değişiklik duyurularını (presence-changed) tek istekte topla.
+  useEffect(() => {
+    if (!loggedIn || !activeServerId) return
+    fetchServerPresence(activeServerId)
+    let timer = null
+    refreshPresenceRef.current = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => fetchServerPresence(activeServerIdRef.current), 200)
+    }
+    return () => {
+      clearTimeout(timer)
+      refreshPresenceRef.current = null
+    }
+  }, [loggedIn, activeServerId, fetchServerPresence])
 
   // YENİ: aktif sunucuyu değiştir — mevcut kanaldan/sesten çık (başka bir
   // sunucunun sesine/kanalına "sızmasın"), yeni sunucunun kanal listesini
@@ -3732,7 +3768,14 @@ function App() {
                           {m.username.charAt(0).toUpperCase()}
                         </span>
                       )}
-                      {m.username} {m.inVoice && '🎙️'}
+                      {m.username}{' '}
+                      {m.inVoice && (
+                        <span
+                          title={`Seste: #${channels.find((c) => c.id === m.voiceChannelId)?.name ?? '…'}`}
+                        >
+                          🎙️
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>

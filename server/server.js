@@ -631,12 +631,47 @@ async function recheckUserAccess(username, message, { listChanged = false } = {}
   }
 }
 
+// ------------------------------------------------------------
+// Kişi başına çevrimiçi bilgisi (varlık): bir sunucunun üyelerinden kim
+// çevrimiçi (herhangi bir yerden bağlı) ve kim hangi kanalın sesinde.
+// Eskiden "çevrimiçi" sadece o kanalı o an açık tutmak demekti.
+// ------------------------------------------------------------
+async function buildServerPresence(serverId) {
+  const voiceChannelByUser = new Map();
+  for (const [roomId, room] of Object.entries(voiceRooms)) {
+    for (const info of Object.values(room)) {
+      if (info.serverId === serverId) voiceChannelByUser.set(info.username, roomId);
+    }
+  }
+  const members = await ServerMember.find({ serverId }).select("username").lean();
+  // Üye olmadan erişen platform yöneticisi seste olabilir; o da görünsün.
+  const usernames = [...new Set([...members.map((m) => m.username), ...voiceChannelByUser.keys()])];
+  const users = await User.find({ username: { $in: usernames } }).select("username avatarData").lean();
+  const avatarByUsername = new Map(users.map((u) => [u.username, u.avatarData || null]));
+  return usernames.map((username) => ({
+    username,
+    online: socketsByUsername.has(username),
+    voiceChannelId: voiceChannelByUser.get(username) || null,
+    avatarData: avatarByUsername.get(username) || null,
+  }));
+}
+
+// Varlık değişti (biri çevrimiçi oldu ya da çıktı, sese girdi ya da
+// çıktı): o sunuculardaki herkes güncel listeyi istesin.
+function announcePresence(serverIds) {
+  for (const serverId of new Set(serverIds)) {
+    io.to(serverRoomName(serverId)).emit("presence-changed", { serverId });
+  }
+}
+
 // Bir bağlantıyı ses odasından çıkarıp odadakilere haber veriyor. Bağlantı
 // gerçekten odadaysa true döner; böylece aynı ayrılma iki kez duyurulmuyor.
 function removeVoiceMember(roomId, socketId) {
   const room = voiceRooms[roomId];
   if (!room?.[socketId]) return false;
+  const { serverId } = room[socketId];
   delete room[socketId];
+  if (serverId) announcePresence([serverId]);
   if (Object.keys(room).length === 0) delete voiceRooms[roomId];
   io.to(voiceRoomName(roomId)).except(socketId).emit("voice-user-left", { socketId });
   io.sockets.sockets.get(socketId)?.leave(voiceRoomName(roomId));
@@ -754,6 +789,7 @@ io.on("connection", (socket) => {
       if (room.startsWith("server:") && !wanted.has(room)) socket.leave(room);
     }
     wanted.forEach((room) => socket.join(room));
+    socket.data.serverIds = [...wanted].map((room) => room.slice("server:".length));
   };
   socket.data.refreshServerRooms = refreshServerRooms;
 
@@ -766,10 +802,13 @@ io.on("connection", (socket) => {
     }
     currentUsername = username;
     socket.data.username = username;
-    if (!socketsByUsername.has(username)) socketsByUsername.set(username, new Set());
+    const wasOnline = socketsByUsername.has(username);
+    if (!wasOnline) socketsByUsername.set(username, new Set());
     socketsByUsername.get(username).add(socket);
     socket.join(`user:${username}`);
-    refreshServerRooms();
+    refreshServerRooms().then(() => {
+      if (!wasOnline) announcePresence(socket.data.serverIds || []);
+    });
   };
 
   // Olayı gönderenin kim olduğu: bağlantı bir kullanıcıya bağlıysa o, değilse
@@ -815,7 +854,10 @@ io.on("connection", (socket) => {
     if (!currentUsername) return;
     const sockets = socketsByUsername.get(currentUsername);
     sockets?.delete(socket);
-    if (sockets && sockets.size === 0) socketsByUsername.delete(currentUsername);
+    if (sockets && sockets.size === 0) {
+      socketsByUsername.delete(currentUsername);
+      announcePresence(socket.data.serverIds || []);
+    }
     for (const room of [...socket.rooms]) {
       if (room !== socket.id) socket.leave(room);
     }
@@ -1327,6 +1369,25 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ---- Bir sunucunun üyeleri: kim çevrimiçi, kim hangi kanalın sesinde ----
+  socket.on("server-presence", async ({ token, serverId } = {}, callback) => {
+    if (typeof callback !== "function") return;
+    const username = await authenticate(token);
+    if (!username || typeof serverId !== "string") {
+      return callback({ success: false, message: "Eksik bilgi." });
+    }
+    try {
+      const requester = await User.findOne({ username }).select("roles").lean();
+      if (!(await canAccessServer(username, requester?.roles || [], serverId))) {
+        return callback({ success: false, message: "Bu sunucuya erişimin yok." });
+      }
+      callback({ success: true, members: await buildServerPresence(serverId) });
+    } catch (err) {
+      console.error("Sunucu varlık listesi alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
   // ---- YENİ: Bir sunucuya kanal ekleme — sadece sahibi ya da platform
   // admini. v1'de yeni sunucularda kanal-başına rol kısıtlaması yok
   // (allowedRoles her zaman boş = sunucunun tüm üyelerine açık).
@@ -1547,12 +1608,14 @@ io.on("connection", (socket) => {
       reply({ success: false, message: "Önce bir kanala girmen gerekiyor." });
       return;
     }
+    let voiceServerId = currentServerId;
     if (roomId !== currentTextRoom) {
       const access = await checkChannelAccess(username, roomId);
       if (access.error) {
         reply({ success: false, message: access.error });
         return;
       }
+      voiceServerId = access.channel.serverId.toString();
     }
 
     // YENİ: profil fotoğrafını da eş bağlantı (peer) bilgisine ekliyoruz
@@ -1596,7 +1659,9 @@ io.on("connection", (socket) => {
       sharingScreen: false,
       ...pickVoiceState(state),
       avatarData,
+      serverId: voiceServerId,
     };
+    if (voiceServerId) announcePresence([voiceServerId]);
 
     const existingVoiceUsers = Object.entries(voiceRooms[roomId])
       .filter(([id]) => id !== socket.id)
@@ -2228,7 +2293,10 @@ io.on("connection", (socket) => {
     if (currentUsername) {
       const sockets = socketsByUsername.get(currentUsername);
       sockets?.delete(socket);
-      if (sockets && sockets.size === 0) socketsByUsername.delete(currentUsername);
+      if (sockets && sockets.size === 0) {
+        socketsByUsername.delete(currentUsername);
+        announcePresence(socket.data.serverIds || []);
+      }
     }
   });
 

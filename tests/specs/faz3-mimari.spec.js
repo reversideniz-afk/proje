@@ -54,6 +54,28 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     expect(sockets).toHaveLength(1)
   })
 
+  test('üye listesi sunucu genelinde: kanala girmeyen de çevrimiçi, kapatan çevrimdışı görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    const online = (name) => mert.page.locator('.member-item--online', { hasText: name })
+    const offline = (name) => mert.page.locator('.member-item--offline', { hasText: name })
+    await expect(offline('Ece')).toBeVisible()
+
+    // Ece uygulamayı açıp giriş yapıyor ama hiçbir kanala girmiyor.
+    const ece = await disco.user('Ece')
+    await expect(online('Ece')).toBeVisible()
+
+    // Ece başka bir kanalın sesine giriyor: Mert genel'e bakarken de görüyor.
+    await ece.openChannel('oyun')
+    await ece.joinVoice()
+    await expect(online('Ece').getByTitle('Seste: #oyun')).toBeVisible()
+
+    // Ece uygulamayı kapatıyor.
+    await ece.context.close()
+    await expect(offline('Ece')).toBeVisible()
+    await expect(online('Ece')).toHaveCount(0)
+  })
+
   test('H16: arkadaşın açtığı yeni kanal kenar çubuğunda hemen görünüyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     await mert.openChannel('genel')
