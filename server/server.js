@@ -183,6 +183,39 @@ function userCanAccessChannelDoc(userRoles, channelDoc) {
   return channelDoc.allowedRoles.some((role) => userRoles.includes(role));
 }
 
+// Bir kullanıcının bir kanala (metin ya da ses) girme yetkisi var mı?
+// serverId verilirse kanalın o sunucuya ait olduğu da doğrulanıyor.
+// Başarılıysa { channel, roles }, değilse { error } döner.
+async function checkChannelAccess(username, channelId, serverId) {
+  try {
+    const user = await User.findOne({ username }).select("roles").lean();
+    const roles = user?.roles || [];
+    const channel = await Channel.findOne(
+      serverId ? { _id: channelId, serverId } : { _id: channelId }
+    ).lean();
+    if (!channel) return { error: "Böyle bir kanal yok." };
+    if (!(await canAccessServer(username, roles, channel.serverId))) {
+      return { error: "Bu sunucuya erişimin yok." };
+    }
+    if (!userCanAccessChannelDoc(roles, channel)) return { error: "Bu kanala erişim yetkin yok." };
+    return { channel, roles };
+  } catch (err) {
+    // Geçersiz bir kimlik (ObjectId) de buraya düşer.
+    console.error("Kanal erişimi kontrol edilirken hata:", err.message);
+    return { error: "Böyle bir kanal yok." };
+  }
+}
+
+// Ses odasındaki bir kişinin istemciden kabul edilen durumu: sadece bu üç
+// alan ve sadece true/false.
+function pickVoiceState(state) {
+  const picked = {};
+  for (const key of ["muted", "cameraOn", "sharingScreen"]) {
+    if (typeof state?.[key] === "boolean") picked[key] = state[key];
+  }
+  return picked;
+}
+
 // Veritabanına bağlan (kişisel hesaplar için).
 connectDB().then((connected) => {
   if (!connected) return;
@@ -283,6 +316,18 @@ function textRoomName(channel) {
 }
 function voiceRoomName(channel) {
   return `voice:${channel}`;
+}
+
+// Bir bağlantıyı ses odasından çıkarıp odadakilere haber veriyor. Bağlantı
+// gerçekten odadaysa true döner; böylece aynı ayrılma iki kez duyurulmuyor.
+function removeVoiceMember(roomId, socketId) {
+  const room = voiceRooms[roomId];
+  if (!room?.[socketId]) return false;
+  delete room[socketId];
+  if (Object.keys(room).length === 0) delete voiceRooms[roomId];
+  io.to(voiceRoomName(roomId)).except(socketId).emit("voice-user-left", { socketId });
+  io.sockets.sockets.get(socketId)?.leave(voiceRoomName(roomId));
+  return true;
 }
 
 // YENİ: .lean() sorgu sonuçlarını istemciye göndereceğimiz tutarlı
@@ -863,10 +908,18 @@ io.on("connection", (socket) => {
   // ÇOKLU SUNUCU: artık kanal ismi değil, hangi SUNUCUdaki hangi KANAL
   // (ikisi de ObjectId) belirtiliyor — oda/DB anahtarı olarak kanalın
   // ObjectId'si (channelId) kullanılıyor, isim çakışması riski kalmıyor.
-  socket.on("join-channel", async ({ serverId, channelId, token }) => {
+  // İsteğe bağlı ack: yeni istemciler "kanala girdim" onayını bekleyip ondan
+  // sonra (ör. yeniden bağlanınca) sese katılıyor. Eski istemciler ack
+  // göndermiyor, onlar için join-error olayı aynen duruyor.
+  socket.on("join-channel", async ({ serverId, channelId, token } = {}, ack) => {
+    const reply = typeof ack === "function" ? ack : () => {};
+    const fail = (message) => {
+      socket.emit("join-error", message);
+      reply({ success: false, message });
+    };
     const username = resolveUsername(token);
     if (typeof serverId !== "string" || typeof channelId !== "string" || !username) {
-      socket.emit("join-error", "Önce giriş yapman gerekiyor.");
+      fail("Önce giriş yapman gerekiyor.");
       return;
     }
 
@@ -880,31 +933,14 @@ io.on("connection", (socket) => {
       socketsByUsername.get(username).add(socket);
     }
 
-    let userRoles = [];
-    try {
-      const user = await User.findOne({ username }).lean();
-      userRoles = user?.roles || [];
-    } catch (err) {
-      console.error("Kullanıcı rolleri alınırken hata:", err.message);
-    }
-
-    if (!(await canAccessServer(username, userRoles, serverId))) {
-      socket.emit("join-error", "Bu sunucuya erişimin yok.");
+    // Sunucu üyeliği ve ROL kontrolü (kullanıcının rollerinden en az biri
+    // kanalın izinli rolleri arasında olmalı).
+    const access = await checkChannelAccess(username, channelId, serverId);
+    if (access.error) {
+      fail(access.error);
       return;
     }
-
-    const channelDoc = await Channel.findOne({ _id: channelId, serverId }).lean();
-    if (!channelDoc) {
-      socket.emit("join-error", "Böyle bir kanal yok.");
-      return;
-    }
-
-    // YENİ: Şifre yerine ROL kontrolü — kullanıcının rollerinden en az
-    // biri, kanalın izinli rolleri arasında olmalı.
-    if (!userCanAccessChannelDoc(userRoles, channelDoc)) {
-      socket.emit("join-error", "Bu kanala erişim yetkin yok.");
-      return;
-    }
+    const userRoles = access.roles;
 
     // roomId artık kanalın ObjectId'sinin metin hali — hem Socket.io oda
     // adı hem de Message/ChannelMember sorgu anahtarı olarak kullanılıyor.
@@ -971,13 +1007,30 @@ io.on("connection", (socket) => {
     } catch (err) {
       console.error("Mesaj geçmişi alınırken hata:", err.message);
     }
+    reply({ success: true });
   });
 
-  // ---- YENİ: Sese katılma (metin kanalına zaten girmiş olmalı) ----
-  socket.on("join-voice", async ({ token }) => {
+  // ---- Sese katılma ----
+  // channelId verilmezse (eski istemciler) o an açık olan metin kanalının
+  // sesine katılınıyor. Yeni istemci kanalı açıkça gönderiyor: yeniden
+  // bağlanınca o sırada başka bir kanala bakıyor olsa bile sesin olduğu
+  // kanala dönebilsin diye. state ile mikrofon/kamera/ekran durumu da
+  // baştan doğru duyuruluyor.
+  socket.on("join-voice", async ({ token, channelId, state } = {}, ack) => {
+    const reply = typeof ack === "function" ? ack : () => {};
     const username = resolveUsername(token);
-    const roomId = currentTextRoom;
-    if (!username || !roomId) return;
+    const roomId = typeof channelId === "string" ? channelId : currentTextRoom;
+    if (!username || !roomId) {
+      reply({ success: false, message: "Önce bir kanala girmen gerekiyor." });
+      return;
+    }
+    if (roomId !== currentTextRoom) {
+      const access = await checkChannelAccess(username, roomId);
+      if (access.error) {
+        reply({ success: false, message: access.error });
+        return;
+      }
+    }
 
     // YENİ: profil fotoğrafını da eş bağlantı (peer) bilgisine ekliyoruz
     // ki karşı taraf kamerası kapalıyken avatar-yerine-baş-harf yerine
@@ -990,6 +1043,25 @@ io.on("connection", (socket) => {
       console.error("Avatar alınırken hata:", err.message);
     }
 
+    // Bir kişi aynı anda tek yerden seste olur. Aynı adla başka bir ses
+    // kaydı varsa onu sesten çıkarıyoruz: ya internet koptuğu için geride
+    // kalan ve sunucunun henüz fark etmediği eski bağlantıdır (yoksa kişi
+    // seste iki kez görünürdü), ya da kişinin ikinci cihazıdır.
+    const changedRooms = new Set([roomId]);
+    for (const [otherRoomId, members] of Object.entries(voiceRooms)) {
+      for (const [otherSocketId, info] of Object.entries(members)) {
+        if (otherSocketId === socket.id || info.username !== username) continue;
+        removeVoiceMember(otherRoomId, otherSocketId);
+        io.to(otherSocketId).emit("voice-replaced");
+        changedRooms.add(otherRoomId);
+      }
+    }
+    if (currentVoiceRoom && currentVoiceRoom !== roomId) {
+      removeVoiceMember(currentVoiceRoom, socket.id);
+      changedRooms.add(currentVoiceRoom);
+    }
+
+    const alreadyInRoom = !!voiceRooms[roomId]?.[socket.id];
     currentVoiceRoom = roomId;
     socket.join(voiceRoomName(roomId));
     if (!voiceRooms[roomId]) voiceRooms[roomId] = {};
@@ -998,6 +1070,7 @@ io.on("connection", (socket) => {
       muted: true,
       cameraOn: false,
       sharingScreen: false,
+      ...pickVoiceState(state),
       avatarData,
     };
 
@@ -1006,33 +1079,32 @@ io.on("connection", (socket) => {
       .map(([id, info]) => ({ socketId: id, ...info }));
     socket.emit("existing-voice-users", existingVoiceUsers);
 
-    socket.to(voiceRoomName(roomId)).emit("voice-user-joined", {
-      socketId: socket.id,
-      ...voiceRooms[roomId][socket.id],
-    });
+    if (!alreadyInRoom) {
+      socket.to(voiceRoomName(roomId)).emit("voice-user-joined", {
+        socketId: socket.id,
+        ...voiceRooms[roomId][socket.id],
+      });
+    }
 
     // Metin kanalındaki herkese GÜNCEL üye listesini gönder (kim seste,
     // kim değil bilgisi dahil) — istemci tarafında tek bir olayı
     // dinlemek yeterli olsun diye.
-    const memberList = await buildMemberList(roomId);
-    io.to(textRoomName(roomId)).emit("channel-members", memberList);
+    for (const changedRoomId of changedRooms) {
+      const memberList = await buildMemberList(changedRoomId);
+      io.to(textRoomName(changedRoomId)).emit("channel-members", memberList);
+    }
+    reply({ success: true });
   });
 
   // ---- YENİ: Sesten çıkma (metin kanalında kalmaya devam eder) ----
   socket.on("leave-voice", async () => {
     const roomId = currentVoiceRoom;
     if (!roomId) return;
-
-    if (voiceRooms[roomId]) {
-      delete voiceRooms[roomId][socket.id];
-      if (Object.keys(voiceRooms[roomId]).length === 0) delete voiceRooms[roomId];
-    }
-    socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
-    socket.leave(voiceRoomName(roomId));
+    currentVoiceRoom = null;
+    removeVoiceMember(roomId, socket.id);
 
     const memberList = await buildMemberList(roomId);
     io.to(textRoomName(roomId)).emit("channel-members", memberList);
-    currentVoiceRoom = null;
   });
 
   // ---- Sohbet mesajı gönderme (kalıcı) ----
@@ -1560,6 +1632,9 @@ io.on("connection", (socket) => {
     // geliyordu. Artık: hem gönderenin HEM hedefin, AYNI ses odasında
     // olduğunu doğruluyoruz — değilse, mesaj sessizce yok sayılıyor.
     if (typeof to !== "string" || !currentVoiceRoom) return;
+    // Gönderen de hâlâ odada olmalı (başka bir cihazdan sese girince bu
+    // bağlantı odadan çıkarılmış olabilir, bkz. join-voice).
+    if (!socket.rooms.has(voiceRoomName(currentVoiceRoom))) return;
     const targetSocket = io.sockets.sockets.get(to);
     if (!targetSocket || !targetSocket.rooms.has(voiceRoomName(currentVoiceRoom))) return;
     io.to(to).emit("signal", { from: socket.id, data });
@@ -1622,14 +1697,7 @@ io.on("connection", (socket) => {
 
   // ---- Ayrılma (bağlantı tamamen kopunca) ----
   socket.on("disconnect", async () => {
-    if (currentVoiceRoom) {
-      const roomId = currentVoiceRoom;
-      if (voiceRooms[roomId]) {
-        delete voiceRooms[roomId][socket.id];
-        if (Object.keys(voiceRooms[roomId]).length === 0) delete voiceRooms[roomId];
-      }
-      socket.to(voiceRoomName(roomId)).emit("voice-user-left", { socketId: socket.id });
-    }
+    if (currentVoiceRoom) removeVoiceMember(currentVoiceRoom, socket.id);
     if (currentTextRoom) {
       const roomId = currentTextRoom;
       const username = textRooms[roomId]?.[socket.id]?.username;

@@ -542,6 +542,10 @@ function App() {
   // başka bir kanala göz atıp mesaj okuyabilesin diye. voiceChannel, sesten
   // çıkana kadar sabit kalır; activeChannel istediğin kadar değişebilir.
   const [voiceChannel, setVoiceChannel] = useState(null)
+  const voiceChannelRef = useRef(null)
+  useEffect(() => {
+    voiceChannelRef.current = voiceChannel
+  }, [voiceChannel])
   const [connectionError, setConnectionError] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState('connected')
 
@@ -1412,10 +1416,11 @@ function App() {
     })
   }, [])
 
-  // YENİ: Sesten çık — metin kanalında KALMAYA devam ediyoruz, sadece
-  // WebRTC/medya bağlantılarını kapatıyoruz.
-  const leaveVoice = useCallback(() => {
-    socketRef.current?.emit('leave-voice')
+  // Ses durumunu YERELDE sıfırlar: mikrofon, kamera ve ekran paylaşımı
+  // kapanır, eş bağlantıları ve ses düğümleri temizlenir. Sunucuya haber
+  // vermez (bkz. leaveVoice); sunucunun bizi zaten sesten çıkardığı
+  // durumlarda da (kanal hatası, başka cihazdan sese girme) kullanılıyor.
+  const resetVoiceState = useCallback(() => {
     stopLocalMedia()
     cleanupPeerConnections()
     setPeers([])
@@ -1425,14 +1430,31 @@ function App() {
     setEnlargedTile(null)
     setInVoice(false)
     setVoiceChannel(null)
+    voiceChannelRef.current = null
     setVolumePopup(null)
     setIsDeafened(false)
-    // YENİ: ses seviyesi düğümlerini de temizle (bir sonraki sese
-    // girişte sıfırdan, temiz kurulacaklar).
+    // Ses seviyesi düğümleri bir sonraki sese girişte sıfırdan kurulacak.
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
     gainNodesRef.current.clear()
     connectedAudioTracksRef.current.clear()
   }, [stopLocalMedia, cleanupPeerConnections])
+
+  // YENİ: Sesten çık — metin kanalında KALMAYA devam ediyoruz, sadece
+  // WebRTC/medya bağlantılarını kapatıyoruz.
+  const leaveVoice = useCallback(() => {
+    socketRef.current?.emit('leave-voice')
+    resetVoiceState()
+  }, [resetVoiceState])
+
+  // Sunucuya (yeniden) duyurulan kendi ses durumumuz.
+  const currentVoiceState = useCallback(() => {
+    const audioTrack = localMainStreamRef.current?.getAudioTracks()[0]
+    return {
+      muted: !(audioTrack && audioTrack.enabled),
+      cameraOn: !!localMainStreamRef.current?.getVideoTracks()[0],
+      sharingScreen: !!localScreenStreamRef.current,
+    }
+  }, [])
 
   // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım. Hangi
   // kanaldayken katıldıysak (activeChannelRef.current), ses O kanala
@@ -1440,10 +1462,39 @@ function App() {
   // ses hep bu kanalda kalır.
   const joinVoice = useCallback(() => {
     if (!socketRef.current) return
-    socketRef.current.emit('join-voice', { token: sessionTokenRef.current })
+    socketRef.current.emit('join-voice', {
+      token: sessionTokenRef.current,
+      channelId: activeChannelRef.current,
+    })
     setInVoice(true)
     setVoiceChannel(activeChannelRef.current)
+    voiceChannelRef.current = activeChannelRef.current
   }, [])
+
+  // İnternet bir an gidip gelince sunucu bizi sesten çıkarmış oluyor ve
+  // eski eş bağlantıları kopmuş bağlantıya ait (karşı taraf da onları
+  // kapattı). Yeniden bağlanınca sese kendiliğinden geri dönüyoruz;
+  // mikrofon, kamera ve ekran olduğu gibi kalıyor, yeni bağlantılara
+  // takılıyor. Sunucu reddederse (ör. kanala erişim kalmadıysa) sesi
+  // yerelde de kapatıyoruz.
+  const rejoinVoice = useCallback(
+    (socket) => {
+      cleanupPeerConnections()
+      setPeers([])
+      socket.emit(
+        'join-voice',
+        {
+          token: sessionTokenRef.current,
+          channelId: voiceChannelRef.current,
+          state: currentVoiceState(),
+        },
+        (response) => {
+          if (!response?.success) resetVoiceState()
+        }
+      )
+    },
+    [cleanupPeerConnections, currentVoiceState, resetVoiceState]
+  )
 
   const leaveChannel = useCallback(() => {
     cleanupSocket()
@@ -1524,13 +1575,25 @@ function App() {
       const socket = io(SERVER_URL)
       socketRef.current = socket
 
+      // İlk bağlantıda seçilen kanala, yeniden bağlanınca (internet bir an
+      // gidip geldiğinde, sunucu yeniden başladığında) o sırada bakılan
+      // kanala giriliyor. Sesteysek kanala girer girmez sese de dönüyoruz.
+      let hasConnectedBefore = false
       socket.on('connect', () => {
         setConnectionStatus('connected')
-        socket.emit('join-channel', {
-          serverId: activeServerIdRef.current,
-          channelId,
-          token: sessionTokenRef.current,
-        })
+        const isReconnect = hasConnectedBefore
+        hasConnectedBefore = true
+        socket.emit(
+          'join-channel',
+          {
+            serverId: activeServerIdRef.current,
+            channelId: isReconnect ? activeChannelRef.current : channelId,
+            token: sessionTokenRef.current,
+          },
+          (response) => {
+            if (isReconnect && response?.success && voiceChannelRef.current) rejoinVoice(socket)
+          }
+        )
       })
 
       socket.on('disconnect', () => {
@@ -1637,14 +1700,27 @@ function App() {
 
       // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
       // tetiklenmezler ama baştan hazır olmaları lazım. ----
+      // Ekran paylaşıyorsak, seste olan (ya da sonradan giren) herkese ekran
+      // bağlantısını biz başlatıyoruz; yoksa paylaşım başladıktan sonra sese
+      // giren kişi ekranı hiç görmüyordu (H31).
       socket.on('existing-voice-users', (users) => {
         setPeers(users)
+        if (localScreenStreamRef.current) {
+          users.forEach((user) => getOrCreateScreenConnection(user.socketId))
+        }
       })
 
       socket.on('voice-user-joined', (user) => {
-        setPeers((prev) => [...prev, user])
+        setPeers((prev) => [...prev.filter((p) => p.socketId !== user.socketId), user])
         startMainConnection(user.socketId)
+        if (localScreenStreamRef.current) getOrCreateScreenConnection(user.socketId)
         playJoinSound()
+      })
+
+      // Aynı hesapla başka bir yerden sese girildi; sunucu bu bağlantıyı
+      // sesten çıkardı.
+      socket.on('voice-replaced', () => {
+        resetVoiceState()
       })
 
       socket.on('voice-user-left', ({ socketId }) => {
@@ -1807,6 +1883,8 @@ function App() {
       attachLocalMedia,
       getOrCreateScreenConnection,
       syncReceiversToStream,
+      resetVoiceState,
+      rejoinVoice,
       inVoice,
     ]
   )
@@ -2004,11 +2082,12 @@ function App() {
   }, [localMainStream, isCameraOn, setLocalTrackOnMainConnections])
 
   const stopScreenShare = useCallback(() => {
-    const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0]
-    if (screenTrack) {
-      removeTrackFromScreenConnectionsAndClose(screenTrack)
-      screenTrack.stop()
-    }
+    const screenStream = localScreenStreamRef.current
+    const screenTrack = screenStream?.getVideoTracks()[0]
+    if (screenTrack) removeTrackFromScreenConnectionsAndClose(screenTrack)
+    // Sistem sesi izi de duruyor; eskiden sadece görüntü durduruluyordu.
+    screenStream?.getTracks().forEach((track) => track.stop())
+    localScreenStreamRef.current = null
     setLocalScreenStream(null)
     setIsScreenSharing(false)
     socketRef.current?.emit('state-update', { sharingScreen: false })
@@ -2044,6 +2123,10 @@ function App() {
       if (screenAudioTrack) {
         addTrackToScreenConnections(screenAudioTrack, screenStream)
       }
+      // Ref'i hemen güncelliyoruz: bu andan sonra sese giren biri de ekran
+      // bağlantısını alsın (bkz. 'voice-user-joined'). Mevcut bağlantılara
+      // izler yukarıda eklendi, yeni bağlantılar izleri bu ref'ten alıyor.
+      localScreenStreamRef.current = screenStream
       socketRef.current?.emit('state-update', { sharingScreen: true })
       playScreenShareSound()
     } catch (err) {

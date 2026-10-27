@@ -39,9 +39,9 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await ece.expectHearingSomeone()
   })
 
-  test.fail('H1: kısa bir bağlantı kopmasından sonra ikisi de seste kalıyor', async ({ disco }) => {
+  test('H1: kısa bir bağlantı kopmasından sonra ikisi de seste kalıyor', async ({ disco }) => {
     const observer = await disco.observer('genel')
-    await mertVeEceSeste(disco, { mic: true })
+    const { mert, ece } = await mertVeEceSeste(disco, { mic: true })
     await expect.poll(() => observer.voiceUsernames()).toEqual(['Ece', 'Mert'])
 
     const mark = observer.mark()
@@ -50,10 +50,52 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect
       .poll(() => observer.membersSince(mark).some((m) => !voiceNames(m).includes('Mert')))
       .toBe(true)
-    // ...doğru davranış: yeniden bağlanınca ikisi de kendiliğinden sese döner.
+    // ...doğru davranış: yeniden bağlanınca ikisi de kendiliğinden sese döner,
+    // eski bağlantılar kapanır ve ses yeni bağlantılardan akar.
     await expect
       .poll(() => voiceNames(observer.latestMembersSince(mark)), { timeout: 20_000 })
       .toEqual(['Ece', 'Mert'])
+    await mert.expectAudioFromEachPeer(1)
+    await ece.expectAudioFromEachPeer(1)
+    await mert.expectHearingSomeone()
+    await ece.expectHearingSomeone()
+  })
+
+  test('H1: aynı kişi ikinci kez sese girince eski ses kaydı çıkarılıyor', async ({ disco }) => {
+    const eski = await disco.client('Mert')
+    const yeni = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    for (const client of [eski, yeni, ece]) {
+      await client.joinChannel(disco.serverId, disco.channels.genel)
+    }
+    await eski.emitAck('join-voice', { token: eski.token, channelId: disco.channels.genel })
+
+    const replaced = eski.nextEvent('voice-replaced')
+    const response = await yeni.emitAck('join-voice', { token: yeni.token, channelId: disco.channels.genel })
+    expect(response.success).toBe(true)
+    await replaced
+
+    const existing = ece.nextEvent('existing-voice-users')
+    await ece.emitAck('join-voice', { token: ece.token, channelId: disco.channels.genel })
+    expect((await existing).map((u) => u.socketId)).toEqual([yeni.socket.id])
+  })
+
+  test('H1: sesteyken başka kanala bakarken kopan kişi sesin olduğu kanala döner', async ({ disco }) => {
+    const observer = await disco.observer('genel')
+    const { mert } = await mertVeEceSeste(disco)
+    await mert.openChannel('oyun')
+    await expect(mert.page.locator('.voice-elsewhere-banner')).toBeVisible()
+
+    const mark = observer.mark()
+    disco.dropConnections()
+    await expect
+      .poll(() => observer.membersSince(mark).some((m) => !voiceNames(m).includes('Mert')))
+      .toBe(true)
+    await expect
+      .poll(() => voiceNames(observer.latestMembersSince(mark)), { timeout: 20_000 })
+      .toEqual(['Ece', 'Mert'])
+    // Ekranda hâlâ #oyun açık.
+    await expect(mert.page.locator('.channel-header h2')).toHaveText('# oyun')
   })
 
   test.fail('H2: sunucu yeniden başlayınca oturum ve kanal korunuyor', async ({ disco }) => {
@@ -71,6 +113,21 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect(ece.page.getByText('Önce giriş yapman gerekiyor.')).toHaveCount(0)
     await ece.send('Sunucu yeniden başladı ama buradayız')
     await expect(mert.chat).toContainText('Sunucu yeniden başladı ama buradayız')
+  })
+
+  test('H31: ekran paylaşımı sürerken sese giren kişi paylaşımı görüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.joinVoice()
+    await mert.mediaButton('Ekranı paylaş').click()
+    await expect(mert.mediaButton('Ekran paylaşımını durdur')).toBeVisible()
+
+    await ece.joinVoice()
+    const screen = ece.page.locator('video.remote-video--screen')
+    await expect(screen).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => screen.evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
   })
 
   test('H3: kamerasını açan kişinin görüntüsü karşı tarafta görünüyor', async ({ disco }) => {
