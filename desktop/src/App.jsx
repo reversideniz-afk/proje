@@ -327,8 +327,13 @@ function EyeIcon({ visible }) {
   )
 }
 
-// YENİ: her ekranda (giriş dahil) sabit köşede duran küçük yakınlaştırma
-// kontrolü — Ctrl+/Ctrl- ile aynı işi yapar, sadece tıklanabilir hali.
+// Yakınlaştırma ve tam ekran sadece masaüstü uygulamasında (Electron) var;
+// web/PWA'da tarayıcının kendi yakınlaştırması kullanılıyor.
+const IS_DESKTOP_APP = !!window.electronAPI?.setZoomFactor
+
+// Ayarlar > Kişiselleştirme'deki yakınlaştırma kontrolü — Ctrl+/Ctrl- ile
+// aynı işi yapar. Eskiden her ekranın köşesinde sabit duruyordu ve dar
+// ekranda "Gönder" düğmesini kapatıyordu (H13).
 function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset, isFullscreen, onToggleFullscreen }) {
   return (
     <div className="zoom-control">
@@ -373,7 +378,9 @@ function App() {
   const zoomReset = () => setZoomLevel(1)
 
   // Ctrl+ / Ctrl- / Ctrl+0 (Mac'te Cmd) — standart yakınlaştırma kısayolları.
+  // Web'de tarayıcının kendi yakınlaştırmasına dokunmuyoruz.
   useEffect(() => {
+    if (!IS_DESKTOP_APP) return
     const handleKeydown = (e) => {
       if (!(e.ctrlKey || e.metaKey)) return
       if (e.key === '+' || e.key === '=') {
@@ -3022,14 +3029,6 @@ function App() {
             </p>
           </>
         )}
-        <ZoomControl
-        zoomLevel={zoomLevel}
-        onZoomOut={zoomOut}
-        onZoomIn={zoomIn}
-        onReset={zoomReset}
-        isFullscreen={isFullscreen}
-        onToggleFullscreen={toggleFullscreen}
-      />
       </div>
     )
   }
@@ -3768,15 +3767,6 @@ function App() {
         </div>
       )}
 
-      <ZoomControl
-        zoomLevel={zoomLevel}
-        onZoomOut={zoomOut}
-        onZoomIn={zoomIn}
-        onReset={zoomReset}
-        isFullscreen={isFullscreen}
-        onToggleFullscreen={toggleFullscreen}
-      />
-
       {/* YENİ: genel/kalıcı ayarlar penceresi — şimdilik sadece
           kişiselleştirme (renk teması), ileride büyüyecek bir yer. */}
       {showAppSettings && (
@@ -3921,6 +3911,19 @@ function App() {
                   </button>
                 ))}
               </div>
+              {IS_DESKTOP_APP && (
+                <>
+                  <p className="app-settings-hint">Yakınlaştırma (Ctrl + ve Ctrl − ile de olur):</p>
+                  <ZoomControl
+                    zoomLevel={zoomLevel}
+                    onZoomOut={zoomOut}
+                    onZoomIn={zoomIn}
+                    onReset={zoomReset}
+                    isFullscreen={isFullscreen}
+                    onToggleFullscreen={toggleFullscreen}
+                  />
+                </>
+              )}
             </section>
 
             {/* YENİ: aktif sunucunun sahibiyse (platform-geneli "Üye

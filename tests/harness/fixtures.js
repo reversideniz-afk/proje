@@ -84,13 +84,26 @@ export const test = base.extend({
       // Tarayıcıda yeni bir kullanıcı açar (kendi çerezleri/localStorage'ı ile)
       // ve varsayılan olarak arayüzden giriş yaptırır.
       // storage: sayfa açılmadan önce localStorage'a yazılacak değerler.
-      async user(name, { login = true, rememberMe = false, viewport, storage } = {}) {
+      // desktopApp: Electron'un preload köprüsünü (window.electronAPI) taklit
+      // eder; yakınlaştırma çağrıları window.__disco.zoomFactors'a düşer.
+      async user(name, { login = true, rememberMe = false, viewport, storage, desktopApp } = {}) {
         const context = await browser.newContext({
           permissions: ['microphone', 'camera'],
           locale: 'tr-TR',
           viewport: viewport || { width: 1280, height: 800 },
         })
         await context.addInitScript(instrumentPage)
+        if (desktopApp) {
+          await context.addInitScript(() => {
+            window.__disco.zoomFactors = []
+            window.electronAPI = {
+              setZoomFactor: (factor) => window.__disco.zoomFactors.push(factor),
+              isFullscreen: async () => false,
+              onFullscreenChange: () => () => {},
+              toggleFullscreen: () => {},
+            }
+          })
+        }
         if (storage) {
           await context.addInitScript((items) => {
             for (const [key, value] of Object.entries(items)) window.localStorage.setItem(key, value)

@@ -298,22 +298,39 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     expect(headings).toEqual(expect.arrayContaining(['PROFİL', 'SES CİHAZLARI', 'KİŞİSELLEŞTİRME']))
   })
 
-  test.fail('H13: telefonda yakınlaştırma kutusu "Gönder" düğmesini kapatmıyor', async ({ disco }) => {
+  test('H13: telefonda hiçbir şey "Gönder" düğmesini kapatmıyor', async ({ disco }) => {
     const mert = await disco.user('Mert', { viewport: { width: 390, height: 844 } })
     await mert.page.getByRole('button', { name: 'Kanalları göster' }).click()
     await mert.channelButton('genel').click()
     await expect(mert.page.locator('.channel-header h2')).toHaveText('# genel')
 
-    const send = await mert.page.getByRole('button', { name: 'Gönder' }).boundingBox()
-    const zoom = await mert.page.locator('.zoom-control').boundingBox()
-    const overlaps =
-      !!zoom &&
-      zoom.x < send.x + send.width &&
-      send.x < zoom.x + zoom.width &&
-      zoom.y < send.y + send.height &&
-      send.y < zoom.y + zoom.height
-    expect(overlaps).toBe(false)
+    // Web sürümünde yakınlaştırma kutusu yok (tarayıcının kendi yakınlaştırması var).
+    await expect(mert.page.locator('.zoom-control')).toHaveCount(0)
+    // Gönder düğmesinin ortasına tıklanınca gerçekten Gönder'e tıklanıyor.
+    const send = mert.page.getByRole('button', { name: 'Gönder' })
+    const box = await send.boundingBox()
+    const hit = await mert.page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest('button')?.textContent,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    )
+    expect(hit).toBe('Gönder')
   })
+
+  test("H13: masaüstü uygulamasında yakınlaştırma Ayarlar'da, Ctrl + ile de çalışıyor", async ({ disco }) => {
+    const mert = await disco.user('Mert', { desktopApp: true })
+    await mert.openChannel('genel')
+    await expect(mert.page.locator('.zoom-control')).toHaveCount(0)
+
+    await mert.page.keyboard.press('Control+Equal')
+    await expect.poll(() => mert.probe(() => window.__disco.zoomFactors.at(-1))).toBe(1.1)
+
+    await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
+    const zoom = mert.page.locator('.app-settings-section .zoom-control')
+    await expect(zoom).toContainText('110%')
+    await zoom.getByTitle('Küçült (Ctrl -)').click()
+    await expect(zoom).toContainText('100%')
+  })
+
 
   test.fail('H14: kanala geri dönüş reddedilince mikrofon ve ses durumu temizleniyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
