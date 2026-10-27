@@ -62,6 +62,11 @@ test.describe('Temel akışlar', { tag: '@temel' }, () => {
     await ece.micOn()
     await mert.expectAudioPacketsArriving()
     await ece.expectAudioPacketsArriving()
+
+    // H25: teşhis kayıtları varsayılan olarak kapalı; eskiden burada her
+    // 2,5 saniyede kişi başı onlarca satır birikiyordu.
+    await mert.page.waitForTimeout(3000)
+    expect(mert.consoleLines.filter((line) => line.startsWith('[log]'))).toEqual([])
   })
 
   // Bugün mikrofonu ilk açışta karşı taraf duymuyor (H30); kapatıp açmak

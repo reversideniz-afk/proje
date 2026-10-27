@@ -5,6 +5,18 @@ import logoUrl from './assets/logo.png'
 
 // Sunucu adresi vite.config.js'ten geliyor (varsayılan: Render).
 const SERVER_URL = import.meta.env.VITE_SERVER_URL
+
+// Teşhis kayıtları (WebRTC, ICE, ses ölçümleri) sesteyken konsolu her 2,5
+// saniyede dolduruyordu, artık varsayılan olarak kapalı. "npm run dev" ile
+// geliştirirken açık. Paketlenmiş uygulamada açmak için: Ctrl+Shift+I ile
+// konsolu aç, localStorage.setItem('discoDebug', '1') yaz, uygulamayı
+// yeniden başlat (kapatmak için removeItem). Hatalar (console.error) her
+// zaman görünür.
+const DEBUG = import.meta.env.DEV || window.localStorage?.getItem('discoDebug') === '1'
+function debugLog(...args) {
+  if (DEBUG) console.log(...args)
+}
+
 // YENİ: Mesaj tepkileri için hızlı seçim listesi.
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉']
 
@@ -809,7 +821,7 @@ function App() {
   // AudioContext durumuna (running/suspended) çaldığımızı konsola basıyoruz.
   const playTestTone = useCallback(() => {
     const ctx = getAudioContext()
-    console.log(
+    debugLog(
       '[ses testi] AudioContext durumu:',
       ctx.state,
       '— hedeflenen çıkış cihazı:',
@@ -961,7 +973,7 @@ function App() {
 
           gainNodesRef.current.set(peerSocketId, gainNode)
           connectedAudioTracksRef.current.set(peerSocketId, audioTrack)
-          console.log(
+          debugLog(
             `[ses seviyesi] ${peerSocketId} için bağlandı — ctx.state: ${ctx.state}, gain: ${gainNode.gain.value}`
           )
         } catch (err) {
@@ -1052,18 +1064,18 @@ function App() {
                 }
                 // YENİ (teşhis): AKTİF bağlantı gerçekten TURN röle mi
                 // kullanıyor, yoksa doğrudan mı (host/srflx) kuruldu?
-                console.log(
+                debugLog(
                   `[ICE seçilen yol] ${peerSocketId} yerel: ${candidateTypes.get(report.localCandidateId)}, karşı: ${candidateTypes.get(report.remoteCandidateId)}`
                 )
               }
               // YENİ (teşhis): ses verisi GERÇEKTEN gidiyor/geliyor mu?
               if (report.type === 'outbound-rtp' && report.kind === 'audio') {
-                console.log(
+                debugLog(
                   `[ses teşhis] ${peerSocketId} GÖNDERİLEN ses: ${report.bytesSent} bayt, ${report.packetsSent} paket`
                 )
               }
               if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-                console.log(
+                debugLog(
                   `[ses teşhis] ${peerSocketId} ALINAN ses: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
                 )
               }
@@ -1080,17 +1092,17 @@ function App() {
         // 0'da kalıyorsa sorun YAKALAMA'da (sistem sesi hiç alınamıyor),
         // artıyorsa sorun ÇALMA tarafında.
         const screenPc = entry.screenPc
-        if (screenPc) {
+        if (DEBUG && screenPc) {
           try {
             const screenStats = await screenPc.getStats()
             screenStats.forEach((report) => {
               if (report.type === 'outbound-rtp' && report.kind === 'audio') {
-                console.log(
+                debugLog(
                   `[ekran ses teşhis] ${peerSocketId} GÖNDERİLEN ekran sesi: ${report.bytesSent} bayt, ${report.packetsSent} paket`
                 )
               }
               if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-                console.log(
+                debugLog(
                   `[ekran ses teşhis] ${peerSocketId} ALINAN ekran sesi: ${report.bytesReceived} bayt, ${report.packetsReceived} paket`
                 )
               }
@@ -1107,7 +1119,7 @@ function App() {
         // de duyulmuyorsa ve bytesReceived artıyorsa, gelen ses GERÇEKTEN
         // sessiz olabilir (karşı taraf konuşurken bile).
         const analyser = analysersRef.current.get(peerSocketId)
-        if (analyser) {
+        if (DEBUG && analyser) {
           const data = new Uint8Array(analyser.frequencyBinCount)
           analyser.getByteTimeDomainData(data)
           let peak = 0
@@ -1115,7 +1127,7 @@ function App() {
             const v = Math.abs(data[i] - 128)
             if (v > peak) peak = v
           }
-          console.log(
+          debugLog(
             `[ses seviyesi ölçüm] ${peerSocketId} anlık tepe genlik: ${peak}/128 (0 = tam sessizlik)`
           )
         }
@@ -1240,7 +1252,7 @@ function App() {
           // ulaşılamıyor demektir (yanlış URL, kapalı port, geçersiz
           // kimlik bilgisi); "relay" görünüyor ama bağlantı yine de
           // kurulamıyorsa sorun başka bir yerde.
-          console.log(
+          debugLog(
             `[ICE aday] ${peerSocketId}/${connectionType} tür: ${event.candidate.type}, protokol: ${event.candidate.protocol}`
           )
           socketRef.current.emit('signal', {
@@ -1250,14 +1262,14 @@ function App() {
         }
       }
       pc.onconnectionstatechange = () => {
-        console.log(`[WebRTC ${peerSocketId}/${connectionType}] durum: ${pc.connectionState}`)
+        debugLog(`[WebRTC ${peerSocketId}/${connectionType}] durum: ${pc.connectionState}`)
       }
       // YENİ (teşhis): connectionState DTLS+ICE'yi birlikte özetliyor —
       // sadece ICE'nin kendisinin (NAT geçişi) başarılı olup olmadığını
       // ayrı görmek için iceConnectionState'i de ayrıca logluyoruz.
       // "failed" görürsen bu, TURN gerekiyordu ama kullanılamadı demektir.
       pc.oniceconnectionstatechange = () => {
-        console.log(
+        debugLog(
           `[ICE bağlantı durumu] ${peerSocketId}/${connectionType}: ${pc.iceConnectionState}`
         )
       }
@@ -1342,7 +1354,7 @@ function App() {
         if (!mainPc) return
         try {
           mainPc.addTrack(track, stream)
-          console.log(`[addTrack/main] ${peerSocketId} - ${track.kind} eklendi`)
+          debugLog(`[addTrack/main] ${peerSocketId} - ${track.kind} eklendi`)
         } catch (err) {
           console.error(`[addTrack/main] ${peerSocketId} hata:`, err)
         }
@@ -1357,7 +1369,7 @@ function App() {
       const sender = mainPc.getSenders().find((s) => s.track === track)
       if (sender) {
         mainPc.removeTrack(sender)
-        console.log(`[removeTrack/main] ${peerSocketId} - ${track.kind} çıkarıldı`)
+        debugLog(`[removeTrack/main] ${peerSocketId} - ${track.kind} çıkarıldı`)
       }
     })
   }, [])
@@ -1368,7 +1380,7 @@ function App() {
         const pc = getOrCreateScreenConnection(peer.socketId)
         try {
           pc.addTrack(track, stream)
-          console.log(`[addTrack/screen] ${peer.socketId} - eklendi`)
+          debugLog(`[addTrack/screen] ${peer.socketId} - eklendi`)
         } catch (err) {
           console.error(`[addTrack/screen] ${peer.socketId} hata:`, err)
         }
@@ -1384,7 +1396,7 @@ function App() {
       if (sender) entry.screenPc.removeTrack(sender)
       entry.screenPc.close()
       entry.screenPc = null
-      console.log(`[screen] ${peerSocketId} - ekran bağlantısı kapatıldı`)
+      debugLog(`[screen] ${peerSocketId} - ekran bağlantısı kapatıldı`)
       setRemoteStreams((prev) => {
         const peerEntry = prev[peerSocketId]
         if (!peerEntry) return prev
@@ -1669,7 +1681,7 @@ function App() {
               (!pc.isSettingRemoteAnswerPending && pc.signalingState !== 'stable')
             pc.ignoreOffer = !pc.polite && offerCollision
             if (pc.ignoreOffer) {
-              console.warn(
+              debugLog(
                 `[signal] ${from}/${connectionType} - çakışan teklif yok sayıldı (impolite taraf)`
               )
               return
@@ -1788,12 +1800,12 @@ function App() {
       if (!existingAudioTrack) {
         if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
         try {
-          console.log('[mikrofon] getUserMedia çağrılıyor...')
+          debugLog('[mikrofon] getUserMedia çağrılıyor...')
           const micStream = await navigator.mediaDevices.getUserMedia({
             audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true,
           })
           const newAudioTrack = micStream.getAudioTracks()[0]
-          console.log(
+          debugLog(
             '[mikrofon] Track alındı — enabled:',
             newAudioTrack.enabled,
             'readyState:',
@@ -1808,7 +1820,7 @@ function App() {
           setLocalMainStream(newLocalStream)
           setIsMicOn(true)
           addTrackToMainConnections(newAudioTrack, newLocalStream)
-          console.log(
+          debugLog(
             '[mikrofon] Şu an açık bağlantı sayısı:',
             peerConnectionsRef.current.size
           )
@@ -1988,7 +2000,7 @@ function App() {
       // her zaman garanti değil), bunu en baştan burada görmemiz lazım —
       // yoksa "ses gitmiyor" şikayeti gelince nereden başlayacağımızı
       // bilemiyoruz (yakalama mı, iletim mi, çalma mı?).
-      console.log(
+      debugLog(
         '[ekran sesi] sistem sesi track’i:',
         screenAudioTrack
           ? `VAR — enabled:${screenAudioTrack.enabled}, readyState:${screenAudioTrack.readyState}, muted:${screenAudioTrack.muted}, label:${screenAudioTrack.label}`
@@ -2020,13 +2032,13 @@ function App() {
     if (Array.isArray(response.iceServers) && response.iceServers.length > 0) {
       setIceServers(response.iceServers)
     }
-    console.log('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
+    debugLog('[ICE sunucuları] sunucudan gelenler:', response.iceServers)
     // YENİ: artık tek bir kanal listesi değil, erişilen SUNUCULARIN
     // listesi geliyor — hangi sunucunun kanallarının gösterileceğine
     // aşağıdaki myServers izleyen useEffect karar veriyor.
     setMyServers(Array.isArray(response.myServers) ? response.myServers : [])
     setMyAvatar(response.avatarData || null)
-    console.log('[giriş] sunucudan gelen roller:', response.roles)
+    debugLog('[giriş] sunucudan gelen roller:', response.roles)
     setMyRoles(Array.isArray(response.roles) ? response.roles : [])
     setLoggedIn(true)
   }, [])
