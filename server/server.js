@@ -615,6 +615,12 @@ function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
   }
 }
 
+// Kullanıcının bütün açık bağlantılarının sunucu odalarını yeniler (yeni
+// sunucuya katılınca ya da sunucu açınca).
+async function refreshUserServerRooms(username) {
+  for (const s of socketsByUsername.get(username) || []) await s.data.refreshServerRooms?.();
+}
+
 // Bir kullanıcının bütün açık bağlantılarının erişimini yeniden kontrol
 // eder (bkz. socket.data.recheckAccess). listChanged: sunucu listesi de
 // değişti (atıldı, sunucu silindi), istemci listeyi yenilesin.
@@ -701,6 +707,23 @@ async function buildMemberList(channelId) {
   return { online, offline };
 }
 
+function serverRoomName(serverId) {
+  return `server:${serverId}`;
+}
+
+// Bağlantı kurulurken (el sıkışmada) gönderilen oturum anahtarı geçerliyse
+// bağlantı o kullanıcıya bağlanıyor; olaylarda ayrıca anahtar gerekmiyor.
+// Anahtarsız bağlantı da kabul ediliyor (giriş/kayıt ekranı ve henüz
+// güncellenmemiş, her olayda anahtar gönderen istemciler için).
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (typeof token === "string" && token) {
+    const username = await resolveUsername(token);
+    if (username) socket.data.username = username;
+  }
+  next();
+});
+
 io.on("connection", (socket) => {
   let currentTextRoom = null;
   let currentVoiceRoom = null;
@@ -708,10 +731,99 @@ io.on("connection", (socket) => {
   // moderasyonu yetkisini (bkz. canModerateServer) her seferinde kanaldan
   // sunucuya geri gitmeden kontrol edebilmek için.
   let currentServerId = null;
-  // YENİ: bu soketin kim olduğunu (join-channel'da belirleniyor) —
-  // socketsByUsername kaydını doğru temizleyebilmek (disconnect'te) ve
-  // adminlere anlık güvenlik uyarısı gönderebilmek için.
+  // Bu bağlantının kime ait olduğu (el sıkışmada, girişte ya da eski
+  // istemcilerde kanala girerken belirleniyor; bkz. bindUser).
   let currentUsername = null;
+
+  // Erişebildiği sunucuların odalarına (server:<id>) katılır, artık
+  // erişemediklerinden çıkar. Kanal ve üye değişiklikleri bu odalara
+  // yayınlanıyor (H16).
+  const refreshServerRooms = async () => {
+    const wanted = new Set();
+    if (currentUsername) {
+      try {
+        const user = await User.findOne({ username: currentUsername }).select("roles").lean();
+        const servers = await getAccessibleServers(currentUsername, user?.roles || []);
+        servers.forEach((s) => wanted.add(serverRoomName(s._id.toString())));
+      } catch (err) {
+        console.error("Sunucu odaları alınırken hata:", err.message);
+        return;
+      }
+    }
+    for (const room of [...socket.rooms]) {
+      if (room.startsWith("server:") && !wanted.has(room)) socket.leave(room);
+    }
+    wanted.forEach((room) => socket.join(room));
+  };
+  socket.data.refreshServerRooms = refreshServerRooms;
+
+  // Bağlantıyı bir kullanıcıya bağlar (ya da başka bir hesaba geçirir).
+  const bindUser = (username) => {
+    if (currentUsername === username) return;
+    if (currentUsername) {
+      socketsByUsername.get(currentUsername)?.delete(socket);
+      socket.leave(`user:${currentUsername}`);
+    }
+    currentUsername = username;
+    socket.data.username = username;
+    if (!socketsByUsername.has(username)) socketsByUsername.set(username, new Set());
+    socketsByUsername.get(username).add(socket);
+    socket.join(`user:${username}`);
+    refreshServerRooms();
+  };
+
+  // Olayı gönderenin kim olduğu: bağlantı bir kullanıcıya bağlıysa o, değilse
+  // (eski istemciler) olayla gelen anahtardan.
+  const authenticate = async (token) => currentUsername ?? (await resolveUsername(token));
+
+  // Bağlantıyı açık olan metin kanalından ve (varsa) sesten çıkarır; iki
+  // kanala da güncel üye listesi gider.
+  const leaveChannels = async () => {
+    const leftRooms = new Set();
+    if (currentVoiceRoom && removeVoiceMember(currentVoiceRoom, socket.id)) {
+      leftRooms.add(currentVoiceRoom);
+    }
+    currentVoiceRoom = null;
+    if (currentTextRoom) {
+      socket.leave(textRoomName(currentTextRoom));
+      if (textRooms[currentTextRoom]?.[socket.id]) {
+        delete textRooms[currentTextRoom][socket.id];
+        if (Object.keys(textRooms[currentTextRoom]).length === 0) delete textRooms[currentTextRoom];
+        leftRooms.add(currentTextRoom);
+      }
+    }
+    currentTextRoom = null;
+    currentServerId = null;
+    for (const roomId of leftRooms) {
+      if (currentUsername) {
+        try {
+          await ChannelMember.findOneAndUpdate(
+            { channelId: roomId, username: currentUsername },
+            { lastSeenAt: new Date() }
+          );
+        } catch (err) {
+          console.error("lastSeenAt güncellenirken hata:", err.message);
+        }
+      }
+      io.to(textRoomName(roomId)).emit("channel-members", await buildMemberList(roomId));
+    }
+  };
+
+  // Çıkış yapınca: bağlantı açık kalıyor ama artık kimseye ait değil.
+  const unbindUser = async () => {
+    await leaveChannels();
+    if (!currentUsername) return;
+    const sockets = socketsByUsername.get(currentUsername);
+    sockets?.delete(socket);
+    if (sockets && sockets.size === 0) socketsByUsername.delete(currentUsername);
+    for (const room of [...socket.rooms]) {
+      if (room !== socket.id) socket.leave(room);
+    }
+    currentUsername = null;
+    socket.data.username = null;
+  };
+
+  if (socket.data.username) bindUser(socket.data.username);
 
   // Hız sınırı (bkz. RATE_LIMITS): sınırı aşan olay işlenmeden atılıyor.
   const rateLimit = createRateLimiter();
@@ -775,6 +887,7 @@ io.on("connection", (socket) => {
     for (const roomId of changedRooms) {
       io.to(textRoomName(roomId)).emit("channel-members", await buildMemberList(roomId));
     }
+    await refreshServerRooms();
   };
 
   // ---- Kişisel hesap girişi ----
@@ -834,6 +947,7 @@ io.on("connection", (socket) => {
       // "Beni hatırla" işaretliyse oturum 30 gün, değilse 1 gün geçerli
       // (ikisi de kullanıldıkça uzuyor, bkz. resolveUsername).
       const token = await createSession(user.username, rememberMe === true);
+      bindUser(user.username);
 
       // YENİ: ÇOKLU SUNUCU — artık tek bir kanal listesi değil, kullanıcının
       // erişebildiği SUNUCULARIN listesi gönderiliyor. İstemci, aktif
@@ -893,6 +1007,7 @@ io.on("connection", (socket) => {
       };
       sessionCache.set(token, cached);
       refreshSession(token, cached);
+      bindUser(user.username);
 
       const userRoles = user.roles || [];
       const myServers = await getAccessibleServers(user.username, userRoles);
@@ -922,7 +1037,9 @@ io.on("connection", (socket) => {
     const reply = typeof ack === "function" ? ack : () => {};
     if (typeof token !== "string" || !token) return reply({ success: false });
     try {
+      const username = await resolveUsername(token);
       await deleteSession(token);
+      if (username && username === currentUsername) await unbindUser();
       reply({ success: true });
     } catch (err) {
       console.error("Oturum silinirken hata:", err.message);
@@ -1030,7 +1147,7 @@ io.on("connection", (socket) => {
   // açabilir (spam'e karşı). Sunucuyu açan kişi otomatik olarak o
   // sunucunun sahibi/tek adminidir.
   socket.on("create-server", async ({ token, name }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof name !== "string" || !name.trim() || name.trim().length > 50) {
@@ -1050,6 +1167,7 @@ io.on("connection", (socket) => {
         inviteCode: crypto.randomBytes(9).toString("base64url"),
       });
       await ServerMember.create({ serverId: server._id, username, isOwner: true });
+      await refreshUserServerRooms(username);
       callback({
         success: true,
         server: {
@@ -1067,7 +1185,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Sunucu silme — sadece sahibi ya da platform admini. ----
   socket.on("delete-server", async ({ token, serverId }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -1104,7 +1222,7 @@ io.on("connection", (socket) => {
   // (REGISTER_INVITE_CODE) TAMAMEN AYRI bir mekanizma: bu, zaten hesabı
   // olan birinin, arkadaşının sunucusuna katılması için.
   socket.on("join-server-by-invite", async ({ token, inviteCode }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof inviteCode !== "string" || !inviteCode.trim()) {
@@ -1118,6 +1236,10 @@ io.on("connection", (socket) => {
         return callback({ success: false, message: "Bu sunucuya zaten üyesin." });
       }
       await ServerMember.create({ serverId: server._id, username, isOwner: false });
+      await refreshUserServerRooms(username);
+      // Sunucudaki herkesin üye listesi ve kişinin diğer cihazlarındaki sunucu listesi.
+      io.to(serverRoomName(server._id.toString())).emit("members-changed", { serverId: server._id.toString() });
+      io.to(`user:${username}`).emit("server-list-changed");
       callback({
         success: true,
         server: {
@@ -1136,7 +1258,7 @@ io.on("connection", (socket) => {
   // sırasında zaten gönderiliyor — bu, ör. bir sunucu oluşturduktan/
   // katıldıktan sonra listeyi anlık tazelemek için). ----
   socket.on("list-my-servers", async ({ token }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -1160,7 +1282,7 @@ io.on("connection", (socket) => {
   // ---- YENİ: Bir sunucunun davet kodunu getirme — sadece sahibi ya da
   // platform admini görebilir (paylaşılacak link/kod). ----
   socket.on("get-server-invite", async ({ token, serverId }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
@@ -1182,7 +1304,7 @@ io.on("connection", (socket) => {
   // istemci bunu ayrıca istiyor (bkz. login/resume-session artık sadece
   // "myServers" döndürüyor, kanallar değil). ----
   socket.on("server-channels", async ({ token, serverId }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -1209,7 +1331,7 @@ io.on("connection", (socket) => {
   // admini. v1'de yeni sunucularda kanal-başına rol kısıtlaması yok
   // (allowedRoles her zaman boş = sunucunun tüm üyelerine açık).
   socket.on("create-channel", async ({ token, serverId, name }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof serverId !== "string" || typeof name !== "string") {
@@ -1228,6 +1350,8 @@ io.on("connection", (socket) => {
         return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
       }
       const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [] });
+      // Yeni kanal sunucudaki herkesin listesine anında düşsün (H16).
+      io.to(serverRoomName(serverId)).emit("channels-changed", { serverId });
       callback({ success: true, channel: { id: channel._id.toString(), name: channel.name } });
     } catch (err) {
       if (err.code === 11000) {
@@ -1242,7 +1366,7 @@ io.on("connection", (socket) => {
   // admini görebilir (bugünkü platform-geneli "Üye Yönetimi"nden AYRI,
   // sadece BU sunucuya özel). ----
   socket.on("list-server-members", async ({ token, serverId }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
@@ -1268,7 +1392,7 @@ io.on("connection", (socket) => {
   // platform admini; sunucu sahibi kendi kendini çıkaramaz (önce
   // "Sunucuyu Sil"i kullanmalı). ----
   socket.on("remove-server-member", async ({ token, serverId, targetUsername }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string" || typeof targetUsername !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -1287,6 +1411,7 @@ io.on("connection", (socket) => {
       await ServerMember.deleteOne({ serverId, username: targetUsername });
       callback({ success: true });
       await recheckUserAccess(targetUsername, "Bu sunucudan çıkarıldın.", { listChanged: true });
+      io.to(serverRoomName(serverId)).emit("members-changed", { serverId });
     } catch (err) {
       console.error("Üye çıkarılırken hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
@@ -1306,21 +1431,15 @@ io.on("connection", (socket) => {
       socket.emit("join-error", message);
       reply({ success: false, message });
     };
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof serverId !== "string" || typeof channelId !== "string" || !username) {
       fail("Önce giriş yapman gerekiyor.");
       return;
     }
 
-    // YENİ: bu soketin sahibini kaydediyoruz — adminlere anlık güvenlik
-    // uyarısı gönderebilmek (bkz. notifyAdmins) ve disconnect'te temizlik
-    // yapabilmek için.
-    if (currentUsername !== username) {
-      if (currentUsername) socketsByUsername.get(currentUsername)?.delete(socket);
-      currentUsername = username;
-      if (!socketsByUsername.has(username)) socketsByUsername.set(username, new Set());
-      socketsByUsername.get(username).add(socket);
-    }
+    // Eski istemciler bağlantıyı el sıkışmada değil burada (anahtarla)
+    // kullanıcıya bağlıyor.
+    bindUser(username);
 
     // Sunucu üyeliği ve ROL kontrolü (kullanıcının rollerinden en az biri
     // kanalın izinli rolleri arasında olmalı).
@@ -1422,7 +1541,7 @@ io.on("connection", (socket) => {
   // baştan doğru duyuruluyor.
   socket.on("join-voice", async ({ token, channelId, state } = {}, ack) => {
     const reply = typeof ack === "function" ? ack : () => {};
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     const roomId = typeof channelId === "string" ? channelId : currentTextRoom;
     if (!username || !roomId) {
       reply({ success: false, message: "Önce bir kanala girmen gerekiyor." });
@@ -1514,7 +1633,7 @@ io.on("connection", (socket) => {
 
   // ---- Sohbet mesajı gönderme (kalıcı) ----
   socket.on("send-message", async ({ token, text }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     // GÜVENLİK/SAĞLAMLIK: "text" beklenmedik bir tipte (ör. bir nesne)
     // gelirse .trim() çağrısı hata fırlatabilirdi — bunu try/catch'e
     // girmeden, en başta AÇIKÇA reddediyoruz.
@@ -1550,19 +1669,19 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Yazıyor... göstergesi ----
   socket.on("typing-start", async ({ token }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     socket.to(textRoomName(currentTextRoom)).emit("user-typing", { username });
   });
   socket.on("typing-stop", async ({ token }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     socket.to(textRoomName(currentTextRoom)).emit("user-stopped-typing", { username });
   });
 
   // ---- YENİ: Mesaj emoji tepkisi (aç/kapa) ----
   socket.on("toggle-reaction", async ({ token, messageId, emoji }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     if (typeof messageId !== "string" || typeof emoji !== "string") return;
     if (emoji.length > 8) return; // tek bir emoji karakteri için fazlasıyla yeterli
@@ -1595,7 +1714,7 @@ io.on("connection", (socket) => {
   // silme yetkisi hiç kimseye verilmiyor, "channel" ve "username" ikisi
   // birden eşleşmeli.
   socket.on("delete-message", async ({ token, messageId }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom || typeof messageId !== "string") return;
 
     try {
@@ -1621,7 +1740,7 @@ io.on("connection", (socket) => {
   // ---- YENİ: Tek bir mesajı düzenleme ----
   // GÜVENLİK: sadece KENDİ mesajını düzenleyebilirsin.
   socket.on("edit-message", async ({ token, messageId, newText }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     if (typeof messageId !== "string" || typeof newText !== "string") return;
     const trimmed = newText.trim();
@@ -1653,7 +1772,7 @@ io.on("connection", (socket) => {
   // TÜM geçmişi ya da başkalarının mesajlarını silme yetkisi yok. Bu,
   // "yanlışlıkla bir şey paylaştım, hemen geri alayım" senaryosu için.
   socket.on("delete-last-n", async ({ token, n }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     const count = Number(n);
     if (!Number.isInteger(count) || count < 1) return;
@@ -1695,7 +1814,7 @@ io.on("connection", (socket) => {
   // mesajını siler. "!sil @kullanıcı"dan (tümünü siler) farkı: burada
   // sayıyla sınırlı, daha "cerrahi" bir moderasyon aracı.
   socket.on("delete-user-last-n", async ({ token, targetUsername, n }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     const count = Number(n);
     if (
       !username ||
@@ -1761,7 +1880,7 @@ io.on("connection", (socket) => {
   // farkı: kendi mesajınla sınırlı değilsin ve sayı değil, kullanıcı adı
   // hedefliyorsun.
   socket.on("delete-user-messages", async ({ token, targetUsername }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (
       !username ||
       !currentTextRoom ||
@@ -1821,7 +1940,7 @@ io.on("connection", (socket) => {
   // sadece o kanalı en az bir kere açmış kişileri gösteriyordu, bu ondan
   // bağımsız ve tam liste).
   socket.on("list-all-users", async ({ token }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -1852,7 +1971,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Bir kullanıcıya rol ekleme/çıkarma — SADECE ADMIN_ROLE. ----
   socket.on("update-user-role", async ({ token, targetUsername, role, action }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (
       !username ||
       typeof targetUsername !== "string" ||
@@ -1904,7 +2023,7 @@ io.on("connection", (socket) => {
   // ADMIN_ROLE. 5 yanlış şifreden sonra otomatik kilitlenen hesaplar
   // için (bkz. login işleyicisi) — "istediğim zaman kaldırabileyim".
   socket.on("unlock-user-login", async ({ token, targetUsername }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || typeof targetUsername !== "string" || !targetUsername.trim()) return;
     try {
       const requester = await User.findOne({ username }).lean();
@@ -1929,7 +2048,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Banlı IP listesi — SADECE ADMIN_ROLE. ----
   socket.on("list-banned-ips", async ({ token }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -1957,7 +2076,7 @@ io.on("connection", (socket) => {
   // (ör. bir arkadaşın art arda yanlış davet kodu denemesi) banlanan
   // birini kurtarabilmek için. ----
   socket.on("unban-ip", async ({ token, ip }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || typeof ip !== "string" || !ip.trim()) return;
     try {
       const requester = await User.findOne({ username }).lean();
@@ -1983,7 +2102,7 @@ io.on("connection", (socket) => {
   // kullanıyor (bkz. yukarıda). Güncellemeyi henüz almamış istemciler için
   // duruyor; paket sınırı 1 MB olduğu için sadece küçük fotoğraflar geçer.
   socket.on("send-photo", async ({ token, imageData, mimeType }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username || !currentTextRoom) return;
     if (!isValidImageDataUri(imageData, mimeType)) return;
     relayPhoto(currentTextRoom, username, imageData, mimeType, [socket.id]);
@@ -1991,7 +2110,7 @@ io.on("connection", (socket) => {
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
   socket.on("load-older-messages", async ({ token, before }, callback) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     // GÜVENLİK DÜZELTMESİ: hangi kanaldan istediğimizi istemciden
     // ALMIYORUZ artık — sunucunun KENDİ, doğrulanmış kaydı olan
     // currentTextRoom'u kullanıyoruz. Önceki halinde, istemci
@@ -2056,7 +2175,7 @@ io.on("connection", (socket) => {
   // sınırlıyoruz ki veritabanı büyük resimlerle şişmesin (bu bir profil
   // fotoğrafı, tam çözünürlüklü bir paylaşım değil).
   socket.on("set-avatar", async ({ token, imageData, mimeType }) => {
-    const username = await resolveUsername(token);
+    const username = await authenticate(token);
     if (!username) return;
     // GÜVENLİK: gerçekten bir data URI mi, beyan edilen mimeType ile
     // eşleşiyor mu — yoksa bir dış URL'yi profil fotoğrafı diye kaydedip
@@ -2096,40 +2215,23 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Kanaldan çıkma (metin + ses), uygulama açık kalırken: yeni istemciler
+  // tek bağlantıyı kapatmadan kanaldan ayrılıyor.
+  socket.on("leave-channel", async (_payload, ack) => {
+    await leaveChannels();
+    if (typeof ack === "function") ack({ success: true });
+  });
+
   // ---- Ayrılma (bağlantı tamamen kopunca) ----
   socket.on("disconnect", async () => {
-    // Hem baktığı metin kanalından hem (farklıysa) sesin olduğu kanaldan
-    // çıkıyor; ikisine de güncel liste gidiyor.
-    const leftRooms = new Set();
-    if (currentVoiceRoom && removeVoiceMember(currentVoiceRoom, socket.id)) {
-      leftRooms.add(currentVoiceRoom);
-    }
-    if (currentTextRoom && textRooms[currentTextRoom]?.[socket.id]) {
-      delete textRooms[currentTextRoom][socket.id];
-      if (Object.keys(textRooms[currentTextRoom]).length === 0) delete textRooms[currentTextRoom];
-      leftRooms.add(currentTextRoom);
-    }
-    for (const roomId of leftRooms) {
-      if (currentUsername) {
-        try {
-          await ChannelMember.findOneAndUpdate(
-            { channelId: roomId, username: currentUsername },
-            { lastSeenAt: new Date() }
-          );
-        } catch (err) {
-          console.error("lastSeenAt güncellenirken hata:", err.message);
-        }
-      }
-      const memberList = await buildMemberList(roomId);
-      io.to(textRoomName(roomId)).emit("channel-members", memberList);
-    }
-    // YENİ: socketsByUsername kaydını temizle (bkz. join-channel).
+    await leaveChannels();
     if (currentUsername) {
       const sockets = socketsByUsername.get(currentUsername);
       sockets?.delete(socket);
       if (sockets && sockets.size === 0) socketsByUsername.delete(currentUsername);
     }
   });
+
 });
 
 server.listen(PORT, () => {

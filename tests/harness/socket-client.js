@@ -7,14 +7,16 @@ import { PASSWORD } from './seed.js'
 
 export class TestClient {
   // headers: bağlantı isteğine eklenecek başlıklar (ör. Render'ın vekilini
-  // taklit eden X-Forwarded-For).
-  constructor(url, { headers } = {}) {
+  // taklit eden X-Forwarded-For). auth: el sıkışmada gönderilecek bilgi
+  // (ör. { token }).
+  constructor(url, { headers, auth } = {}) {
     this.socket = io(url, {
       transports: ['websocket'],
       forceNew: true,
       reconnectionDelay: 200,
       reconnectionDelayMax: 1000,
       extraHeaders: headers,
+      auth,
     })
     this.events = []
     this.members = { online: [], offline: [] }
