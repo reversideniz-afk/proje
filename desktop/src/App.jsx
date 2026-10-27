@@ -765,6 +765,18 @@ function App() {
   // YENİ: büyütülmüş kutucuk — bir video/ekran kutucuğuna tıklayınca
   // o kutucuk büyür, diğerleri küçük bir şeride iner.
   const [enlargedTile, setEnlargedTile] = useState(null)
+  // Sohbetteki fotoğrafın büyütülmüş hâli (uygulama içinde). Eskiden
+  // window.open ile açılıyordu: masaüstünde çıplak bir Electron penceresi,
+  // web'de hiçbir şey (tarayıcılar data: adreslerini açmıyor).
+  const [photoLightbox, setPhotoLightbox] = useState(null) // data URL | null
+  useEffect(() => {
+    if (!photoLightbox) return
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') setPhotoLightbox(null)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [photoLightbox])
   const toggleEnlarge = (tileId) => {
     setEnlargedTile((prev) => (prev === tileId ? null : tileId))
   }
@@ -3541,7 +3553,7 @@ function App() {
                           src={item.imageData}
                           alt="Paylaşılan fotoğraf"
                           className="chat-photo"
-                          onClick={() => window.open(item.imageData, '_blank')}
+                          onClick={() => setPhotoLightbox(item.imageData)}
                         />
                         <span className="chat-photo-hint">📷 tek seferlik — kaydedilmiyor</span>
                       </div>
@@ -3848,6 +3860,17 @@ function App() {
 
       {/* YENİ: genel/kalıcı ayarlar penceresi — şimdilik sadece
           kişiselleştirme (renk teması), ileride büyüyecek bir yer. */}
+      {photoLightbox && (
+        <div
+          className="photo-lightbox"
+          role="dialog"
+          aria-label="Fotoğraf"
+          onClick={() => setPhotoLightbox(null)}
+        >
+          <img src={photoLightbox} alt="Paylaşılan fotoğraf" />
+        </div>
+      )}
+
       {showAppSettings && (
         <div
           className="app-settings-backdrop"

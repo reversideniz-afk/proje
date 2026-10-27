@@ -8,7 +8,8 @@
     "test:smoke": "playwright test --grep @temel",
     "test:faz1": "playwright test --grep @faz1",
     "test:faz2": "playwright test --grep @faz2",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "test:masaustu": "playwright test --grep @masaustu"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

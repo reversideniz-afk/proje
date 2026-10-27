@@ -61,4 +61,6 @@ Dosyalar:
   işaretli, yani bugün başarısız oldukları için yeşil görünüyorlar.
   Bir hatayı düzeltince testi "beklenmedik şekilde geçti" diye kırmızı görürsün: `test.fail`'i
   `test`'e çevir, o test artık hatanın geri dönmesine karşı kalıcı bir koruma olur.
+- `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
+  yeni pencere engeli, tek kopya. `desktop/node_modules` içindeki Electron kullanılıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).

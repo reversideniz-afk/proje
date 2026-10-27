@@ -21,8 +21,9 @@
 // karar verir: ".cjs" = her zaman eski usül (CommonJS/require),
 // ".mjs" = her zaman yeni usül (ES Modules/import). Bu yüzden Electron
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu } = require("electron");
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu, shell } = require("electron");
 const path = require("path");
+const { pathToFileURL } = require("url");
 // YENİ: Discord'daki gibi uygulama içi otomatik güncelleme. GitHub
 // Releases'i "publish" kaynağı olarak kullanıyor (bkz. package.json
 // "build.publish") — her yeni sürüm orada bir Release olarak
@@ -33,6 +34,30 @@ const { autoUpdater } = require("electron-updater");
 // söylüyor. Paketlenmemişse (yani "npm run dev" ile geliştirme modundaysak)
 // isDev true olur.
 const isDev = !app.isPackaged;
+
+// Pencerede açılacak adres: geliştirmede Vite'ın sunucusu, paketlenmiş
+// uygulamada dist/index.html. DISCO_APP_URL sadece test düzeneği için
+// (uygulamayı kendi derlediği sürümle açıyor); normal kullanımda boş.
+const appUrl =
+  process.env.DISCO_APP_URL ||
+  (isDev ? "http://localhost:5173" : pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href);
+
+// Disco aynı anda tek kopya çalışıyor: ikinci kez açılınca yeni pencere
+// yerine açık olan öne geliyor. Eskiden iki kopya açılabiliyordu; bu da
+// aynı hesapla iki bağlantı ve mikrofon çakışması demekti (H19).
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
+const isWebLink = (url) => /^https?:\/\//i.test(url);
 
 // YENİ: pencere referansını modül seviyesinde tutuyoruz — ekran paylaşımı
 // seçicisi, kaynak listesini bu pencereye (renderer'a) göndermek için
@@ -85,22 +110,33 @@ function createWindow() {
     win.webContents.send("fullscreen-changed", false);
   });
 
-  if (isDev) {
-    // Geliştirme modunda: Vite'ın çalıştırdığı canlı geliştirme sunucusuna
-    // bağlanıyoruz (kod her değiştiğinde pencere otomatik yenilenir).
-    win.loadURL("http://localhost:5173");
-    // NOT: DevTools artık otomatik AÇILMIYOR — gerektiğinde Ctrl+Shift+I
-    // ile manuel açabilirsin, ama varsayılan olarak kapalı, daha temiz.
-  } else {
-    // Üretim modunda (paketlenmiş uygulama): Vite'ın derlediği statik
-    // dosyaları (dist/index.html) doğrudan dosya sisteminden yüklüyoruz.
-    win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  }
+  // Uygulama penceresinden yeni pencere açılmıyor: http(s) linkleri
+  // varsayılan tarayıcıda açılıyor, gerisi (ör. data: adresleri)
+  // reddediliyor. Eskiden window.open çıplak bir Electron penceresi
+  // açıyordu (H19).
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isWebLink(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  // Ana pencere de uygulamanın kendi sayfasından başka bir yere gidemez.
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url.split("#")[0] === appUrl.split("#")[0]) return;
+    event.preventDefault();
+    if (isWebLink(url)) shell.openExternal(url);
+  });
+
+  // Geliştirmede Vite'ın canlı sunucusu (kod değişince pencere kendiliğinden
+  // yenilenir), paketlenmiş uygulamada dist/index.html. NOT: DevTools
+  // otomatik açılmıyor, gerektiğinde Ctrl+Shift+I.
+  win.loadURL(appUrl);
 }
 
 // Electron hazır olduğunda (işletim sistemiyle bağlantı kurulduğunda)
 // pencereyi oluştur.
 app.whenReady().then(() => {
+  // İkinci kopya: yukarıda kapanması istendi, pencere açmasın.
+  if (!hasSingleInstanceLock) return;
+
   // YENİ: "File Edit View Window" gibi geliştirici görünümlü üst menü
   // çubuğunu tamamen kaldırıyoruz — gerçek bir uygulama gibi hissettirsin
   // diye. DevTools'u manuel açmak (Ctrl+Shift+I) için gereken kısayol,
@@ -200,7 +236,9 @@ app.whenReady().then(() => {
     // BİTİNCE "yeniden başlat" düğmesi gösteriyoruz, ayrıca bir "indir"
     // onayı istemiyoruz.
     autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = false;
+    // İndirilen güncelleme, "Yeniden başlat"a basılmasa da uygulama
+    // kapanırken kuruluyor. Eskiden düğmeye basılmazsa hiç kurulmuyordu.
+    autoUpdater.autoInstallOnAppQuit = true;
 
     autoUpdater.on("update-available", (info) => {
       mainWindow?.webContents.send("update-available", { version: info.version });

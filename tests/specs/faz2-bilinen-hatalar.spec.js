@@ -202,6 +202,26 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     await expect(message).toHaveCount(0)
   })
 
+  test('H19: sohbetteki fotoğrafa tıklayınca uygulama içinde büyüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.page.locator('input[type=file][accept="image/*"]').first().setInputFiles({
+      name: 'kucuk.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64'
+      ),
+    })
+    await ece.page.locator('img.chat-photo').click()
+    await expect(ece.page.locator('.photo-lightbox img')).toBeVisible()
+    expect(ece.context.pages()).toHaveLength(1)
+    await ece.page.keyboard.press('Escape')
+    await expect(ece.page.locator('.photo-lightbox')).toHaveCount(0)
+  })
+
   test('H18: kanalda değilken çıkış yapınca oturum sunucuda da siliniyor', async ({ disco }) => {
     const mert = await disco.user('Mert', { rememberMe: true })
     const token = await mert.page.evaluate(() => localStorage.getItem('rememberedSessionToken'))

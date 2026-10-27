@@ -13,3 +13,5 @@ export const clientBuildDir = path.join(cacheDir, 'client')
 // node_modules'ünden yüklüyoruz — testler sunucuyla birebir aynı şema ve
 // kütüphane sürümünü kullansın diye.
 export const requireFromServer = createRequire(path.join(serverDir, 'server.js'))
+// Masaüstü uygulamasının paketleri (ör. electron: çalıştırılabilir dosyanın yolu).
+export const requireFromDesktop = createRequire(path.join(desktopDir, 'package.json'))
