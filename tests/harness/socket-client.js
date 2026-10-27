@@ -6,12 +6,15 @@ import { io } from 'socket.io-client'
 import { PASSWORD } from './seed.js'
 
 export class TestClient {
-  constructor(url) {
+  // headers: bağlantı isteğine eklenecek başlıklar (ör. Render'ın vekilini
+  // taklit eden X-Forwarded-For).
+  constructor(url, { headers } = {}) {
     this.socket = io(url, {
       transports: ['websocket'],
       forceNew: true,
       reconnectionDelay: 200,
       reconnectionDelayMax: 1000,
+      extraHeaders: headers,
     })
     this.events = []
     this.members = { online: [], offline: [] }

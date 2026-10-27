@@ -116,14 +116,52 @@ const socketsByUsername = new Map(); // username -> Set<socket>
 // socket.handshake.address doğrudan kullanılırsa, GERÇEK istemci IP'si
 // yerine Render'ın kendi iç proxy IP'si görünür (bu da banlamayı tamamen
 // işlevsiz kılar, hatta yanlışlıkla HERKESİ aynı IP'ymiş gibi gösterip
-// tüm servisi kilitleme riski taşır). X-Forwarded-For başlığı, proxy
-// zincirindeki GERÇEK istemciyi (ilk adres) taşır.
+// tüm servisi kilitleme riski taşır). Gerçek adres X-Forwarded-For'da.
+//
+// Vekil, kendisine bağlanan adresi başlığın SONUNA ekliyor; baştaki
+// değerleri istemcinin kendisi yazabiliyor. Eskiden ilk değer
+// kullanılıyordu: biri başlığa sahte bir adres yazarak banı atlatabilir
+// ya da bir arkadaşının adresini banlatabilirdi (H20). TRUSTED_PROXY_HOPS,
+// uygulamanın önündeki güvenilir vekil sayısı (Render: 1).
+const TRUSTED_PROXY_HOPS = Math.max(1, Number(process.env.TRUSTED_PROXY_HOPS) || 1);
 function getClientIp(socket) {
   const forwarded = socket.handshake.headers["x-forwarded-for"];
   if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0].trim();
+    const hops = forwarded
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (hops.length > 0) return hops[Math.max(0, hops.length - TRUSTED_PROXY_HOPS)];
   }
   return socket.handshake.address;
+}
+
+// Giriş için IP başına sınır: 10 dakikada 20 yanlış şifreden sonra o
+// adresten giriş, pencere dolana kadar reddediliyor. Hesap başına kilit
+// (5 yanlış şifre) farklı hesaplara sırayla deneme yapılmasını
+// durdurmuyordu.
+const MAX_LOGIN_FAILURES_PER_IP = 20;
+const LOGIN_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+const loginFailuresByIp = new Map(); // ip -> { count, windowStart }
+
+function isLoginBlockedForIp(ip) {
+  const entry = loginFailuresByIp.get(ip);
+  if (!entry) return false;
+  if (Date.now() - entry.windowStart > LOGIN_FAILURE_WINDOW_MS) {
+    loginFailuresByIp.delete(ip);
+    return false;
+  }
+  return entry.count >= MAX_LOGIN_FAILURES_PER_IP;
+}
+
+function recordLoginFailure(ip) {
+  const now = Date.now();
+  const entry = loginFailuresByIp.get(ip);
+  if (!entry || now - entry.windowStart > LOGIN_FAILURE_WINDOW_MS) {
+    loginFailuresByIp.set(ip, { count: 1, windowStart: now });
+  } else {
+    entry.count += 1;
+  }
 }
 
 // YENİ: Alganis rolündeki, ŞU AN bağlı olan hesaplara anlık güvenlik
@@ -749,10 +787,18 @@ io.on("connection", (socket) => {
     if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
       return callback({ success: false, message: "Kullanıcı adı ve şifre gerekli." });
     }
+    const ip = getClientIp(socket);
+    if (isLoginBlockedForIp(ip)) {
+      return callback({
+        success: false,
+        message: "Bu bağlantıdan çok fazla yanlış deneme yapıldı, biraz sonra tekrar dene.",
+      });
+    }
     try {
       // Büyük/küçük harfe duyarsız: "alganis" yazan da girebiliyor.
       const [user] = await findUsersByName(username.trim());
       if (!user) {
+        recordLoginFailure(ip);
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
 
@@ -774,6 +820,7 @@ io.on("connection", (socket) => {
           user.loginLockedUntil = new Date(Date.now() + LOGIN_LOCK_MS);
         }
         await user.save();
+        recordLoginFailure(ip);
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
 

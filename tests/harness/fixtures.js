@@ -124,8 +124,8 @@ export const test = base.extend({
       },
 
       // Tarayıcısız protokol istemcisi; kullanıcı adı verilirse giriş yapar.
-      async client(username) {
-        const client = new TestClient(env.socketUrl)
+      async client(username, options) {
+        const client = new TestClient(env.socketUrl, options)
         clients.push(client)
         await client.connected()
         if (username) await client.login(username)

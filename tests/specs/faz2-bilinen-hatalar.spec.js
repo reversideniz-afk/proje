@@ -241,6 +241,45 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     await expect.poll(stillValid).toBe(false)
   })
 
+  // Render'ın vekili gerçek adresi X-Forwarded-For'un sonuna ekliyor; baştaki
+  // değer istemcinin uydurduğu. Testte ikisini de biz yazıyoruz.
+  const viaRender = (spoofed, real) => ({ headers: { 'X-Forwarded-For': `${spoofed}, ${real}` } })
+
+  test('H20: IP banı sahte X-Forwarded-For değeriyle atlatılamıyor', async ({ disco }) => {
+    const tryRegister = async (headers, inviteCode, username = 'Saldirgan') => {
+      const client = await disco.client(null, headers)
+      const response = await client.emitAck('register', { username, password: PASSWORD, inviteCode })
+      client.close()
+      return response
+    }
+    // 9.9.9.9 her denemede başka bir sahte adres yazarak 10 yanlış kod deniyor.
+    for (let i = 0; i < 10; i++) await tryRegister(viaRender(`1.1.1.${i}`, '9.9.9.9'), 'yanlis-kod')
+    // Doğru kodu bulsa da, yine başka bir sahte adresle: banlı.
+    const banned = await tryRegister(viaRender('2.2.2.2', '9.9.9.9'), REGISTER_INVITE_CODE)
+    expect(banned).toMatchObject({ success: false, message: 'Davet kodu hatalı.' })
+    // Başka bir gerçek adres (ve onun sahte değeri olarak banlı adres) etkilenmiyor.
+    const friend = await tryRegister(viaRender('9.9.9.9', '5.5.5.5'), REGISTER_INVITE_CODE, 'Arkadas')
+    expect(friend.success).toBe(true)
+  })
+
+  test('H20: aynı adresten çok sayıda yanlış girişten sonra o adres bekletiliyor', async ({ disco }) => {
+    const tryLogin = async (headers, username, password) => {
+      const client = await disco.client(null, headers)
+      const response = await client.emitAck('login', { username, password })
+      client.close()
+      return response
+    }
+    // Farklı hesaplara sırayla deneme (hesap başına kilit bunu durdurmuyordu).
+    for (let i = 0; i < 20; i++) {
+      await tryLogin(viaRender(`3.3.3.${i}`, '8.8.8.8'), ['Mert', 'Ece', 'Bora', 'Gozcu'][i % 4], 'yanlis')
+    }
+    const blocked = await tryLogin(viaRender('4.4.4.4', '8.8.8.8'), 'Alganis', PASSWORD)
+    expect(blocked.success).toBe(false)
+    expect(blocked.message).toContain('çok fazla yanlış deneme')
+    // Başka bir adresten doğru şifreyle giriş çalışıyor.
+    expect((await tryLogin(viaRender('8.8.8.8', '7.7.7.7'), 'Alganis', PASSWORD)).success).toBe(true)
+  })
+
   test('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {
     // Uygulama gibi her denemede yeni bağlantı (bağlantı başına giriş/kayıt
     // hız sınırı var, bkz. H8).
