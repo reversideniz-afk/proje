@@ -76,10 +76,30 @@ function playTone(ctx, frequency, startOffset, duration, gainValue = 0.12, type 
   oscillator.stop(startTime + duration)
 }
 
+// Bütün efekt sesleri TEK bir ses motorunu (AudioContext) paylaşıyor.
+// Eskiden her ses yeni bir motor açıyor ve hiç kapatmıyordu; uzun bir
+// akşamda yüzlercesi birikiyordu (H10). Efektler de ayarlarda seçilen
+// çıkış cihazına gidiyor (bkz. setEffectsOutputDevice).
+let effectsContext = null
+let effectsOutputDeviceId = ''
+
+function setEffectsOutputDevice(deviceId) {
+  effectsOutputDeviceId = deviceId || ''
+  if (effectsContext && typeof effectsContext.setSinkId === 'function') {
+    effectsContext.setSinkId(effectsOutputDeviceId).catch(() => {
+      // Cihaz seçilemezse efektler varsayılan çıkıştan çalmaya devam eder.
+    })
+  }
+}
+
 function withAudioContext(fn) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    fn(ctx)
+    if (!effectsContext || effectsContext.state === 'closed') {
+      effectsContext = new (window.AudioContext || window.webkitAudioContext)()
+      if (effectsOutputDeviceId) setEffectsOutputDevice(effectsOutputDeviceId)
+    }
+    if (effectsContext.state === 'suspended') effectsContext.resume()
+    fn(effectsContext)
   } catch {
     // Ses opsiyonel bir özellik — başarısız olursa sessizce geç.
   }
@@ -669,6 +689,7 @@ function App() {
   useEffect(() => {
     window.localStorage?.setItem('audioOutputId', selectedAudioOutput)
     selectedAudioOutputRef.current = selectedAudioOutput
+    setEffectsOutputDevice(selectedAudioOutput)
   }, [selectedAudioOutput])
 
   // Seçilen çıkış (hoparlör) cihazını, ses çaldığımız AudioContext'e

@@ -269,14 +269,20 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect.poll(() => mert.probe(() => window.__disco.tones.filter((f) => f === 880).length)).toBe(1)
   })
 
-  test.fail('H10: efekt sesleri yeni ses motoru biriktirmiyor', async ({ disco }) => {
+  test('H10: efekt sesleri yeni ses motoru biriktirmiyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
     await mert.openChannel('genel')
     await ece.openChannel('genel')
+    await ece.joinVoice()
+    await mert.joinVoice()
+    await mert.leaveVoiceButton().click()
     for (let i = 1; i <= 5; i++) await mert.send(`mesaj ${i}`)
     await expect(ece.chat).toContainText('mesaj 5')
 
+    // Sesler hâlâ çalıyor (katılma + ayrılma + 5 mesaj tıkı)...
+    await expect.poll(() => ece.probe(() => window.__disco.tones.length)).toBeGreaterThanOrEqual(9)
+    // ...ama hepsi aynı motordan: sesli sohbetin motoru + efektlerin motoru.
     const openContexts = await ece.probe(
       () => window.__disco.audioContexts.filter((c) => c.state !== 'closed').length
     )
