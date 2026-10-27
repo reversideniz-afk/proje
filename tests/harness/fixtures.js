@@ -52,6 +52,9 @@ export const test = base.extend({
             socketUrl: `http://127.0.0.1:${clientProxyPort}`,
             // İnternetin bir an gidip gelmesi: tarayıcıların bütün bağlantıları kopar.
             dropConnections: () => appProxy.dropAll(),
+            // İnternet bir süre tamamen gider (bkz. proxy.block).
+            goOffline: () => appProxy.block(),
+            goOnline: () => appProxy.unblock(),
             // Render'ın deploy ya da uyku sonrası yeniden başlaması.
             async restartServer() {
               pointProxiesAt(await server.restart())

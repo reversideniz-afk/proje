@@ -408,6 +408,16 @@ function voiceRoomName(channel) {
   return `voice:${channel}`;
 }
 
+// Bir kullanıcının bütün açık bağlantılarının erişimini yeniden kontrol
+// eder (bkz. socket.data.recheckAccess). listChanged: sunucu listesi de
+// değişti (atıldı, sunucu silindi), istemci listeyi yenilesin.
+async function recheckUserAccess(username, message, { listChanged = false } = {}) {
+  for (const s of socketsByUsername.get(username) || []) {
+    if (listChanged) s.emit("server-list-changed");
+    await s.data.recheckAccess?.(message);
+  }
+}
+
 // Bir bağlantıyı ses odasından çıkarıp odadakilere haber veriyor. Bağlantı
 // gerçekten odadaysa true döner; böylece aynı ayrılma iki kez duyurulmuyor.
 function removeVoiceMember(roomId, socketId) {
@@ -495,6 +505,51 @@ io.on("connection", (socket) => {
   // socketsByUsername kaydını doğru temizleyebilmek (disconnect'te) ve
   // adminlere anlık güvenlik uyarısı gönderebilmek için.
   let currentUsername = null;
+
+  // Bu bağlantının durumunu dışarıdan değiştirmek için (yukarıdaki
+  // değişkenler bu kapsamda yaşıyor): başka bir yerden sese girilince ya
+  // da erişim kalkınca çağrılıyor.
+  // Sesi bitirir; bağlantı seste değilse null, öyleyse çıktığı kanalı döner.
+  socket.data.endVoice = (message) => {
+    if (!currentVoiceRoom) return null;
+    const roomId = currentVoiceRoom;
+    currentVoiceRoom = null;
+    removeVoiceMember(roomId, socket.id);
+    socket.emit("voice-ended", { message });
+    return roomId;
+  };
+
+  // Sunucudan atılınca, sunucu silinince ya da rolü değişince: erişimi
+  // kalmayan kanaldan ve sesinden çıkarır, bildirim odalarını ayıklar.
+  // Eskiden kişinin açık bağlantısı odada kalıyor, atıldıktan sonra da
+  // okuyup yazmaya devam edebiliyordu (H7).
+  socket.data.recheckAccess = async (message) => {
+    if (!currentUsername) return;
+    const changedRooms = new Set();
+    if (currentVoiceRoom && (await checkChannelAccess(currentUsername, currentVoiceRoom)).error) {
+      changedRooms.add(socket.data.endVoice(message));
+    }
+    if (currentTextRoom && (await checkChannelAccess(currentUsername, currentTextRoom)).error) {
+      const roomId = currentTextRoom;
+      currentTextRoom = null;
+      currentServerId = null;
+      socket.leave(textRoomName(roomId));
+      if (textRooms[roomId]) {
+        delete textRooms[roomId][socket.id];
+        if (Object.keys(textRooms[roomId]).length === 0) delete textRooms[roomId];
+      }
+      changedRooms.add(roomId);
+      socket.emit("join-error", message);
+    }
+    for (const room of [...socket.rooms]) {
+      if (!room.startsWith("member-notify:")) continue;
+      const channelId = room.slice("member-notify:".length);
+      if ((await checkChannelAccess(currentUsername, channelId)).error) socket.leave(room);
+    }
+    for (const roomId of changedRooms) {
+      io.to(textRoomName(roomId)).emit("channel-members", await buildMemberList(roomId));
+    }
+  };
 
   // ---- Kişisel hesap girişi ----
   socket.on("login", async ({ username, password, rememberMe }, callback) => {
@@ -785,12 +840,18 @@ io.on("connection", (socket) => {
       }
       const channels = await Channel.find({ serverId }).select("_id").lean();
       const channelIds = channels.map((c) => c._id);
+      const members = await ServerMember.find({ serverId }).select("username").lean();
       await Message.deleteMany({ channelId: { $in: channelIds } });
       await ChannelMember.deleteMany({ channelId: { $in: channelIds } });
       await Channel.deleteMany({ serverId });
       await ServerMember.deleteMany({ serverId });
       await ServerModel.deleteOne({ _id: serverId });
       callback({ success: true });
+      // O an bu sunucunun kanallarında olanlar (sahibi dahil) çıkarılıyor.
+      const affected = new Set([...members.map((m) => m.username), username]);
+      for (const member of affected) {
+        await recheckUserAccess(member, "Bu sunucu silindi.", { listChanged: true });
+      }
     } catch (err) {
       console.error("Sunucu silinirken hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
@@ -983,6 +1044,7 @@ io.on("connection", (socket) => {
       }
       await ServerMember.deleteOne({ serverId, username: targetUsername });
       callback({ success: true });
+      await recheckUserAccess(targetUsername, "Bu sunucudan çıkarıldın.", { listChanged: true });
     } catch (err) {
       console.error("Üye çıkarılırken hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
@@ -1151,8 +1213,9 @@ io.on("connection", (socket) => {
     for (const [otherRoomId, members] of Object.entries(voiceRooms)) {
       for (const [otherSocketId, info] of Object.entries(members)) {
         if (otherSocketId === socket.id || info.username !== username) continue;
-        removeVoiceMember(otherRoomId, otherSocketId);
-        io.to(otherSocketId).emit("voice-replaced");
+        const otherSocket = io.sockets.sockets.get(otherSocketId);
+        if (otherSocket) otherSocket.data.endVoice("Başka bir yerden sese bağlandın.");
+        else removeVoiceMember(otherRoomId, otherSocketId);
         changedRooms.add(otherRoomId);
       }
     }
@@ -1574,6 +1637,12 @@ io.on("connection", (socket) => {
         return;
       }
       socket.emit("user-role-updated", { username: targetUsername, roles: updated.roles || [] });
+      // Rolü alınan kişi kısıtlı bir kanaldaysa oradan çıkarılıyor.
+      if (action === "remove") {
+        await recheckUserAccess(targetUsername, "Bu kanala erişim yetkin kalmadı.", {
+          listChanged: true,
+        });
+      }
     } catch (err) {
       console.error("Rol güncellenirken hata:", err.message);
     }

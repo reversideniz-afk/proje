@@ -583,6 +583,17 @@ function App() {
   }, [voiceChannel])
   const [connectionError, setConnectionError] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState('connected')
+  // Kısa süreli bilgi şeridi (ör. "Bu sunucudan çıkarıldın.") — 8 saniyede
+  // kendiliğinden kapanıyor.
+  const [notice, setNotice] = useState(null)
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(null), 8000)
+    return () => clearTimeout(timer)
+  }, [notice])
+  // Kanal soketindeki 'server-list-changed' dinleyicisi, daha aşağıda
+  // tanımlanan liste yenileme fonksiyonlarına bu ref üzerinden ulaşıyor.
+  const refreshServerDataRef = useRef(null)
 
   // YENİ: üye listesi (Discord tarzı, sağda) — online (metin kanalına
   // bağlı herkes, seste olanlar ayrıca işaretli) + offline (daha önce
@@ -1648,6 +1659,9 @@ function App() {
       // kenar çubuğundaki 🎙️ işareti asılı kalıyordu (H14).
       socket.on('join-error', (message) => {
         setConnectionError(message || 'Kanala katılamadın.')
+        // Sunucudan atılınca başka bir sunucuya geçiliyor ve hata alanı
+        // temizleniyor; neden çıkarıldığımız bildirim şeridinde kalsın.
+        setNotice(message || 'Kanala katılamadın.')
         cleanupSocket()
         resetVoiceState()
         setActiveChannel(null)
@@ -1767,8 +1781,17 @@ function App() {
 
       // Aynı hesapla başka bir yerden sese girildi; sunucu bu bağlantıyı
       // sesten çıkardı.
-      socket.on('voice-replaced', () => {
+      // Sunucu bizi sesten çıkardı: aynı hesapla başka bir yerden sese
+      // girildi ya da bu kanala erişim kalktı.
+      socket.on('voice-ended', ({ message } = {}) => {
         resetVoiceState()
+        if (message) setNotice(message)
+      })
+
+      // Sunucudan atıldık, sunucu silindi ya da rolümüz değişti: sunucu ve
+      // kanal listeleri yenilensin.
+      socket.on('server-list-changed', () => {
+        refreshServerDataRef.current?.()
       })
 
       socket.on('voice-user-left', ({ socketId }) => {
@@ -2261,6 +2284,13 @@ function App() {
     if (response?.success) setMyServers(response.servers || [])
     return response
   }, [emitViaTempSocket])
+
+  useEffect(() => {
+    refreshServerDataRef.current = () => {
+      refreshMyServers()
+      if (activeServerIdRef.current) fetchServerChannels(activeServerIdRef.current)
+    }
+  }, [refreshMyServers, fetchServerChannels])
 
   const handleCreateServer = useCallback(async () => {
     if (!newServerName.trim()) return
@@ -3206,6 +3236,11 @@ function App() {
       </aside>
 
       <main className="main-panel">
+        {notice && notice !== connectionError && (
+          <div className="notice-banner" role="status">
+            {notice}
+          </div>
+        )}
         {connectionError && (
           <div className="no-channel-placeholder">
             <p className="error-text">{connectionError}</p>

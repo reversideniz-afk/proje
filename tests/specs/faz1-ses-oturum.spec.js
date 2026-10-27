@@ -70,7 +70,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     }
     await eski.emitAck('join-voice', { token: eski.token, channelId: disco.channels.genel })
 
-    const replaced = eski.nextEvent('voice-replaced')
+    const replaced = eski.nextEvent('voice-ended')
     const response = await yeni.emitAck('join-voice', { token: yeni.token, channelId: disco.channels.genel })
     expect(response.success).toBe(true)
     await replaced
@@ -333,6 +333,10 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     const { mert } = await mertVeEceSeste(disco, { mic: true })
     await mert.cameraOn()
 
+    // Mert'in interneti gidiyor, bu arada sunucudan çıkarılıyor; internet
+    // gelince kanala geri dönmeye çalışıyor ve reddediliyor.
+    disco.goOffline()
+    await expect(mert.page.locator('.reconnecting-banner')).toBeVisible()
     const alganis = await disco.client('Alganis')
     const kicked = await alganis.emitAck('remove-server-member', {
       token: alganis.token,
@@ -340,7 +344,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
       targetUsername: 'Mert',
     })
     expect(kicked.success).toBe(true)
-    disco.dropConnections()
+    disco.goOnline()
     await expect(mert.page.getByText('Bu sunucuya erişimin yok.')).toBeVisible({ timeout: 15_000 })
 
     await expect

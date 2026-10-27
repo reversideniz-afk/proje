@@ -1135,6 +1135,17 @@
    Bağlantı durumu göstergesi
 ------------------------------------------------------------ */
 
+/* Kısa süreli bilgi şeridi (ör. "Bu sunucudan çıkarıldın."). */
+.notice-banner {
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
 .reconnecting-banner {
   position: fixed;
   top: 0;

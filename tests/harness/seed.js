@@ -11,14 +11,16 @@ export const PASSWORD = 'test-sifre-1'
 export const REGISTER_INVITE_CODE = 'kayit-davet-test'
 export const SERVER_NAME = 'Test Sunucusu'
 export const SERVER_INVITE_CODE = 'sunucu-davet-test'
-export const CHANNEL_NAMES = ['genel', 'oyun']
+// Kanal adı -> izinli roller (boş: sunucunun herkesine açık). 'ozel' sadece
+// VIP rolündekilere açık; rol testleri için.
+export const CHANNELS = { genel: [], oyun: [], ozel: ['VIP'] }
 // Alganis platform yöneticisi ve sunucunun sahibi; Gozcu, testlerin
 // sunucunun gözünden durumu izlediği gözlemci hesap.
 export const USERS = {
   Alganis: { roles: ['Alganis'] },
   Mert: { roles: [] },
-  Ece: { roles: [] },
-  Bora: { roles: [] },
+  Ece: { roles: ['VIP'] },
+  Bora: { roles: ['VIP'] },
   Gozcu: { roles: [] },
 }
 
@@ -42,8 +44,8 @@ export async function seedDatabase(mongoUri) {
       }))
     )
     const channels = {}
-    for (const name of CHANNEL_NAMES) {
-      const channel = await Channel.create({ serverId: server._id, name, allowedRoles: [] })
+    for (const [name, allowedRoles] of Object.entries(CHANNELS)) {
+      const channel = await Channel.create({ serverId: server._id, name, allowedRoles })
       channels[name] = channel._id.toString()
     }
     return { serverId: server._id.toString(), channels }

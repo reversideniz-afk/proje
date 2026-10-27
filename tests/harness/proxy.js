@@ -5,10 +5,11 @@ import net from 'node:net'
 
 export function createProxy() {
   let targetPort = null
+  let blocked = false
   const pairs = new Set()
 
   const server = net.createServer((client) => {
-    if (!targetPort) {
+    if (!targetPort || blocked) {
       client.destroy()
       return
     }
@@ -44,6 +45,15 @@ export function createProxy() {
         upstream.destroy()
       }
       pairs.clear()
+    },
+    // İnternet bir süre tamamen gider: açık bağlantılar kopar, yenileri
+    // unblock() çağrılana kadar reddedilir.
+    block() {
+      blocked = true
+      this.dropAll()
+    },
+    unblock() {
+      blocked = false
     },
     close() {
       this.dropAll()
