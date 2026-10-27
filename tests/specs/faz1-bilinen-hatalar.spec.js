@@ -289,9 +289,13 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     expect(openContexts).toBeLessThanOrEqual(2)
   })
 
-  test.fail('H12: sayfa dili Türkçe, büyük harfler doğru ("PROFİL")', async ({ disco }) => {
-    const mert = await disco.user('Mert', { login: false })
+  test('H12: sayfa dili Türkçe, büyük harfler doğru ("PROFİL")', async ({ disco }) => {
+    const mert = await disco.user('Mert')
     expect(await mert.page.getAttribute('html', 'lang')).toBe('tr')
+    await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
+    // Başlıklar CSS ile büyük harfe çevriliyor; innerText dönüşmüş hâli verir.
+    const headings = await mert.page.locator('.app-settings-section h4').allInnerTexts()
+    expect(headings).toEqual(expect.arrayContaining(['PROFİL', 'SES CİHAZLARI', 'KİŞİSELLEŞTİRME']))
   })
 
   test.fail('H13: telefonda yakınlaştırma kutusu "Gönder" düğmesini kapatmıyor', async ({ disco }) => {
