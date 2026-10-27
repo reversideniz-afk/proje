@@ -871,12 +871,15 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Çıkış yapma — hem bellek-içi hem kalıcı (Session)
   // kaydını temizliyor, "beni hatırla" ile bir daha otomatik girmesin.
-  socket.on("logout", async ({ token }) => {
-    if (typeof token !== "string" || !token) return;
+  socket.on("logout", async ({ token } = {}, ack) => {
+    const reply = typeof ack === "function" ? ack : () => {};
+    if (typeof token !== "string" || !token) return reply({ success: false });
     try {
       await deleteSession(token);
+      reply({ success: true });
     } catch (err) {
       console.error("Oturum silinirken hata:", err.message);
+      reply({ success: false });
     }
   });
 

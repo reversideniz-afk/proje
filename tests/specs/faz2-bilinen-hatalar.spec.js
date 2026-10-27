@@ -202,6 +202,25 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     await expect(message).toHaveCount(0)
   })
 
+  test('H18: kanalda değilken çıkış yapınca oturum sunucuda da siliniyor', async ({ disco }) => {
+    const mert = await disco.user('Mert', { rememberMe: true })
+    const token = await mert.page.evaluate(() => localStorage.getItem('rememberedSessionToken'))
+    expect(token).toBeTruthy()
+    const stillValid = async () => {
+      const probe = await disco.client()
+      const response = await probe.emitAck('server-channels', { token, serverId: disco.serverId })
+      probe.close()
+      return response.success
+    }
+    expect(await stillValid()).toBe(true)
+
+    // Hiçbir kanala girmeden Ayarlar > Çıkış yap.
+    await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
+    await mert.page.getByRole('button', { name: /Çıkış Yap/ }).click()
+    await expect(mert.page.getByRole('button', { name: 'Giriş Yap' })).toBeVisible()
+    await expect.poll(stillValid).toBe(false)
+  })
+
   test('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {
     // Uygulama gibi her denemede yeni bağlantı (bağlantı başına giriş/kayıt
     // hız sınırı var, bkz. H8).

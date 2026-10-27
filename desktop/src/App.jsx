@@ -2450,7 +2450,10 @@ function App() {
   // FARKLI), "beni hatırla" kaydını da temizler ki bir dahaki açılışta
   // otomatik girmesin.
   const handleLogout = () => {
-    socketRef.current?.emit('logout', { token: sessionTokenRef.current })
+    // Çıkış her zaman ayrı, kısa ömürlü bir bağlantıdan gidiyor. Eskiden
+    // sadece açık bir kanal bağlantısı varsa gönderiliyordu; kanalda
+    // değilken çıkış yapınca oturum sunucuda geçerli kalıyordu (H18).
+    emitViaTempSocket('logout', { token: sessionTokenRef.current })
     leaveChannel()
     window.localStorage?.removeItem('rememberedSessionToken')
     setLoggedIn(false)
