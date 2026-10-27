@@ -5,7 +5,7 @@ import { requireFromServer } from './paths.js'
 
 const mongoose = requireFromServer('mongoose')
 const bcrypt = requireFromServer('bcryptjs')
-const { User, Server, ServerMember, Channel } = requireFromServer('./db.js')
+const { User, Server, ServerMember, Channel, Session } = requireFromServer('./db.js')
 
 export const PASSWORD = 'test-sifre-1'
 export const REGISTER_INVITE_CODE = 'kayit-davet-test'
@@ -50,4 +50,32 @@ export async function seedDatabase(mongoUri) {
   } finally {
     await mongoose.disconnect()
   }
+}
+
+async function withDatabase(mongoUri, fn) {
+  await mongoose.connect(mongoUri)
+  try {
+    return await fn()
+  } finally {
+    await mongoose.disconnect()
+  }
+}
+
+// Canlı veritabanındaki eski "beni hatırla" kayıtlarının biçimi: anahtarın
+// kendisi, özetlenmeden.
+export function insertLegacySession(mongoUri, username, token) {
+  return withDatabase(mongoUri, () =>
+    Session.collection.insertOne({
+      token,
+      username,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    })
+  )
+}
+
+export function listSessionTokens(mongoUri) {
+  return withDatabase(mongoUri, async () =>
+    (await Session.find({}).select('token').lean()).map((s) => s.token)
+  )
 }

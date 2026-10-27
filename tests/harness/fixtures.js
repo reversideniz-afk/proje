@@ -46,6 +46,7 @@ export const test = base.extend({
           pointProxiesAt(await server.start())
           return {
             ...seed,
+            mongoUri,
             server,
             clientUrl: web.url,
             socketUrl: `http://127.0.0.1:${clientProxyPort}`,
@@ -82,13 +83,19 @@ export const test = base.extend({
 
       // Tarayıcıda yeni bir kullanıcı açar (kendi çerezleri/localStorage'ı ile)
       // ve varsayılan olarak arayüzden giriş yaptırır.
-      async user(name, { login = true, rememberMe = false, viewport } = {}) {
+      // storage: sayfa açılmadan önce localStorage'a yazılacak değerler.
+      async user(name, { login = true, rememberMe = false, viewport, storage } = {}) {
         const context = await browser.newContext({
           permissions: ['microphone', 'camera'],
           locale: 'tr-TR',
           viewport: viewport || { width: 1280, height: 800 },
         })
         await context.addInitScript(instrumentPage)
+        if (storage) {
+          await context.addInitScript((items) => {
+            for (const [key, value] of Object.entries(items)) window.localStorage.setItem(key, value)
+          }, storage)
+        }
         const page = await context.newPage()
         const session = new UserSession(name, context, page)
         session.consoleLines = []

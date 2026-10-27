@@ -278,12 +278,78 @@ app.get(/^(?!\/socket\.io\/).*/, (req, res) => {
 const textRooms = {};
 const voiceRooms = {};
 
-const sessionTokens = new Map(); // token -> username
+// ------------------------------------------------------------
+// OTURUMLAR
+// Her giriş veritabanına yazılıyor (Session, db.js), böylece sunucu
+// yeniden başlayınca (her deploy'da ve Render'ın ücretsiz planı uyuyup
+// uyandığında) kimse atılmıyor. Veritabanında anahtarın kendisi değil
+// SHA-256 özeti duruyor. Her olayda veritabanına gitmemek için bellekte
+// bir önbellek var.
+// ------------------------------------------------------------
+// "Beni hatırla" seçilmediyse oturum son kullanımdan 1 gün sonra düşüyor
+// (uygulama zaten anahtarı kapanınca unutuyor, bu sadece üst sınır).
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+// Kayan pencereyi veritabanında en fazla saatte bir uzatıyoruz.
+const SESSION_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const sessionCache = new Map(); // anahtar -> { username, rememberMe, expiresAt, refreshedAt }
 
-// YENİ (SADECE TEST İÇİN): Gerçek MongoDB'ye bağlanamadığım test
-// ortamımda giriş akışını simüle edebilmek için. ALLOW_TEST_TOKENS
-// Render'da HİÇBİR ZAMAN ayarlanmayacak — canlı sunucuda etkisiz.
-function resolveUsername(token) {
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function sessionDuration(rememberMe) {
+  return rememberMe ? REMEMBER_ME_DURATION_MS : SESSION_DURATION_MS;
+}
+
+async function createSession(username, rememberMe) {
+  const token = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + sessionDuration(rememberMe));
+  try {
+    await Session.create({ token: hashToken(token), username, rememberMe, expiresAt });
+  } catch (err) {
+    // Veritabanı o an yazılamıyorsa oturum yine de bellekte çalışsın.
+    console.error("Oturum kaydedilirken hata:", err.message);
+  }
+  sessionCache.set(token, { username, rememberMe, expiresAt, refreshedAt: Date.now() });
+  return token;
+}
+
+// Veritabanındaki geçerli oturum kaydı ya da null. Eski kayıtlarda anahtarın
+// kendisi saklanıyordu: bulunursa yerinde özete çevriliyor.
+async function findSession(token) {
+  let session = await Session.findOne({ token: hashToken(token) });
+  if (!session) {
+    session = await Session.findOne({ token });
+    if (session) {
+      session.token = hashToken(token);
+      await session.save();
+    }
+  }
+  if (!session) return null;
+  if (session.expiresAt < new Date()) {
+    await Session.deleteOne({ _id: session._id });
+    return null;
+  }
+  return session;
+}
+
+// Kayan pencere: kullanılan oturumun süresini yeniden başlat.
+function refreshSession(token, cached) {
+  cached.expiresAt = new Date(Date.now() + sessionDuration(cached.rememberMe));
+  cached.refreshedAt = Date.now();
+  Session.updateOne({ token: hashToken(token) }, { expiresAt: cached.expiresAt }).catch((err) =>
+    console.error("Oturum süresi uzatılırken hata:", err.message)
+  );
+}
+
+async function deleteSession(token) {
+  sessionCache.delete(token);
+  await Session.deleteMany({ token: { $in: [hashToken(token), token] } });
+}
+
+async function resolveUsername(token) {
+  // YENİ (SADECE TEST İÇİN): ALLOW_TEST_TOKENS Render'da HİÇBİR ZAMAN
+  // ayarlanmayacak — canlı sunucuda etkisiz.
   if (
     process.env.ALLOW_TEST_TOKENS === "true" &&
     typeof token === "string" &&
@@ -291,7 +357,31 @@ function resolveUsername(token) {
   ) {
     return token.slice("TEST_BYPASS:".length);
   }
-  return sessionTokens.get(token);
+  if (typeof token !== "string" || !token) return null;
+
+  let cached = sessionCache.get(token);
+  if (cached && cached.expiresAt < new Date()) {
+    sessionCache.delete(token);
+    cached = null;
+  }
+  if (!cached) {
+    try {
+      const session = await findSession(token);
+      if (!session) return null;
+      cached = {
+        username: session.username,
+        rememberMe: session.rememberMe !== false,
+        expiresAt: session.expiresAt,
+        refreshedAt: 0,
+      };
+      sessionCache.set(token, cached);
+    } catch (err) {
+      console.error("Oturum okunurken hata:", err.message);
+      return null;
+    }
+  }
+  if (Date.now() - cached.refreshedAt > SESSION_REFRESH_INTERVAL_MS) refreshSession(token, cached);
+  return cached.username;
 }
 
 // YENİ (güvenlik): "imageData" alanının GERÇEKTEN bir base64 data URI
@@ -441,24 +531,9 @@ io.on("connection", (socket) => {
         await user.save();
       }
 
-      const token = crypto.randomUUID();
-      sessionTokens.set(token, user.username);
-
-      // YENİ: "Beni hatırla" işaretliyse, bu belirteci veritabanında da
-      // kalıcı olarak saklıyoruz (bkz. resume-session) — uygulama
-      // kapanıp açılsa bile (sunucu yeniden başlasa bile) geçerliliğini
-      // koruyor.
-      if (rememberMe === true) {
-        try {
-          await Session.create({
-            token,
-            username: user.username,
-            expiresAt: new Date(Date.now() + REMEMBER_ME_DURATION_MS),
-          });
-        } catch (err) {
-          console.error("Oturum kaydedilirken hata:", err.message);
-        }
-      }
+      // "Beni hatırla" işaretliyse oturum 30 gün, değilse 1 gün geçerli
+      // (ikisi de kullanıldıkça uzuyor, bkz. resolveUsername).
+      const token = await createSession(user.username, rememberMe === true);
 
       // YENİ: ÇOKLU SUNUCU — artık tek bir kanal listesi değil, kullanıcının
       // erişebildiği SUNUCULARIN listesi gönderiliyor. İstemci, aktif
@@ -499,23 +574,25 @@ io.on("connection", (socket) => {
     if (typeof callback !== "function") return;
     if (typeof token !== "string" || !token) return callback({ success: false });
     try {
-      const session = await Session.findOne({ token });
-      if (!session || session.expiresAt < new Date()) {
-        if (session) await Session.deleteOne({ token });
-        return callback({ success: false });
-      }
+      const session = await findSession(token);
+      if (!session) return callback({ success: false });
       const user = await User.findOne({ username: session.username });
       if (!user) {
-        await Session.deleteOne({ token });
+        await deleteSession(token);
         return callback({ success: false });
       }
 
-      sessionTokens.set(token, user.username);
       // Kayan pencere: aktif kullanılan bir "beni hatırla" oturumu,
       // gerçekten hiç kullanılmadığı sürece süresi dolmasın diye her
       // devam ettirmede süreyi yeniden 30 güne uzatıyoruz.
-      session.expiresAt = new Date(Date.now() + REMEMBER_ME_DURATION_MS);
-      await session.save();
+      const cached = {
+        username: user.username,
+        rememberMe: session.rememberMe !== false,
+        expiresAt: session.expiresAt,
+        refreshedAt: 0,
+      };
+      sessionCache.set(token, cached);
+      refreshSession(token, cached);
 
       const userRoles = user.roles || [];
       const myServers = await getAccessibleServers(user.username, userRoles);
@@ -543,9 +620,8 @@ io.on("connection", (socket) => {
   // kaydını temizliyor, "beni hatırla" ile bir daha otomatik girmesin.
   socket.on("logout", async ({ token }) => {
     if (typeof token !== "string" || !token) return;
-    sessionTokens.delete(token);
     try {
-      await Session.deleteOne({ token });
+      await deleteSession(token);
     } catch (err) {
       console.error("Oturum silinirken hata:", err.message);
     }
@@ -648,7 +724,7 @@ io.on("connection", (socket) => {
   // açabilir (spam'e karşı). Sunucuyu açan kişi otomatik olarak o
   // sunucunun sahibi/tek adminidir.
   socket.on("create-server", async ({ token, name }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof name !== "string" || !name.trim() || name.trim().length > 50) {
@@ -685,7 +761,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Sunucu silme — sadece sahibi ya da platform admini. ----
   socket.on("delete-server", async ({ token, serverId }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -716,7 +792,7 @@ io.on("connection", (socket) => {
   // (REGISTER_INVITE_CODE) TAMAMEN AYRI bir mekanizma: bu, zaten hesabı
   // olan birinin, arkadaşının sunucusuna katılması için.
   socket.on("join-server-by-invite", async ({ token, inviteCode }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof inviteCode !== "string" || !inviteCode.trim()) {
@@ -748,7 +824,7 @@ io.on("connection", (socket) => {
   // sırasında zaten gönderiliyor — bu, ör. bir sunucu oluşturduktan/
   // katıldıktan sonra listeyi anlık tazelemek için). ----
   socket.on("list-my-servers", async ({ token }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -772,7 +848,7 @@ io.on("connection", (socket) => {
   // ---- YENİ: Bir sunucunun davet kodunu getirme — sadece sahibi ya da
   // platform admini görebilir (paylaşılacak link/kod). ----
   socket.on("get-server-invite", async ({ token, serverId }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
@@ -794,7 +870,7 @@ io.on("connection", (socket) => {
   // istemci bunu ayrıca istiyor (bkz. login/resume-session artık sadece
   // "myServers" döndürüyor, kanallar değil). ----
   socket.on("server-channels", async ({ token, serverId }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -821,7 +897,7 @@ io.on("connection", (socket) => {
   // admini. v1'de yeni sunucularda kanal-başına rol kısıtlaması yok
   // (allowedRoles her zaman boş = sunucunun tüm üyelerine açık).
   socket.on("create-channel", async ({ token, serverId, name }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     if (typeof serverId !== "string" || typeof name !== "string") {
@@ -854,7 +930,7 @@ io.on("connection", (socket) => {
   // admini görebilir (bugünkü platform-geneli "Üye Yönetimi"nden AYRI,
   // sadece BU sunucuya özel). ----
   socket.on("list-server-members", async ({ token, serverId }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
@@ -880,7 +956,7 @@ io.on("connection", (socket) => {
   // platform admini; sunucu sahibi kendi kendini çıkaramaz (önce
   // "Sunucuyu Sil"i kullanmalı). ----
   socket.on("remove-server-member", async ({ token, serverId, targetUsername }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string" || typeof targetUsername !== "string") {
       return callback({ success: false, message: "Eksik bilgi." });
@@ -917,7 +993,7 @@ io.on("connection", (socket) => {
       socket.emit("join-error", message);
       reply({ success: false, message });
     };
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof serverId !== "string" || typeof channelId !== "string" || !username) {
       fail("Önce giriş yapman gerekiyor.");
       return;
@@ -1018,7 +1094,7 @@ io.on("connection", (socket) => {
   // baştan doğru duyuruluyor.
   socket.on("join-voice", async ({ token, channelId, state } = {}, ack) => {
     const reply = typeof ack === "function" ? ack : () => {};
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     const roomId = typeof channelId === "string" ? channelId : currentTextRoom;
     if (!username || !roomId) {
       reply({ success: false, message: "Önce bir kanala girmen gerekiyor." });
@@ -1109,7 +1185,7 @@ io.on("connection", (socket) => {
 
   // ---- Sohbet mesajı gönderme (kalıcı) ----
   socket.on("send-message", async ({ token, text }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     // GÜVENLİK/SAĞLAMLIK: "text" beklenmedik bir tipte (ör. bir nesne)
     // gelirse .trim() çağrısı hata fırlatabilirdi — bunu try/catch'e
     // girmeden, en başta AÇIKÇA reddediyoruz.
@@ -1144,20 +1220,20 @@ io.on("connection", (socket) => {
   });
 
   // ---- YENİ: Yazıyor... göstergesi ----
-  socket.on("typing-start", ({ token }) => {
-    const username = resolveUsername(token);
+  socket.on("typing-start", async ({ token }) => {
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
     socket.to(textRoomName(currentTextRoom)).emit("user-typing", { username });
   });
-  socket.on("typing-stop", ({ token }) => {
-    const username = resolveUsername(token);
+  socket.on("typing-stop", async ({ token }) => {
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
     socket.to(textRoomName(currentTextRoom)).emit("user-stopped-typing", { username });
   });
 
   // ---- YENİ: Mesaj emoji tepkisi (aç/kapa) ----
   socket.on("toggle-reaction", async ({ token, messageId, emoji }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
     if (typeof messageId !== "string" || typeof emoji !== "string") return;
     if (emoji.length > 8) return; // tek bir emoji karakteri için fazlasıyla yeterli
@@ -1190,7 +1266,7 @@ io.on("connection", (socket) => {
   // silme yetkisi hiç kimseye verilmiyor, "channel" ve "username" ikisi
   // birden eşleşmeli.
   socket.on("delete-message", async ({ token, messageId }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom || typeof messageId !== "string") return;
 
     try {
@@ -1216,7 +1292,7 @@ io.on("connection", (socket) => {
   // ---- YENİ: Tek bir mesajı düzenleme ----
   // GÜVENLİK: sadece KENDİ mesajını düzenleyebilirsin.
   socket.on("edit-message", async ({ token, messageId, newText }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
     if (typeof messageId !== "string" || typeof newText !== "string") return;
     const trimmed = newText.trim();
@@ -1248,7 +1324,7 @@ io.on("connection", (socket) => {
   // TÜM geçmişi ya da başkalarının mesajlarını silme yetkisi yok. Bu,
   // "yanlışlıkla bir şey paylaştım, hemen geri alayım" senaryosu için.
   socket.on("delete-last-n", async ({ token, n }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
     const count = Number(n);
     if (!Number.isInteger(count) || count < 1) return;
@@ -1288,7 +1364,7 @@ io.on("connection", (socket) => {
   // mesajını siler. "!sil @kullanıcı"dan (tümünü siler) farkı: burada
   // sayıyla sınırlı, daha "cerrahi" bir moderasyon aracı.
   socket.on("delete-user-last-n", async ({ token, targetUsername, n }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     const count = Number(n);
     if (
       !username ||
@@ -1351,7 +1427,7 @@ io.on("connection", (socket) => {
   // farkı: kendi mesajınla sınırlı değilsin ve sayı değil, kullanıcı adı
   // hedefliyorsun.
   socket.on("delete-user-messages", async ({ token, targetUsername }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (
       !username ||
       !currentTextRoom ||
@@ -1408,7 +1484,7 @@ io.on("connection", (socket) => {
   // sadece o kanalı en az bir kere açmış kişileri gösteriyordu, bu ondan
   // bağımsız ve tam liste).
   socket.on("list-all-users", async ({ token }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -1439,7 +1515,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Bir kullanıcıya rol ekleme/çıkarma — SADECE ADMIN_ROLE. ----
   socket.on("update-user-role", async ({ token, targetUsername, role, action }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (
       !username ||
       typeof targetUsername !== "string" ||
@@ -1483,7 +1559,7 @@ io.on("connection", (socket) => {
   // ADMIN_ROLE. 5 yanlış şifreden sonra otomatik kilitlenen hesaplar
   // için (bkz. login işleyicisi) — "istediğim zaman kaldırabileyim".
   socket.on("unlock-user-login", async ({ token, targetUsername }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || typeof targetUsername !== "string" || !targetUsername.trim()) return;
     try {
       const requester = await User.findOne({ username }).lean();
@@ -1507,7 +1583,7 @@ io.on("connection", (socket) => {
 
   // ---- YENİ: Banlı IP listesi — SADECE ADMIN_ROLE. ----
   socket.on("list-banned-ips", async ({ token }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
     try {
@@ -1535,7 +1611,7 @@ io.on("connection", (socket) => {
   // (ör. bir arkadaşın art arda yanlış davet kodu denemesi) banlanan
   // birini kurtarabilmek için. ----
   socket.on("unban-ip", async ({ token, ip }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username || typeof ip !== "string" || !ip.trim()) return;
     try {
       const requester = await User.findOne({ username }).lean();
@@ -1559,8 +1635,8 @@ io.on("connection", (socket) => {
   // ---- YENİ: Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı
   // gibi: HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara
   // anlık iletiliyor. Kanaldan çıkıp girsen bile bir daha görünmez.
-  socket.on("send-photo", ({ token, imageData, mimeType }) => {
-    const username = resolveUsername(token);
+  socket.on("send-photo", async ({ token, imageData, mimeType }) => {
+    const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
 
     // GÜVENLİK: set-avatar ile AYNI açık burada da vardı — gerçek bir data
@@ -1597,7 +1673,7 @@ io.on("connection", (socket) => {
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
   socket.on("load-older-messages", async ({ token, before }, callback) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     // GÜVENLİK DÜZELTMESİ: hangi kanaldan istediğimizi istemciden
     // ALMIYORUZ artık — sunucunun KENDİ, doğrulanmış kaydı olan
     // currentTextRoom'u kullanıyoruz. Önceki halinde, istemci
@@ -1656,7 +1732,7 @@ io.on("connection", (socket) => {
   // sınırlıyoruz ki veritabanı büyük resimlerle şişmesin (bu bir profil
   // fotoğrafı, tam çözünürlüklü bir paylaşım değil).
   socket.on("set-avatar", async ({ token, imageData, mimeType }) => {
-    const username = resolveUsername(token);
+    const username = await resolveUsername(token);
     if (!username) return;
     // GÜVENLİK: gerçekten bir data URI mi, beyan edilen mimeType ile
     // eşleşiyor mu — yoksa bir dış URL'yi profil fotoğrafı diye kaydedip

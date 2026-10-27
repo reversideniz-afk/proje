@@ -5,9 +5,12 @@
 // Bir hatayı düzelttiğinde testi bu dosyada "beklenmedik şekilde geçti"
 // diye kırmızı görürsün: o zaman test.fail'i test'e çevir, test artık
 // kalıcı bir koruma olur. Hata kodları (H1, H2…) Disco Gelişim Raporu'ndan.
+import { createHash } from 'node:crypto'
 import { test, expect } from '../harness/fixtures.js'
+import { insertLegacySession, listSessionTokens } from '../harness/seed.js'
 
-const names = (members) => (members?.online || []).map((m) => m.username).sort()
+const sha256 = (text) => createHash('sha256').update(text).digest('hex')
+const names =(members) => (members?.online || []).map((m) => m.username).sort()
 const voiceNames = (members) =>
   (members?.online || [])
     .filter((m) => m.inVoice)
@@ -98,7 +101,7 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect(mert.page.locator('.channel-header h2')).toHaveText('# oyun')
   })
 
-  test.fail('H2: sunucu yeniden başlayınca oturum ve kanal korunuyor', async ({ disco }) => {
+  test('H2: sunucu yeniden başlayınca oturum ve kanal korunuyor', async ({ disco }) => {
     const observer = await disco.observer('genel')
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
@@ -113,6 +116,53 @@ test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
     await expect(ece.page.getByText('Önce giriş yapman gerekiyor.')).toHaveCount(0)
     await ece.send('Sunucu yeniden başladı ama buradayız')
     await expect(mert.chat).toContainText('Sunucu yeniden başladı ama buradayız')
+  })
+
+  test('H2: sunucu yeniden başlayınca seste olanlar sese geri dönüyor', async ({ disco }) => {
+    const observer = await disco.observer('genel')
+    const { mert, ece } = await mertVeEceSeste(disco, { mic: true })
+
+    const mark = observer.mark()
+    await disco.restartServer()
+    await expect
+      .poll(() => voiceNames(observer.latestMembersSince(mark)), { timeout: 20_000 })
+      .toEqual(['Ece', 'Mert'])
+    await mert.expectHearingSomeone()
+    await ece.expectHearingSomeone()
+  })
+
+  test('H2: oturum anahtarı veritabanında özet olarak duruyor, eski kayıtlar da çalışıyor', async ({ disco }) => {
+    // Canlıdaki "beni hatırla" kayıtları anahtarın kendisini saklıyor;
+    // güncellemeden sonra arkadaşların yeniden giriş yapmak zorunda kalmamalı.
+    const legacyToken = '3f2b1c0e-1111-4222-8333-944455556666'
+    await insertLegacySession(disco.mongoUri, 'Mert', legacyToken)
+    const mert = await disco.user('Mert', {
+      login: false,
+      storage: { rememberedSessionToken: legacyToken },
+    })
+    await expect(mert.page.locator('.whoami')).toContainText('Mert')
+    expect(await listSessionTokens(disco.mongoUri)).toEqual([sha256(legacyToken)])
+
+    // Yeni girişler de sadece özetiyle kaydediliyor.
+    const ece = await disco.client('Ece')
+    const tokens = await listSessionTokens(disco.mongoUri)
+    expect(tokens).toContain(sha256(ece.token))
+    expect(tokens).not.toContain(ece.token)
+  })
+
+  test('H2: çıkış yapılan oturum, sunucu yeniden başlasa da geçersiz', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const stillValid = async () => {
+      const probe = await disco.client()
+      const response = await probe.emitAck('server-channels', { token: mert.token, serverId: disco.serverId })
+      probe.close()
+      return response.success
+    }
+    expect(await stillValid()).toBe(true)
+    mert.socket.emit('logout', { token: mert.token })
+    await expect.poll(stillValid).toBe(false)
+    await disco.restartServer()
+    expect(await stillValid()).toBe(false)
   })
 
   test('H31: ekran paylaşımı sürerken sese giren kişi paylaşımı görüyor', async ({ disco }) => {

@@ -100,12 +100,22 @@ const BannedIp = mongoose.models.BannedIp || mongoose.model("BannedIp", bannedIp
 // sessionTokens haritası sunucu yeniden başlayınca sıfırlanır, bu ise
 // kalır). expiresAt geçmişse token artık geçersiz sayılıyor — her
 // başarılı "resume-session" isteğinde süre yenileniyor (kayan pencere).
+// Artık BÜTÜN girişler burada (beni hatırla seçilmese de), böylece sunucu
+// yeniden başlayınca kimse atılmıyor. "token" alanında anahtarın kendisi
+// değil SHA-256 özeti duruyor: veritabanı sızsa bile oturum çalınamaz.
+// Eski kayıtlarda anahtarın kendisi duruyordu; ilk kullanımda özete
+// çevriliyorlar (bkz. server.js, findSession).
 const sessionSchema = new mongoose.Schema({
   token: { type: String, required: true, unique: true },
   username: { type: String, required: true },
+  // false: "beni hatırla" seçilmemiş, kısa ömürlü oturum. Eski kayıtların
+  // hepsi beni hatırla ile açılmıştı, varsayılan o yüzden true.
+  rememberMe: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   expiresAt: { type: Date, required: true },
 });
+// Süresi dolan oturumları MongoDB kendisi siliyor (TTL index).
+sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 const Session = mongoose.models.Session || mongoose.model("Session", sessionSchema);
 
 // YENİ: Çoklu sunucu desteği — her kullanıcı kendi bağımsız "sunucusunu"
