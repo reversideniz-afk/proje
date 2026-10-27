@@ -2,10 +2,29 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// Sunucu adresi tek yerden geliyor: varsayılan olarak Render. Testler
+// (tests/ klasörü) VITE_SERVER_URL ortam değişkeniyle yerel bir sunucuya
+// yönlendiriyor — gerçek sunucuya ve veritabanına hiç dokunmadan.
+const serverUrl = process.env.VITE_SERVER_URL || 'https://proje-dh7l.onrender.com'
+const serverWsUrl = serverUrl.replace(/^http/, 'ws')
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    'import.meta.env.VITE_SERVER_URL': JSON.stringify(serverUrl),
+  },
   plugins: [
     react(),
+    // index.html'deki CSP'nin connect-src kuralına aynı adresi yazıyor —
+    // App.jsx ile CSP birbirinden kopmasın diye.
+    {
+      name: 'disco-server-url',
+      transformIndexHtml: {
+        order: 'pre',
+        handler: (html) =>
+          html.replaceAll('%SERVER_URL%', serverUrl).replaceAll('%SERVER_WS_URL%', serverWsUrl),
+      },
+    },
     // YENİ: Web/PWA sürümü için — "ana ekrana ekle" ve temel çevrimdışı
     // önbellekleme desteği. NOT: Electron paketlemesini ETKİLEMİYOR —
     // registerType:'autoUpdate' ile eklenen kayıt kodu zaten

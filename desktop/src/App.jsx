@@ -3,7 +3,8 @@ import { io } from 'socket.io-client'
 import './App.css'
 import logoUrl from './assets/logo.png'
 
-const SERVER_URL = 'https://proje-dh7l.onrender.com'
+// Sunucu adresi vite.config.js'ten geliyor (varsayılan: Render).
+const SERVER_URL = import.meta.env.VITE_SERVER_URL
 // YENİ: Mesaj tepkileri için hızlı seçim listesi.
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉']
 
