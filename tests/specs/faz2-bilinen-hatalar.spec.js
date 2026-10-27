@@ -170,6 +170,38 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     expect((await post(mert.token)).status).toBe(200)
   })
 
+  test('H17: sunucu sahibi kendi sunucusunda başkasının mesajını arayüzden silebiliyor', async ({ disco }) => {
+    // Mert kendi sunucusunu açıyor, Ece davetle katılıp yazıyor.
+    const mertClient = await disco.client('Mert')
+    const { server } = await mertClient.emitAck('create-server', { token: mertClient.token, name: 'Mert Sunucusu' })
+    const { channel } = await mertClient.emitAck('create-channel', {
+      token: mertClient.token,
+      serverId: server.id,
+      name: 'sohbet',
+    })
+    const ece = await disco.client('Ece')
+    await ece.emitAck('join-server-by-invite', { token: ece.token, inviteCode: server.inviteCode })
+    await ece.joinChannel(server.id, channel.id)
+    ece.socket.emit('send-message', { token: ece.token, text: 'Ece burada' })
+    await ece.joinChannel(disco.serverId, disco.channels.genel)
+    ece.socket.emit('send-message', { token: ece.token, text: 'Ece genelde' })
+
+    const mert = await disco.user('Mert')
+    // Test Sunucusu'nun sahibi değil: Ece'nin mesajında Sil yok.
+    await mert.openChannel('genel')
+    const other = mert.page.locator('.chat-message', { hasText: 'Ece genelde' })
+    await other.click({ button: 'right' })
+    await expect(other.getByTitle('Sil')).toHaveCount(0)
+
+    // Kendi sunucusunda var ve çalışıyor.
+    await mert.page.locator('.server-rail-icon[title="Mert Sunucusu"]').click()
+    await mert.openChannel('sohbet')
+    const message = mert.page.locator('.chat-message', { hasText: 'Ece burada' })
+    await message.click({ button: 'right' })
+    await message.getByTitle('Sil').click()
+    await expect(message).toHaveCount(0)
+  })
+
   test('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {
     // Uygulama gibi her denemede yeni bağlantı (bağlantı başına giriş/kayıt
     // hız sınırı var, bkz. H8).

@@ -2860,8 +2860,15 @@ function App() {
   // açılıyor — sürekli fare gezdirirken panelin açılıp kapanması göz
   // yoruyordu.
   const [reactionPickerForMessageId, setReactionPickerForMessageId] = useState(null)
+  // Menü normalde mesajın üstünde açılıyor; mesaj sohbetin en üstündeyse
+  // orada yer olmadığı için kesiliyor ve düğmelerine tıklanamıyordu, o
+  // durumda altında açılıyor.
+  const [reactionPickerBelow, setReactionPickerBelow] = useState(false)
   const handleMessageContextMenu = (e, messageId) => {
     e.preventDefault()
+    const messageTop = e.currentTarget.getBoundingClientRect().top
+    const chatTop = chatMessagesRef.current?.getBoundingClientRect().top ?? 0
+    setReactionPickerBelow(messageTop - chatTop < 48)
     setReactionPickerForMessageId((prev) => (prev === messageId ? null : messageId))
   }
   useEffect(() => {
@@ -3101,6 +3108,10 @@ function App() {
   const activeServer = myServers.find((s) => s.id === activeServerId)
   const activeServerName = activeServer?.name || ''
   const activeServerIsOwner = !!activeServer?.isOwner
+  // Başkasının mesajını silebilir mi: platform yöneticisi ya da bu sunucunun
+  // sahibi. Sunucu sahibine zaten izin veriyordu ama arayüz düğmeyi sadece
+  // platform yöneticisine gösteriyordu (H17).
+  const canModerateActiveServer = isAdmin || activeServerIsOwner
 
   return (
     <div className="app-shell">
@@ -3606,7 +3617,12 @@ function App() {
                               </button>
                             ))}
                             {reactionPickerForMessageId === item.id && (
-                              <div className="reaction-picker reaction-picker--open">
+                              <div
+                                className={
+                                  'reaction-picker reaction-picker--open' +
+                                  (reactionPickerBelow ? ' reaction-picker--below' : '')
+                                }
+                              >
                                 {QUICK_REACTIONS.map((emoji) => (
                                   <button
                                     key={emoji}
@@ -3620,11 +3636,11 @@ function App() {
                                   {emoji}
                                 </button>
                               ))}
-                              {/* YENİ: silme artık kendi mesajınla sınırlı değil —
-                                  Alganis rolündeki hesaplar BAŞKASININ mesajını da
-                                  tek tıkla silebiliyor (moderasyon). Düzenleme
+                              {/* Silme kendi mesajınla sınırlı değil: platform
+                                  yöneticisi ve sunucunun sahibi BAŞKASININ mesajını
+                                  da tek tıkla silebiliyor (moderasyon). Düzenleme
                                   hâlâ sadece kendi mesajın için. */}
-                              {(item.username === displayName || isAdmin) && (
+                              {(item.username === displayName || canModerateActiveServer) && (
                                 <span className="reaction-picker-divider" />
                               )}
                               {item.username === displayName && (
@@ -3637,7 +3653,7 @@ function App() {
                                   ✏️
                                 </button>
                               )}
-                              {(item.username === displayName || isAdmin) && (
+                              {(item.username === displayName || canModerateActiveServer) && (
                                 <button
                                   type="button"
                                   className="reaction-picker-option"
