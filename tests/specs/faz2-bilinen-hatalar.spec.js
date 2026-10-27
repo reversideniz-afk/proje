@@ -104,11 +104,70 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     await expect(ece.peerTile('Mert')).toHaveCount(0)
   })
 
-  test.fail('H8: giriş yapmamış biri büyük paket gönderince bağlantısı kesiliyor', async ({ disco }) => {
+  test('H8: giriş yapmamış biri büyük paket gönderince bağlantısı kesiliyor', async ({ disco }) => {
     const anonymous = await disco.client()
     const disconnected = anonymous.nextEvent('disconnect', () => true, 10_000)
     anonymous.socket.emit('login', { username: 'x'.repeat(2 * 1024 * 1024), password: 'x' }, () => {})
     await disconnected
+  })
+
+  test('H8: art arda gönderilen mesajlar sınırlanıyor, gönderen uyarılıyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    for (const client of [mert, ece]) await client.joinChannel(disco.serverId, disco.channels.genel)
+    for (let i = 1; i <= 30; i++) mert.socket.emit('send-message', { token: mert.token, text: `sel ${i}` })
+    await expect
+      .poll(() => mert.received('new-message').some((m) => m.text?.startsWith('Çok hızlı mesaj')))
+      .toBe(true)
+    await sleep(1000)
+    const delivered = ece.received('new-message').filter((m) => m.text?.startsWith('sel '))
+    expect(delivered.length).toBeGreaterThan(0)
+    expect(delivered.length).toBeLessThan(15)
+  })
+
+  test('H8: büyük fotoğraf (3 MB) HTTP ile gidiyor ve karşıda görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+
+    // Geçerli 1x1 PNG + sonuna 3 MB dolgu (PNG okuyucuları IEND sonrasını yok sayar).
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    )
+    const buffer = Buffer.concat([tinyPng, Buffer.alloc(3 * 1024 * 1024, 7)])
+    await mert.page.locator('input[type=file][accept="image/*"]').first().setInputFiles({
+      name: 'buyuk.png',
+      mimeType: 'image/png',
+      buffer,
+    })
+    const photo = ece.page.locator('img.chat-photo')
+    await expect(photo).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => photo.evaluate((img) => img.naturalWidth)).toBe(1)
+  })
+
+  test('H8: fotoğraf yolu giriş yapmamışı ve kanalda olmayanı reddediyor', async ({ disco }) => {
+    const body = JSON.stringify({
+      channelId: disco.channels.genel,
+      imageData: 'data:image/png;base64,AAAA',
+      mimeType: 'image/png',
+    })
+    const post = (token) =>
+      fetch(`${disco.socketUrl}/api/photos`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body,
+      })
+    expect((await post(null)).status).toBe(401)
+    expect((await post('uydurma-anahtar')).status).toBe(401)
+    const mert = await disco.client('Mert')
+    expect((await post(mert.token)).status).toBe(403)
+    await mert.joinChannel(disco.serverId, disco.channels.genel)
+    expect((await post(mert.token)).status).toBe(200)
   })
 
   test.fail('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {

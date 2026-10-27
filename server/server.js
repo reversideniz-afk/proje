@@ -120,11 +120,57 @@ const io = new Server(server, {
   cors: {
     origin: "*", // Geliştirme aşamasında serbest; canlıya alırken kısıtlanabilir.
   },
-  // YENİ: Varsayılan limit (1 MB) fotoğraf göndermek için çok düşük.
-  // 10 MB'lık bir fotoğraf base64'e çevrilince ~%33 büyüyor, üstüne
-  // biraz da pay bırakıyoruz.
-  maxHttpBufferSize: 15 * 1024 * 1024,
+  // Tek bir paket en fazla 1 MB. Eskiden fotoğraflar yüzünden 15 MB'tı ve
+  // bu sınır giriş yapmamış biri dahil bütün olaylara uygulanıyordu (H8);
+  // fotoğraflar artık HTTP'den geliyor (bkz. /api/photos).
+  maxHttpBufferSize: 1024 * 1024,
 });
+
+// ------------------------------------------------------------
+// Hız sınırı (H8): her bağlantı için olay grubuna göre bir jeton kovası.
+// Kova dolu başlıyor, her olay bir jeton harcıyor, jetonlar zamanla
+// yenileniyor. Sınırı aşan olay sessizce atılıyor (cevap bekleyen olaya
+// "çok hızlı" yanıtı gidiyor).
+// ------------------------------------------------------------
+const RATE_LIMITS = {
+  chat: { capacity: 8, refillPerSecond: 1.5 },
+  auth: { capacity: 5, refillPerSecond: 0.3 },
+  // WebRTC bağlantısı kurulurken kısa sürede onlarca ICE adayı gidiyor.
+  signal: { capacity: 300, refillPerSecond: 60 },
+  default: { capacity: 40, refillPerSecond: 10 },
+};
+const EVENT_GROUPS = {
+  "send-message": "chat",
+  "send-photo": "chat",
+  "edit-message": "chat",
+  "delete-message": "chat",
+  "toggle-reaction": "chat",
+  "delete-last-n": "chat",
+  "delete-user-last-n": "chat",
+  "delete-user-messages": "chat",
+  login: "auth",
+  register: "auth",
+  "resume-session": "auth",
+  signal: "signal",
+};
+
+function createRateLimiter(limits = RATE_LIMITS, groups = EVENT_GROUPS) {
+  const buckets = {};
+  return (event) => {
+    const group = groups[event] || "default";
+    const { capacity, refillPerSecond } = limits[group];
+    const now = Date.now();
+    const bucket = (buckets[group] ||= { tokens: capacity, updatedAt: now });
+    bucket.tokens = Math.min(
+      capacity,
+      bucket.tokens + ((now - bucket.updatedAt) / 1000) * refillPerSecond
+    );
+    bucket.updatedAt = now;
+    if (bucket.tokens < 1) return { allowed: false, group };
+    bucket.tokens -= 1;
+    return { allowed: true, group };
+  };
+}
 
 const PORT = process.env.PORT || 3001;
 
@@ -260,6 +306,79 @@ app.use(express.static(desktopDistPath));
 app.get("/status", (req, res) => {
   res.send("Sinyalleşme sunucusu çalışıyor.");
 });
+
+// ------------------------------------------------------------
+// HTTP API — şimdilik sadece fotoğraf paylaşımı.
+// Masaüstü uygulaması file:// adresinden açıldığı için başka kökenden
+// istek yapıyor; anahtar başlıkta gittiği (çerez yok) için her kökene
+// izin vermek güvenli.
+// ------------------------------------------------------------
+app.use("/api", (req, res, next) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+// Oturum anahtarı GÖVDE OKUNMADAN kontrol ediliyor: giriş yapmamış biri
+// büyük bir gövde gönderip sunucuya işletemez.
+async function requireAuth(req, res, next) {
+  const header = req.get("authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+  const username = token ? await resolveUsername(token) : null;
+  if (!username) {
+    res.set("Connection", "close");
+    return res.status(401).json({ success: false, message: "Önce giriş yapman gerekiyor." });
+  }
+  req.username = username;
+  next();
+}
+
+// Kişi başına fotoğraf hızı: 5'lik kova, 10 saniyede bir yenileniyor.
+const photoRateLimiters = new Map(); // username -> createRateLimiter(...)
+function allowPhoto(username) {
+  if (!photoRateLimiters.has(username)) {
+    photoRateLimiters.set(
+      username,
+      createRateLimiter({ default: { capacity: 5, refillPerSecond: 0.1 } }, {})
+    );
+  }
+  return photoRateLimiters.get(username)("photo").allowed;
+}
+
+// ---- Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı gibi:
+// HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara iletiliyor.
+// Sadece o an açık tuttuğun kanala gönderebilirsin. Eskiden Socket.IO
+// üzerinden geliyordu; bu yüzden paket sınırı 15 MB'tı (H8).
+app.post(
+  "/api/photos",
+  requireAuth,
+  express.json({ limit: "15mb" }),
+  (req, res) => {
+    const { channelId, imageData, mimeType } = req.body || {};
+    // GÜVENLİK: gerçek bir data URI mi, beyan edilen mimeType ile
+    // eşleşiyor mu (bkz. isValidImageDataUri — "takip pikseli" koruması).
+    // ~10 MB'lık bir görsel base64'te kabaca 13,3 milyon karakter.
+    if (
+      typeof channelId !== "string" ||
+      !isValidImageDataUri(imageData, mimeType) ||
+      imageData.length > 14 * 1024 * 1024
+    ) {
+      return res.status(400).json({ success: false, message: "Geçersiz ya da çok büyük fotoğraf." });
+    }
+    const viewers = Object.entries(textRooms[channelId] || {});
+    const senderSocketIds = viewers.filter(([, u]) => u.username === req.username).map(([id]) => id);
+    if (senderSocketIds.length === 0) {
+      return res.status(403).json({ success: false, message: "Önce kanala girmen gerekiyor." });
+    }
+    if (!allowPhoto(req.username)) {
+      return res.status(429).json({ success: false, message: "Çok hızlı fotoğraf gönderiyorsun, biraz bekle." });
+    }
+    relayPhoto(channelId, req.username, imageData, mimeType, senderSocketIds);
+    res.json({ success: true });
+  }
+);
 
 // SPA yedek yönlendirme: bilinen bir statik dosyaya karşılık gelmeyen
 // her GET isteği index.html'e düşsün (Socket.io kendi /socket.io/
@@ -408,6 +527,26 @@ function voiceRoomName(channel) {
   return `voice:${channel}`;
 }
 
+// Fotoğrafı kanaldakilere iletir (hiçbir yere kaydetmeden). Kanalda
+// gönderenden başka kimse yoksa gönderene haber verir.
+function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
+  io.to(textRoomName(channelId)).emit("new-photo", {
+    username,
+    imageData,
+    mimeType,
+    createdAt: new Date(),
+  });
+  io.to(`member-notify:${channelId}`).except(senderSocketIds).emit("channel-activity", { channelId });
+  const others = Object.values(textRooms[channelId] || {}).filter((u) => u.username !== username);
+  if (others.length === 0) {
+    io.to(senderSocketIds).emit("new-message", {
+      username: "Sistem",
+      text: "Şu an kanalda başka kimse yoktu, fotoğrafı kimse görmedi.",
+      createdAt: new Date(),
+    });
+  }
+}
+
 // Bir kullanıcının bütün açık bağlantılarının erişimini yeniden kontrol
 // eder (bkz. socket.data.recheckAccess). listChanged: sunucu listesi de
 // değişti (atıldı, sunucu silindi), istemci listeyi yenilesin.
@@ -505,6 +644,24 @@ io.on("connection", (socket) => {
   // socketsByUsername kaydını doğru temizleyebilmek (disconnect'te) ve
   // adminlere anlık güvenlik uyarısı gönderebilmek için.
   let currentUsername = null;
+
+  // Hız sınırı (bkz. RATE_LIMITS): sınırı aşan olay işlenmeden atılıyor.
+  const rateLimit = createRateLimiter();
+  let lastRateWarningAt = 0;
+  socket.use(([event, ...args], next) => {
+    const { allowed, group } = rateLimit(event);
+    if (allowed) return next();
+    const ack = args[args.length - 1];
+    if (typeof ack === "function") ack({ success: false, message: "Çok hızlı gidiyorsun, biraz bekle." });
+    if (group === "chat" && Date.now() - lastRateWarningAt > 5000) {
+      lastRateWarningAt = Date.now();
+      socket.emit("new-message", {
+        username: "Sistem",
+        text: "Çok hızlı mesaj gönderiyorsun, biraz yavaşla.",
+        createdAt: new Date(),
+      });
+    }
+  });
 
   // Bu bağlantının durumunu dışarıdan değiştirmek için (yukarıdaki
   // değişkenler bu kapsamda yaşıyor): başka bir yerden sese girilince ya
@@ -1725,43 +1882,14 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ---- YENİ: Fotoğraf paylaşımı — WhatsApp'ın "tek seferlik" fotoğrafı
-  // gibi: HİÇBİR YERE KAYDEDİLMİYOR, sadece o an kanalda olanlara
-  // anlık iletiliyor. Kanaldan çıkıp girsen bile bir daha görünmez.
+  // ---- Fotoğraf paylaşımı, ESKİ yol: yeni istemciler /api/photos'u
+  // kullanıyor (bkz. yukarıda). Güncellemeyi henüz almamış istemciler için
+  // duruyor; paket sınırı 1 MB olduğu için sadece küçük fotoğraflar geçer.
   socket.on("send-photo", async ({ token, imageData, mimeType }) => {
     const username = await resolveUsername(token);
     if (!username || !currentTextRoom) return;
-
-    // GÜVENLİK: set-avatar ile AYNI açık burada da vardı — gerçek bir data
-    // URI mi, beyan edilen mimeType ile eşleşiyor mu diye doğruluyoruz.
     if (!isValidImageDataUri(imageData, mimeType)) return;
-    // ~10 MB'lık bir görsel, base64'e çevrilince kabaca 13.3 milyon
-    // karaktere denk geliyor — biraz payla 14 milyonda sınır koyuyoruz.
-    if (imageData.length > 14 * 1024 * 1024) return;
-
-    const roomName = textRoomName(currentTextRoom);
-    io.to(roomName).emit("new-photo", {
-      username,
-      imageData,
-      mimeType,
-      createdAt: new Date(),
-    });
-    socket.to(`member-notify:${currentTextRoom}`).emit("channel-activity", {
-      channelId: currentTextRoom,
-    });
-
-    // Küçük bir nezaket: o an kanalda gönderenden başka kimse yoksa,
-    // bunu bilsin (fotoğraf "kayboldu", kimse görmedi).
-    const othersInRoom = Object.values(textRooms[currentTextRoom] || {}).filter(
-      (u) => u.username !== username
-    );
-    if (othersInRoom.length === 0) {
-      socket.emit("new-message", {
-        username: "Sistem",
-        text: "Şu an kanalda başka kimse yoktu, fotoğrafı kimse görmedi.",
-        createdAt: new Date(),
-      });
-    }
+    relayPhoto(currentTextRoom, username, imageData, mimeType, [socket.id]);
   });
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----

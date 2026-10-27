@@ -2647,30 +2647,47 @@ function App() {
   // olanlara anlık iletiliyor.
   const MAX_PHOTO_BYTES = 10 * 1024 * 1024 // 10 MB
 
+  // Fotoğraflar Socket.IO yerine HTTP ile gidiyor (sunucuda /api/photos):
+  // böylece sunucu bütün olaylar için 15 MB'lık paketlere izin vermek
+  // zorunda kalmıyor. Hatalar bilgi şeridinde gösteriliyor (eskiden sadece
+  // sesteyken görünen alana yazılıyordu).
   const sendPhotoFile = (file) => {
-    if (!file || !socketRef.current) return
+    const channelId = activeChannelRef.current
+    if (!file || !channelId) return
 
     if (!file.type.startsWith('image/')) {
-      setMediaError('Sadece görsel dosyaları paylaşılabilir.')
+      setNotice('Sadece görsel dosyaları paylaşılabilir.')
       return
     }
     if (file.size > MAX_PHOTO_BYTES) {
-      setMediaError('Fotoğraf çok büyük (en fazla 10 MB olabilir).')
+      setNotice('Fotoğraf çok büyük (en fazla 10 MB olabilir).')
       return
     }
 
     setIsSendingPhoto(true)
     const reader = new FileReader()
-    reader.onload = () => {
-      socketRef.current?.emit('send-photo', {
-        token: sessionTokenRef.current,
-        imageData: reader.result,
-        mimeType: file.type,
-      })
-      setIsSendingPhoto(false)
+    reader.onload = async () => {
+      try {
+        const response = await fetch(`${SERVER_URL}/api/photos`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionTokenRef.current}`,
+          },
+          body: JSON.stringify({ channelId, imageData: reader.result, mimeType: file.type }),
+        })
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}))
+          setNotice(body.message || 'Fotoğraf gönderilemedi.')
+        }
+      } catch {
+        setNotice('Fotoğraf gönderilemedi, bağlantını kontrol et.')
+      } finally {
+        setIsSendingPhoto(false)
+      }
     }
     reader.onerror = () => {
-      setMediaError('Fotoğraf okunamadı, tekrar dener misin?')
+      setNotice('Fotoğraf okunamadı, tekrar dener misin?')
       setIsSendingPhoto(false)
     }
     reader.readAsDataURL(file)
