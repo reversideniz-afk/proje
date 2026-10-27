@@ -52,6 +52,35 @@ const {
 // mevcut serbest-metin rol sistemi (bkz. userCanAccessChannel) kullanılıyor.
 const ADMIN_ROLE = "Alganis";
 
+// Kullanıcı adları büyük/küçük harfe duyarsız karşılaştırılıyor: "alganis"
+// ile "Alganis" aynı hesap (H11). Türkçede I/ı ve İ/i ayrı harf çiftleri
+// olduğu için hem Türkçe hem İngilizce kurallarla bakılıyor; ikisinden
+// birine göre aynıysa aynı ad sayılıyor ("ALGANIS" de "Alganis"e takılır).
+const USERNAME_COLLATIONS = [
+  { locale: "tr", strength: 2 },
+  { locale: "en", strength: 2 },
+];
+
+// Ada benzeyen kayıtlı kullanıcılar (birebir eşleşen başta).
+async function findUsersByName(name) {
+  const found = new Map();
+  for (const collation of USERNAME_COLLATIONS) {
+    const users = await User.find({ username: name }).collation(collation).limit(5);
+    users.forEach((u) => found.set(u.username, u));
+  }
+  return [...found.values()].sort((a, b) => (b.username === name) - (a.username === name));
+}
+
+// Hesap adı olarak alınamayan adlar: sunucunun kendi mesajları "Sistem"
+// adıyla gidiyor (bu adı alan biri sahte sistem uyarısı yazabilirdi), "all"
+// ise @all bahsetmesi.
+const RESERVED_USERNAMES = ["sistem", "system", "all", "everyone", "here", "admin", "yönetici", "disco"];
+function isReservedUsername(name) {
+  return [name.toLowerCase(), name.toLocaleLowerCase("tr")].some((lower) =>
+    RESERVED_USERNAMES.includes(lower)
+  );
+}
+
 // ------------------------------------------------------------
 // YENİ: Giriş/kayıt saldırı korumaları (rate limiting)
 // ------------------------------------------------------------
@@ -541,6 +570,7 @@ function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
   if (others.length === 0) {
     io.to(senderSocketIds).emit("new-message", {
       username: "Sistem",
+      system: true,
       text: "Şu an kanalda başka kimse yoktu, fotoğrafı kimse görmedi.",
       createdAt: new Date(),
     });
@@ -657,6 +687,7 @@ io.on("connection", (socket) => {
       lastRateWarningAt = Date.now();
       socket.emit("new-message", {
         username: "Sistem",
+        system: true,
         text: "Çok hızlı mesaj gönderiyorsun, biraz yavaşla.",
         createdAt: new Date(),
       });
@@ -719,7 +750,8 @@ io.on("connection", (socket) => {
       return callback({ success: false, message: "Kullanıcı adı ve şifre gerekli." });
     }
     try {
-      const user = await User.findOne({ username: username.trim() });
+      // Büyük/küçük harfe duyarsız: "alganis" yazan da girebiliyor.
+      const [user] = await findUsersByName(username.trim());
       if (!user) {
         return callback({ success: false, message: "Kullanıcı adı veya şifre hatalı." });
       }
@@ -880,6 +912,9 @@ io.on("connection", (socket) => {
         message: "Kullanıcı adı 3-32 karakter olmalı, sadece harf/rakam/alt çizgi içerebilir.",
       });
     }
+    if (isReservedUsername(trimmedUsername)) {
+      return callback({ success: false, message: "Bu kullanıcı adı kullanılamaz." });
+    }
     if (password.length < 6) {
       return callback({ success: false, message: "Şifre en az 6 karakter olmalı." });
     }
@@ -928,8 +963,8 @@ io.on("connection", (socket) => {
     }
 
     try {
-      const existing = await User.findOne({ username: trimmedUsername }).lean();
-      if (existing) {
+      // Büyük/küçük harf farkıyla kopya ad da alınmış sayılıyor.
+      if ((await findUsersByName(trimmedUsername)).length > 0) {
         return callback({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
       }
       const passwordHash = await bcrypt.hash(password, 10);
@@ -1584,6 +1619,7 @@ io.on("connection", (socket) => {
       if (idsToDelete.length === 0) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Silinecek mesajın yok.",
           createdAt: new Date(),
         });
@@ -1595,6 +1631,7 @@ io.on("connection", (socket) => {
       });
       socket.emit("new-message", {
         username: "Sistem",
+        system: true,
         text: `${idsToDelete.length} mesajın silindi.`,
         createdAt: new Date(),
       });
@@ -1629,6 +1666,7 @@ io.on("connection", (socket) => {
       if (!(await canModerateServer(username, userRoles, currentServerId))) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Bu komutu kullanma yetkin yok.",
           createdAt: new Date(),
         });
@@ -1644,6 +1682,7 @@ io.on("connection", (socket) => {
       if (idsToDelete.length === 0) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: `${target} adlı kullanıcının bu kanalda silinecek mesajı yok.`,
           createdAt: new Date(),
         });
@@ -1657,6 +1696,7 @@ io.on("connection", (socket) => {
       // kanaldaki HERKESE görünür oluyor (şeffaflık için).
       io.to(textRoomName(currentTextRoom)).emit("new-message", {
         username: "Sistem",
+        system: true,
         text: `${username}, ${target} kullanıcısının son ${idsToDelete.length} mesajını sildi.`,
         createdAt: new Date(),
       });
@@ -1688,6 +1728,7 @@ io.on("connection", (socket) => {
       if (!(await canModerateServer(username, requesterRoles, currentServerId))) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Bu komutu kullanma yetkin yok.",
           createdAt: new Date(),
         });
@@ -1701,6 +1742,7 @@ io.on("connection", (socket) => {
       if (idsToDelete.length === 0) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: `${target} adlı kullanıcının bu kanalda silinecek mesajı yok.`,
           createdAt: new Date(),
         });
@@ -1714,6 +1756,7 @@ io.on("connection", (socket) => {
       // kanaldaki HERKESE görünür oluyor (şeffaflık için).
       io.to(textRoomName(currentTextRoom)).emit("new-message", {
         username: "Sistem",
+        system: true,
         text: `${username}, ${target} kullanıcısının ${idsToDelete.length} mesajını sildi.`,
         createdAt: new Date(),
       });
@@ -1774,6 +1817,7 @@ io.on("connection", (socket) => {
       if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Bu işlemi yapma yetkin yok.",
           createdAt: new Date(),
         });
@@ -1788,6 +1832,7 @@ io.on("connection", (socket) => {
       if (!updated) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Kullanıcı bulunamadı.",
           createdAt: new Date(),
         });
@@ -1816,6 +1861,7 @@ io.on("connection", (socket) => {
       if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Bu işlemi yapma yetkin yok.",
           createdAt: new Date(),
         });
@@ -1868,6 +1914,7 @@ io.on("connection", (socket) => {
       if (!(requester?.roles || []).includes(ADMIN_ROLE)) {
         socket.emit("new-message", {
           username: "Sistem",
+          system: true,
           text: "Bu işlemi yapma yetkin yok.",
           createdAt: new Date(),
         });
@@ -1970,6 +2017,7 @@ io.on("connection", (socket) => {
       // için fazlasıyla yeterli.
       socket.emit("new-message", {
         username: "Sistem",
+        system: true,
         text: "Profil fotoğrafı çok büyük (maksimum ~500 KB). Daha küçük bir resim dene.",
         createdAt: new Date(),
       });

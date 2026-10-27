@@ -170,15 +170,43 @@ test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
     expect((await post(mert.token)).status).toBe(200)
   })
 
-  test.fail('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {
-    const anonymous = await disco.client()
-    for (const username of ['Sistem', 'alganis']) {
-      const response = await anonymous.emitAck('register', {
+  test('H11: ayrılmış adlar ve büyük/küçük harf kopyası adlar alınamıyor', async ({ disco }) => {
+    // Uygulama gibi her denemede yeni bağlantı (bağlantı başına giriş/kayıt
+    // hız sınırı var, bkz. H8).
+    const register = async (username) => {
+      const client = await disco.client()
+      const response = await client.emitAck('register', {
         username,
         password: PASSWORD,
         inviteCode: REGISTER_INVITE_CODE,
       })
-      expect.soft(response.success, `"${username}" adıyla kayıt kabul edilmemeli`).toBe(false)
+      client.close()
+      return response
     }
+    for (const username of ['Sistem', 'SİSTEM', 'ADMIN', 'all', 'alganis', 'ALGANIS', 'mErT']) {
+      const response = await register(username)
+      expect.soft(response.message, `"${username}" adıyla kayıt kabul edilmemeli`).toMatch(
+        /kullanılamaz|zaten alınmış/
+      )
+    }
+    expect((await register('Sistem')).message).toBe('Bu kullanıcı adı kullanılamaz.')
+    expect((await register('alganis')).message).toBe('Bu kullanıcı adı zaten alınmış.')
+    // Türkçe harfli yeni bir ad ise sorunsuz alınabiliyor.
+    expect((await register('Işıl')).success).toBe(true)
+  })
+
+  test('H11: giriş büyük/küçük harfe duyarsız, hesap adı değişmiyor', async ({ disco }) => {
+    const client = await disco.client()
+    const response = await client.emitAck('login', { username: 'mert', password: PASSWORD })
+    expect(response.success).toBe(true)
+    expect(response.username).toBe('Mert')
+  })
+
+  test('H11: sunucunun kendi mesajları kullanıcı mesajlarından ayrı görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await mert.send('!sil 3')
+    const systemMessage = mert.page.locator('.chat-message--system', { hasText: 'Silinecek mesajın yok.' })
+    await expect(systemMessage).toBeVisible()
   })
 })

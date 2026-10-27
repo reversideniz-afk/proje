@@ -1249,6 +1249,23 @@
   margin-right: 6px;
 }
 
+/* Sunucunun kendi mesajları (system: true): bir kullanıcının mesajıyla
+   karışmasın diye soluk ve etiket görünümünde. */
+.chat-message--system .chat-message-author {
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-message--system .chat-message-text {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .chat-message-text {
   color: var(--text-primary);
   word-break: break-word;

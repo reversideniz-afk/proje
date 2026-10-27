@@ -3534,7 +3534,10 @@ function App() {
                     ) : (
                       <div
                         key={item.id || `text-${i}`}
-                        className="chat-message chat-message--text-wrap"
+                        className={
+                          'chat-message chat-message--text-wrap' +
+                          (item.system ? ' chat-message--system' : '')
+                        }
                         onContextMenu={(e) => item.id && handleMessageContextMenu(e, item.id)}
                       >
                         {editingMessageId === item.id ? (
