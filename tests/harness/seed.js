@@ -76,6 +76,23 @@ export function insertLegacySession(mongoUri, username, token) {
   )
 }
 
+// Bir kanala doğrudan veritabanından mesaj ekler (hız sınırına takılmadan
+// uzun geçmiş oluşturmak için). En eskisi 'mesaj 1'.
+export function insertMessages(mongoUri, channelId, username, count) {
+  const { Message } = requireFromServer('./db.js')
+  const start = Date.now() - count * 1000
+  return withDatabase(mongoUri, () =>
+    Message.insertMany(
+      Array.from({ length: count }, (_, i) => ({
+        channelId,
+        username,
+        text: `mesaj ${i + 1}`,
+        createdAt: new Date(start + i * 1000),
+      }))
+    )
+  )
+}
+
 export function listSessionTokens(mongoUri) {
   return withDatabase(mongoUri, async () =>
     (await Session.find({}).select('token').lean()).map((s) => s.token)
