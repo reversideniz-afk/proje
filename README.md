@@ -54,9 +54,11 @@ ve Atlas veritabanına hiç bağlanılmaz.
 Dosyalar:
 
 - `specs/temel.spec.js` — bugün çalışan akışlar. Hepsi her zaman geçmeli.
-- `specs/faz1-bilinen-hatalar.spec.js`, `specs/faz2-bilinen-hatalar.spec.js` — Disco Gelişim
-  Raporu'ndaki hatalar (H1, H2…). Her biri doğru davranışı tarif ediyor ve `test.fail` ile
-  "beklenen başarısızlık" olarak işaretli, yani bugün başarısız oldukları için yeşil görünüyorlar.
+- `specs/faz1-ses-oturum.spec.js` — Faz 1'de düzeltilen hataların (H1–H14, H30, H31) kalıcı
+  testleri. Hepsi her zaman geçmeli.
+- `specs/faz2-bilinen-hatalar.spec.js` — Disco Gelişim Raporu'ndaki, henüz düzeltilmemiş hatalar.
+  Her biri doğru davranışı tarif ediyor ve `test.fail` ile "beklenen başarısızlık" olarak
+  işaretli, yani bugün başarısız oldukları için yeşil görünüyorlar.
   Bir hatayı düzeltince testi "beklenmedik şekilde geçti" diye kırmızı görürsün: `test.fail`'i
   `test`'e çevir, o test artık hatanın geri dönmesine karşı kalıcı bir koruma olur.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).

@@ -1,7 +1,7 @@
 // Faz 2'de (güvenlik ve yetki) düzeltilecek hatalar. Bunlar tarayıcı
 // kullanmıyor: arayüzün asla göndermeyeceği istekleri doğrudan Socket.IO
 // ile göndererek, kurcalanmış bir istemcinin neler yapabildiğini deniyor.
-// Düzelince test.fail'i test'e çevir (bkz. faz1-bilinen-hatalar.spec.js).
+// Düzelince test.fail'i test'e çevir (bkz. README, Testler).
 import { test, expect } from '../harness/fixtures.js'
 import { PASSWORD, REGISTER_INVITE_CODE } from '../harness/seed.js'
 

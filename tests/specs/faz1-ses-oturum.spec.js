@@ -1,10 +1,7 @@
-// Faz 1'de (ses ve oturum güvenilirliği) düzeltilecek, canlı doğrulanmış
-// hatalar. Her test DOĞRU davranışı tarif ediyor ve bugün başarısız
-// olduğu için test.fail ile "beklenen başarısızlık" olarak işaretli.
-//
-// Bir hatayı düzelttiğinde testi bu dosyada "beklenmedik şekilde geçti"
-// diye kırmızı görürsün: o zaman test.fail'i test'e çevir, test artık
-// kalıcı bir koruma olur. Hata kodları (H1, H2…) Disco Gelişim Raporu'ndan.
+// Faz 1 (ses ve oturum güvenilirliği) hatalarının kalıcı testleri. Her biri
+// Disco Gelişim Raporu'ndaki bir hatanın (H1, H2…) doğru davranışını
+// tarif ediyor; hepsi Faz 1'de düzeltildi ve artık geri dönmelerine karşı
+// koruma görevi görüyor.
 import { createHash } from 'node:crypto'
 import { test, expect } from '../harness/fixtures.js'
 import { insertLegacySession, listSessionTokens } from '../harness/seed.js'
