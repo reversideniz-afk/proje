@@ -76,6 +76,50 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     await expect(online('Ece')).toHaveCount(0)
   })
 
+  test('iki kişi aynı anda ekran paylaşıyor, biri durdurunca diğerininki sürüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.joinVoice()
+    await ece.joinVoice()
+    await mert.mediaButton('Ekranı paylaş').click()
+    await ece.mediaButton('Ekranı paylaş').click()
+
+    const screenOf = (viewer, name) =>
+      viewer.page
+        .locator('.remote-video-wrapper', {
+          has: viewer.page.locator('.remote-video-label', { hasText: `${name} 🖥️ ekranı` }),
+        })
+        .locator('video')
+    await expect.poll(() => screenOf(ece, 'Mert').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+    await expect.poll(() => screenOf(mert, 'Ece').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+
+    await ece.mediaButton('Ekran paylaşımını durdur').click()
+    await expect(screenOf(mert, 'Ece')).toHaveCount(0)
+    // Mert'in paylaşımı Ece'de akmaya devam ediyor (yeni kareler geliyor).
+    const frames = () => screenOf(ece, 'Mert').evaluate((v) => v.getVideoPlaybackQuality().totalVideoFrames)
+    const before = await frames()
+    await expect.poll(frames).toBeGreaterThan(before)
+  })
+
+  test('her eşle tek WebRTC bağlantısı: kamera ve ekran aynı bağlantıdan', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await mert.joinVoice()
+    await ece.joinVoice()
+    await mert.micOn()
+    await mert.cameraOn()
+    await mert.mediaButton('Ekranı paylaş').click()
+    await expect.poll(() => ece.page.locator('video.remote-video--screen').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+    const openConnections = (user) =>
+      user.probe(() => window.__disco.pcs.filter((pc) => pc.connectionState !== 'closed').length)
+    expect(await openConnections(mert)).toBe(1)
+    expect(await openConnections(ece)).toBe(1)
+  })
+
   test('H16: arkadaşın açtığı yeni kanal kenar çubuğunda hemen görünüyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     await mert.openChannel('genel')
