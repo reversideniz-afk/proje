@@ -32,7 +32,7 @@ async function mertVeEceSeste(disco, { mic = false } = {}) {
   return { mert, ece }
 }
 
-test.describe('Bilinen hatalar: Faz 1', { tag: '@faz1' }, () => {
+test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
   test('H30: mikrofonunu ilk kez açan kişi karşı taraftan duyuluyor', async ({ disco }) => {
     const { mert, ece } = await mertVeEceSeste(disco, { mic: true })
     await mert.expectHearingSomeone()

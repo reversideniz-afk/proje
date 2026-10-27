@@ -1,13 +1,13 @@
-// Faz 2'de (güvenlik ve yetki) düzeltilecek hatalar. Bunlar tarayıcı
-// kullanmıyor: arayüzün asla göndermeyeceği istekleri doğrudan Socket.IO
-// ile göndererek, kurcalanmış bir istemcinin neler yapabildiğini deniyor.
-// Düzelince test.fail'i test'e çevir (bkz. README, Testler).
+// Faz 2 (güvenlik ve yetki) hatalarının kalıcı testleri. Çoğu tarayıcı
+// kullanmıyor: arayüzün asla göndermeyeceği istekleri doğrudan Socket.IO ya
+// da HTTP ile göndererek kurcalanmış bir istemcinin neler yapabildiğini
+// deniyor. Hepsi Faz 2'de düzeltildi.
 import { test, expect } from '../harness/fixtures.js'
 import { PASSWORD, REGISTER_INVITE_CODE } from '../harness/seed.js'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-test.describe('Bilinen hatalar: Faz 2', { tag: '@faz2' }, () => {
+test.describe('Faz 2: güvenlik ve yetki', { tag: '@faz2' }, () => {
   test('H6: seste başkasının adına ve dış avatar adresine bürünülemiyor', async ({ disco }) => {
     const mert = await disco.client('Mert')
     const ece = await disco.client('Ece')

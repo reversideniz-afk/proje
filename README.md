@@ -56,11 +56,12 @@ Dosyalar:
 - `specs/temel.spec.js` — bugün çalışan akışlar. Hepsi her zaman geçmeli.
 - `specs/faz1-ses-oturum.spec.js` — Faz 1'de düzeltilen hataların (H1–H14, H30, H31) kalıcı
   testleri. Hepsi her zaman geçmeli.
-- `specs/faz2-bilinen-hatalar.spec.js` — Disco Gelişim Raporu'ndaki, henüz düzeltilmemiş hatalar.
-  Her biri doğru davranışı tarif ediyor ve `test.fail` ile "beklenen başarısızlık" olarak
-  işaretli, yani bugün başarısız oldukları için yeşil görünüyorlar.
-  Bir hatayı düzeltince testi "beklenmedik şekilde geçti" diye kırmızı görürsün: `test.fail`'i
-  `test`'e çevir, o test artık hatanın geri dönmesine karşı kalıcı bir koruma olur.
+- `specs/faz2-guvenlik.spec.js` — Faz 2'de düzeltilen güvenlik ve yetki hatalarının (H6–H8,
+  H11, H17–H20) kalıcı testleri.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
   yeni pencere engeli, tek kopya. `desktop/node_modules` içindeki Electron kullanılıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).
+
+Henüz düzeltilmemiş bir hata için test yazarken `test.fail` kullan: doğru davranışı tarif eden
+test bugün başarısız olduğu için yeşil görünür. Hata düzelince "beklenmedik şekilde geçti" diye
+kırmızıya döner; o zaman `test.fail`'i `test`'e çevir.
