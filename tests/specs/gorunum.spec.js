@@ -49,8 +49,19 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await ece.micOn()
     await mert.joinVoice()
     await expect(mert.peerTile('Ece')).toBeVisible()
-    await expect(mert.page.locator('.tile.is-speaking')).toBeVisible({ timeout: 15_000 })
-    await shot(mert, testInfo, '05-ses-sahnesi')
+    // Işık sahte mikrofonun bip ritminde yanıp sönüyor: yandığı kareyi yakala.
+    // Çekimden önce ve sonra hâlâ yanıyorsa fotoğrafta da yanıyor demektir.
+    const speaking = () => mert.page.evaluate(() => !!document.querySelector('.tile.is-speaking'))
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await mert.page.waitForFunction(() => !!document.querySelector('.tile.is-speaking'), null, {
+        polling: 'raf',
+        timeout: 15_000,
+      })
+      const path = testInfo.outputPath('05-ses-sahnesi.png')
+      await mert.page.screenshot({ path })
+      if (await speaking()) break
+    }
+    await testInfo.attach('05-ses-sahnesi', { path: testInfo.outputPath('05-ses-sahnesi.png'), contentType: 'image/png' })
 
     await mert.openChannel('oyun')
     await shot(mert, testInfo, '06-baska-kanalda-ses')
