@@ -20,7 +20,8 @@ server/
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin
 desktop/
-  electron/        ana süreç (main.cjs) ve preload köprüsü
+  electron/        ana süreç (main.cjs: pencere, sistem tepsisi, güncelleme), preload köprüsü,
+                   push-to-talk.cjs (global bas-konuş)
   src/App.jsx      uygulamanın durumu ve bağlantı mantığı (bağlantı, ses, istekler)
   src/styles/      base.css: renkler, yazı tipleri, düğme/alan/avatar gibi ortak parçalar
   src/components/  arayüz: AuthScreen, ServerRail, ChannelSidebar, ChannelHeader,
@@ -38,7 +39,14 @@ dönen halka var; hareket azaltma açıksa sabit duruyor.
 
 Uygulama tek bir Socket.IO bağlantısı kullanıyor: açılışta kuruluyor, oturum anahtarı el
 sıkışmada gidiyor. Seste her kişiyle tek bir WebRTC bağlantısı ve sabit dört kanal var
-(mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor.
+(mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor. Mikrofon sese girerken kapalı hazırlanıyor;
+açmak ya da bas-konuş tuşuna basmak sadece izi açıyor.
+
+Masaüstü uygulamasında bas-konuş tuşu işletim sistemi seviyesinde dinleniyor
+(`uiohook-napi`): oyundayken ve Disco tepsideyken de çalışıyor. Klavye kancası sadece seste ve
+bas-konuş açıkken çalışıyor; arayüze sadece o tuşun basılıp bırakıldığı gidiyor. Pencereyi
+kapatmak Disco'yu tepsiye küçültüyor (Ayarlar > Masaüstü'nden kapatılabiliyor); tamamen
+çıkmak için tepsideki simgeye sağ tıkla.
 
 ## Geliştirme
 
@@ -94,11 +102,15 @@ Dosyalar:
   genelinde çevrimiçi bilgisi, her eşle tek WebRTC bağlantısı.
 - `specs/faz4-tasarim.spec.js` — Faz 4'te düzeltilen hataların (H15, H21–H24, H26, H27) ve yeni
   arayüz davranışlarının (kim konuşuyor, gruplama, emoji, kanal oluşturma, ayarlar) testleri.
+- `specs/faz5-ozellikler.spec.js` — Faz 5: mikrofonun sese girerken hazırlanması (H28), seste
+  mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
-  yeni pencere engeli, tek kopya. `desktop/node_modules` içindeki Electron kullanılıyor.
+  yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş. `desktop/node_modules`
+  içindeki Electron kullanılıyor; ana süreç `DISCO_TEST_HOOKS` ile tepsiyi ve klavye kancasını
+  testlere açıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).
 
 Bir tarayıcı sayfasında güvenlik politikası (CSP) bir şeyi engellerse test, başka açıdan geçse

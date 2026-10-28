@@ -22,7 +22,7 @@ import { SettingsScreen } from './components/SettingsScreen.jsx'
 import { VoiceStage } from './components/VoiceStage.jsx'
 import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
-import { describeMediaError } from './lib/format.js'
+import { describeMediaError, formatKeyCode } from './lib/format.js'
 import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
@@ -137,6 +137,21 @@ function App() {
   // sadece kişiselleştirme (tema) var, ileride büyüyebilir diye ayrı bir
   // panel olarak kurduk (sesteki cihaz ayarlarından bağımsız).
   const [showAppSettings, setShowAppSettings] = useState(false)
+
+  // Masaüstü: kapat düğmesi tepsiye küçültsün mü (varsayılan evet), bilgisayar
+  // açılınca başlasın mı (null: geliştirme sürümünde bu ayar yok).
+  const [closeToTray, setCloseToTray] = useState(() => window.localStorage?.getItem('closeToTray') !== '0')
+  useEffect(() => {
+    window.localStorage?.setItem('closeToTray', closeToTray ? '1' : '0')
+    window.electronAPI?.setCloseToTray?.(closeToTray)
+  }, [closeToTray])
+  const [openAtLogin, setOpenAtLogin] = useState(null)
+  useEffect(() => {
+    window.electronAPI?.getOpenAtLogin?.().then(setOpenAtLogin)
+  }, [])
+  const changeOpenAtLogin = async (value) => {
+    setOpenAtLogin(await window.electronAPI.setOpenAtLogin(value))
+  }
   const [settingsInitialPage, setSettingsInitialPage] = useState('account')
   const openSettings = useCallback((page = 'account') => {
     setSettingsInitialPage(page)
@@ -386,8 +401,10 @@ function App() {
     }
   }, [audioOutputs, selectedAudioOutput])
 
+  const selectedAudioInputRef = useRef(selectedAudioInput)
   useEffect(() => {
     window.localStorage?.setItem('audioInputId', selectedAudioInput)
+    selectedAudioInputRef.current = selectedAudioInput
   }, [selectedAudioInput])
 
   useEffect(() => {
@@ -421,10 +438,17 @@ function App() {
     })
   }, [selectedAudioOutput, isMicOn, inVoice])
 
-  // YENİ: Bas-konuş (push-to-talk) — uygulama odaktayken çalışan versiyon.
-  const [pttEnabled, setPttEnabled] = useState(false)
-  const [pttKey, setPttKey] = useState(null) // event.code, ör. 'KeyV'
+  // Bas-konuş (push-to-talk). Tuş, klavyede KeyboardEvent.code (ör. 'KeyV'),
+  // farenin yan tuşlarında 'Mouse4' / 'Mouse5'. Seçim bu cihazda kalıcı.
+  // Masaüstü uygulamasında pencere arkadayken de çalışıyor (bkz.
+  // electron/push-to-talk.cjs), web'de sadece sayfa öndeyken.
+  const [pttKey, setPttKey] = useState(() => window.localStorage?.getItem('pttKey') || null)
+  const pttEnabled = !!pttKey
   const [isCapturingPttKey, setIsCapturingPttKey] = useState(false)
+  useEffect(() => {
+    if (pttKey) window.localStorage?.setItem('pttKey', pttKey)
+    else window.localStorage?.removeItem('pttKey')
+  }, [pttKey])
   const [isCameraOn, setIsCameraOn] = useState(false)
 
   // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
@@ -1159,6 +1183,49 @@ function App() {
     }
   }, [])
 
+  // Mikrofon izini alıp yerel akışa ve bağlantılara takıyor. Sese girerken
+  // kapalı (enabled = false) olarak çağrılıyor: mikrofonu açmak sadece
+  // anahtarı çeviriyor. Eskiden mikrofon ilk açılışta isteniyordu; izin ve
+  // cihazın açılması beklenirken (özellikle bas-konuşta) ilk kelimeler
+  // kayboluyordu (H28). Bekleyen hazırlık micReadyRef'te.
+  const micReadyRef = useRef(null)
+  const addMicTrack = useCallback(
+    (enabled) => {
+      const ready = (async () => {
+        const deviceId = selectedAudioInputRef.current
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+        })
+        const track = stream.getAudioTracks()[0]
+        // Bu arada sesten çıkıldıysa izi açık bırakma.
+        if (!voiceChannelRef.current) {
+          track.stop()
+          return null
+        }
+        track.enabled = enabled
+        const otherTracks = localMainStreamRef.current?.getTracks() || []
+        const next = new MediaStream([...otherTracks, track])
+        // Ref'i hemen güncelliyoruz: bu arada kurulan bir bağlantı da
+        // (bkz. attachLocalMedia) yeni izi bulsun.
+        localMainStreamRef.current = next
+        setLocalMainStream(next)
+        setLocalTrackOnMainConnections('mic', track)
+        return track
+      })()
+      micReadyRef.current = ready
+      return ready
+        .catch((err) => {
+          console.error('[mikrofon] getUserMedia hatası:', err.name, err.message)
+          setMediaError(describeMediaError(err))
+          return null
+        })
+        .finally(() => {
+          if (micReadyRef.current === ready) micReadyRef.current = null
+        })
+    },
+    [setLocalTrackOnMainConnections]
+  )
+
   // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım. Hangi
   // kanaldayken katıldıysak (activeChannelRef.current), ses O kanala
   // bağlanıyor — sonradan başka bir kanalın mesajlarına göz atsan bile
@@ -1172,7 +1239,10 @@ function App() {
     setInVoice(true)
     setVoiceChannel(activeChannelRef.current)
     voiceChannelRef.current = activeChannelRef.current
-  }, [])
+    // Mikrofon yoksa ya da izin verilmezse sese dinleyici olarak giriliyor;
+    // mikrofon düğmesi tekrar deniyor.
+    addMicTrack(false)
+  }, [addMicTrack])
 
   // İnternet bir an gidip gelince sunucu bizi sesten çıkarmış oluyor ve
   // eski eş bağlantıları kopmuş bağlantıya ait (karşı taraf da onları
@@ -1600,50 +1670,53 @@ function App() {
   // bas-konuş bunu kullanıyor, mantık tek bir yerde.
   const setMicActive = useCallback(
     async (active) => {
-      const existingAudioTrack = localMainStream?.getAudioTracks()[0]
+      // Sese girerken başlayan hazırlık bitmediyse onu bekle (iki iz olmasın).
+      if (micReadyRef.current) await micReadyRef.current
+      const existingAudioTrack = localMainStreamRef.current?.getAudioTracks()[0]
       if (!existingAudioTrack) {
-        if (!active) return // mikrofon hiç açılmamışken "kapat" demenin bir anlamı yok
-        try {
-          debugLog('[mikrofon] getUserMedia çağrılıyor...')
-          const micStream = await navigator.mediaDevices.getUserMedia({
-            audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true,
-          })
-          const newAudioTrack = micStream.getAudioTracks()[0]
-          debugLog(
-            '[mikrofon] Track alındı — enabled:',
-            newAudioTrack.enabled,
-            'readyState:',
-            newAudioTrack.readyState,
-            'muted:',
-            newAudioTrack.muted,
-            'label:',
-            newAudioTrack.label
-          )
-          const otherTracks = localMainStream ? localMainStream.getTracks() : []
-          const newLocalStream = new MediaStream([...otherTracks, newAudioTrack])
-          // Ref'i hemen güncelliyoruz: bu arada kurulan bir bağlantı da
-          // (bkz. attachLocalMedia) yeni izi bulsun.
-          localMainStreamRef.current = newLocalStream
-          setLocalMainStream(newLocalStream)
-          setIsMicOn(true)
-          setLocalTrackOnMainConnections('mic', newAudioTrack)
-          debugLog(
-            '[mikrofon] Şu an açık bağlantı sayısı:',
-            peerConnectionsRef.current.size
-          )
-          socketRef.current?.emit('state-update', { muted: false })
-        } catch (err) {
-          console.error('[mikrofon] getUserMedia HATASI:', err.name, err.message)
-          setMediaError(describeMediaError(err))
-        }
-        return
+        // Hazırlık başarısız olmuştu (izin, cihaz yok): açarken tekrar dene.
+        if (!active || !(await addMicTrack(true))) return
+      } else {
+        existingAudioTrack.enabled = active
       }
-      existingAudioTrack.enabled = active
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
     },
-    [localMainStream, setLocalTrackOnMainConnections, selectedAudioInput]
+    [addMicTrack]
   )
+
+  // Seste mikrofon cihazı değiştirilince yeni cihaz hemen devreye giriyor;
+  // açık/kapalı durumu korunuyor. Eskiden bir sonraki açışı bekliyordu.
+  const previousAudioInputRef = useRef(selectedAudioInput)
+  useEffect(() => {
+    if (previousAudioInputRef.current === selectedAudioInput) return
+    previousAudioInputRef.current = selectedAudioInput
+    const oldTrack = localMainStreamRef.current?.getAudioTracks()[0]
+    if (!oldTrack) return
+    let cancelled = false
+    navigator.mediaDevices
+      .getUserMedia({ audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true })
+      .then((stream) => {
+        const track = stream.getAudioTracks()[0]
+        if (cancelled || localMainStreamRef.current?.getAudioTracks()[0] !== oldTrack) {
+          track.stop()
+          return
+        }
+        track.enabled = oldTrack.enabled
+        const next = new MediaStream([
+          ...localMainStreamRef.current.getTracks().filter((t) => t !== oldTrack),
+          track,
+        ])
+        localMainStreamRef.current = next
+        setLocalMainStream(next)
+        setLocalTrackOnMainConnections('mic', track)
+        oldTrack.stop()
+      })
+      .catch((err) => setMediaError(describeMediaError(err)))
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAudioInput, setLocalTrackOnMainConnections])
 
   // YENİ: Herkesin sesini, kayıtlı tercihine (peerVolumes) göre geri
   // getiren ortak fonksiyon — hem "sağırlığı kapat" hem de "PTT ile
@@ -1696,7 +1769,6 @@ function App() {
   // YENİ: Bas-konuş ayarlama — butona basınca bir sonraki tuşu bekliyoruz.
   const handleTogglePtt = () => {
     if (pttEnabled) {
-      setPttEnabled(false)
       setPttKey(null)
       setMicActive(false)
     } else {
@@ -1704,49 +1776,98 @@ function App() {
     }
   }
 
-  // Bir sonraki tuş basışını "bas-konuş tuşu" olarak yakala.
+  // Bir sonraki tuş (ya da farenin yan tuşu) bas-konuş tuşu oluyor. Esc
+  // vazgeçiyor.
   useEffect(() => {
     if (!isCapturingPttKey) return
-    const handleKeydown = (e) => {
-      e.preventDefault()
-      setPttKey(e.code)
-      setPttEnabled(true)
+    const assign = (code) => {
       setIsCapturingPttKey(false)
+      if (!code) return
+      setPttKey(code)
       setMicActive(false) // başlangıçta kapalı — tuşa basınca açılacak
     }
-    window.addEventListener('keydown', handleKeydown, { once: true })
-    return () => window.removeEventListener('keydown', handleKeydown)
+    const handleKeydown = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      assign(e.code === 'Escape' ? null : e.code)
+    }
+    const handleMousedown = (e) => {
+      if (e.button !== 3 && e.button !== 4) return
+      e.preventDefault()
+      assign(e.button === 3 ? 'Mouse4' : 'Mouse5')
+    }
+    window.addEventListener('keydown', handleKeydown, true)
+    window.addEventListener('mousedown', handleMousedown, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeydown, true)
+      window.removeEventListener('mousedown', handleMousedown, true)
+    }
   }, [isCapturingPttKey, setMicActive])
 
+  // Masaüstünde bas-konuş tuşu işletim sistemi seviyesinde dinleniyor:
+  // oyundayken, pencere arkadayken ya da tepsideyken de çalışıyor. Kanca
+  // sadece seste ve bas-konuş açıkken çalışıyor; ana süreç sadece bu tuşun
+  // basılıp bırakıldığını bildiriyor.
+  const hasGlobalPtt = !!window.electronAPI?.setPushToTalkKey
+  useEffect(() => {
+    if (!hasGlobalPtt) return
+    window.electronAPI.setPushToTalkKey(pttEnabled && inVoice ? pttKey : null).then((ok) => {
+      if (ok === false) {
+        setNotice(
+          formatKeyCode(pttKey) + " tuşu arka planda dinlenemiyor. Ayarlar > Tuş atamaları'ndan başka bir tuş seç."
+        )
+      }
+    })
+  }, [hasGlobalPtt, pttEnabled, pttKey, inVoice])
+  useEffect(() => {
+    if (!hasGlobalPtt) return
+    return () => window.electronAPI.setPushToTalkKey(null)
+  }, [hasGlobalPtt])
+
   // Bas-konuş AKTİFKEN: tuş basılıyken mikrofon açık, bırakınca kapalı.
-  // NOT: sohbet kutusuna yazarken tetiklenmesin diye input/textarea
-  // üzerindeyken bu dinleyiciyi devre dışı bırakıyoruz.
+  // Disco öndeyken bir yazı alanına harf, rakam ya da boşluk yazmak
+  // mikrofonu açmıyor (F tuşları, Ctrl, fare tuşları her zaman açıyor);
+  // bırakmak her zaman kapatıyor, mikrofon açık kalmasın.
   useEffect(() => {
     if (!pttEnabled || !inVoice || !pttKey) return
 
-    const isTypingTarget = (e) =>
-      e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'
+    const typesText = /^(Key|Digit|Numpadd)|^(Space|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote|IntlBackslash)$/.test(pttKey)
+    const isTypingIn = (el) => typesText && (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA')
+    let pressed = false
+    const press = (windowFocused) => {
+      if (pressed || (windowFocused && isTypingIn(document.activeElement))) return
+      pressed = true
+      clearDeafenIfActive()
+      setMicActive(true)
+    }
+    const release = () => {
+      if (!pressed) return
+      pressed = false
+      setMicActive(false)
+    }
 
-    const handleKeydown = (e) => {
-      if (isTypingTarget(e)) return
-      if (e.code === pttKey && !e.repeat) {
-        clearDeafenIfActive()
-        setMicActive(true)
-      }
+    if (hasGlobalPtt) {
+      return window.electronAPI.onPushToTalk((state) => (state.pressed ? press(state.windowFocused) : release()))
     }
-    const handleKeyup = (e) => {
-      if (isTypingTarget(e)) return
-      if (e.code === pttKey) {
-        setMicActive(false)
-      }
-    }
+
+    const handleKeydown = (e) => e.code === pttKey && press(true)
+    const handleKeyup = (e) => e.code === pttKey && release()
+    const mouseCode = (e) => (e.button === 3 ? 'Mouse4' : e.button === 4 ? 'Mouse5' : null)
+    const handleMousedown = (e) => mouseCode(e) === pttKey && press(true)
+    const handleMouseup = (e) => mouseCode(e) === pttKey && release()
     window.addEventListener('keydown', handleKeydown)
     window.addEventListener('keyup', handleKeyup)
+    window.addEventListener('mousedown', handleMousedown)
+    window.addEventListener('mouseup', handleMouseup)
+    window.addEventListener('blur', release)
     return () => {
       window.removeEventListener('keydown', handleKeydown)
       window.removeEventListener('keyup', handleKeyup)
+      window.removeEventListener('mousedown', handleMousedown)
+      window.removeEventListener('mouseup', handleMouseup)
+      window.removeEventListener('blur', release)
     }
-  }, [pttEnabled, pttKey, inVoice, setMicActive, clearDeafenIfActive])
+  }, [pttEnabled, pttKey, inVoice, hasGlobalPtt, setMicActive, clearDeafenIfActive])
 
   const toggleCamera = useCallback(async () => {
     const existingVideoTrack = localMainStream?.getVideoTracks()[0]
@@ -2827,7 +2948,23 @@ function App() {
             onTestTone: playTestTone,
             outputError: outputDeviceError,
           }}
-          ptt={{ enabled: pttEnabled, key: pttKey, isCapturing: isCapturingPttKey, onToggle: handleTogglePtt }}
+          ptt={{
+            enabled: pttEnabled,
+            key: pttKey,
+            isCapturing: isCapturingPttKey,
+            isGlobal: hasGlobalPtt,
+            onToggle: handleTogglePtt,
+          }}
+          desktop={
+            window.electronAPI?.setCloseToTray
+              ? {
+                  closeToTray,
+                  onCloseToTrayChange: setCloseToTray,
+                  openAtLogin,
+                  onOpenAtLoginChange: changeOpenAtLogin,
+                }
+              : null
+          }
           appearance={{
             theme,
             onThemeChange: setTheme,

@@ -21,9 +21,10 @@
 // karar verir: ".cjs" = her zaman eski usül (CommonJS/require),
 // ".mjs" = her zaman yeni usül (ES Modules/import). Bu yüzden Electron
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu, shell } = require("electron");
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu, nativeImage, shell, Tray } = require("electron");
 const path = require("path");
 const { pathToFileURL } = require("url");
+const { createPushToTalk, bindingFor } = require("./push-to-talk.cjs");
 // YENİ: Discord'daki gibi uygulama içi otomatik güncelleme. GitHub
 // Releases'i "publish" kaynağı olarak kullanıyor (bkz. package.json
 // "build.publish") — her yeni sürüm orada bir Release olarak
@@ -49,12 +50,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  });
+  app.on("second-instance", () => showMainWindow());
 }
 
 const isWebLink = (url) => /^https?:\/\//i.test(url);
@@ -63,6 +59,53 @@ const isWebLink = (url) => /^https?:\/\//i.test(url);
 // seçicisi, kaynak listesini bu pencereye (renderer'a) göndermek için
 // buna ihtiyaç duyuyor.
 let mainWindow = null;
+
+// Pencereyi kapatmak Disco'yu kapatmıyor, tepsiye küçültüyor (seste
+// kalınıyor). Gerçekten çıkmak: tepsi menüsünde "Çıkış". Ayarlar >
+// Masaüstü'nden kapatılabiliyor (bkz. "set-close-to-tray").
+let closeToTray = true;
+let isQuitting = false;
+let tray = null;
+let trayHintShown = false;
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, "..", app.isPackaged ? "dist" : "public", "pwa-icon-192.png");
+  tray = new Tray(nativeImage.createFromPath(iconPath).resize({ width: 32, height: 32 }));
+  tray.setToolTip("Disco");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Disco'yu aç", click: showMainWindow },
+      { type: "separator" },
+      { label: "Çıkış", click: () => app.quit() },
+    ])
+  );
+  tray.on("click", showMainWindow);
+}
+
+// Bas-konuş tuşu işletim sistemi seviyesinde: basılıp bırakılması
+// arayüze gidiyor (bkz. push-to-talk.cjs). Pencerenin gerçekten önde olup
+// olmadığı da gidiyor: Disco öndeyken yazı alanına aynı harfi yazmak
+// mikrofonu açmasın.
+const pushToTalk = createPushToTalk((pressed) => {
+  if (!mainWindow) return;
+  mainWindow.webContents.send("push-to-talk", {
+    pressed,
+    windowFocused: mainWindow.isVisible() && mainWindow.isFocused(),
+  });
+});
+
+// Testler ana süreçteki parçalara buradan ulaşıyor (sadece test düzeneği
+// DISCO_TEST_HOOKS verince).
+if (process.env.DISCO_TEST_HOOKS) {
+  globalThis.discoTest = { pushToTalk, getTray: () => tray, keycodeFor: (code) => bindingFor(code)?.keycode };
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -80,10 +123,26 @@ function createWindow() {
       // React kodu doğrudan Node.js/dosya sistemine erişemesin diye.
       contextIsolation: true,
       nodeIntegration: false,
+      // Pencere gizliyken (tepsideyken) de zamanlayıcılar ve ses işleme
+      // yavaşlamasın: seste kalınıyor.
+      backgroundThrottling: false,
     },
   });
 
   mainWindow = win;
+
+  win.on("close", (event) => {
+    if (isQuitting || !closeToTray) return;
+    event.preventDefault();
+    win.hide();
+    if (!trayHintShown && !process.env.DISCO_TEST_HOOKS) {
+      trayHintShown = true;
+      tray?.displayBalloon({
+        title: "Disco çalışmaya devam ediyor",
+        content: "Seste kalıyorsun. Tamamen çıkmak için tepsideki Disco simgesine sağ tıkla.",
+      });
+    }
+  });
 
   // DÜZELTME: Menu.setApplicationMenu(null) (aşağıda), menüye bağlı
   // varsayılan Ctrl+Shift+I kısayolunu da beraberinde götürüyormuş —
@@ -154,6 +213,20 @@ app.whenReady().then(() => {
   // YENİ: Ayarlar panelinde hangi sürümün çalıştığını gösterebilmek için.
   ipcMain.handle("get-app-version", () => app.getVersion());
 
+  // Bas-konuş tuşu (null: kanca kapalı). Tanınmayan tuşta false döner.
+  ipcMain.handle("set-push-to-talk-key", (_event, code) => pushToTalk.setKey(code || null));
+  ipcMain.on("set-close-to-tray", (_event, value) => {
+    closeToTray = !!value;
+  });
+  // Bilgisayar açılınca başlat: sadece kurulmuş uygulamada (geliştirmede
+  // electron.exe'yi başlangıca eklerdi).
+  ipcMain.handle("get-open-at-login", () => (app.isPackaged ? app.getLoginItemSettings().openAtLogin : null));
+  ipcMain.handle("set-open-at-login", (_event, value) => {
+    if (!app.isPackaged) return false;
+    app.setLoginItemSettings({ openAtLogin: !!value });
+    return app.getLoginItemSettings().openAtLogin;
+  });
+
   // YENİ: Electron'un "sor sormaz her şeyi onayla" varsayılanını
   // KAPATIYORUZ. Kendi listemizi biz belirliyoruz: sadece "media"
   // (kamera/mikrofon) otomatik onaylansın — çünkü uygulamamızın buna
@@ -219,6 +292,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  createTray();
 
   // macOS'a özgü davranış: dock'tan uygulamaya tekrar tıklanınca
   // (tüm pencereler kapalıyken) yeni pencere aç.
@@ -281,6 +355,16 @@ app.whenReady().then(() => {
     if (isDev) return;
     autoUpdater.quitAndInstall();
   });
+});
+
+// "Çıkış", güncellemeyi kurmak için yeniden başlatma ya da işletim
+// sisteminin kapanması: pencere artık tepsiye küçülmeden kapanıyor.
+app.on("before-quit", () => {
+  isQuitting = true;
+});
+// Klavye kancası açık kalırsa süreç kapanmayabiliyor.
+app.on("will-quit", () => {
+  pushToTalk.stop();
 });
 
 // Tüm pencereler kapatıldığında uygulamadan çık (macOS hariç —

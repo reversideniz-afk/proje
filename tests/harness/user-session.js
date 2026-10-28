@@ -21,7 +21,17 @@ export class UserSession {
     await page.getByLabel('Kullanıcı adı').fill(this.name)
     await page.getByLabel('Şifre', { exact: true }).fill(PASSWORD)
     if (rememberMe) await page.getByLabel('Beni hatırla').check()
-    await page.getByRole('button', { name: 'Giriş yap', exact: true }).click()
+    // Masaüstü uygulamasında (Electron) açılıştan hemen sonra gönderilen
+    // tıklama test düzeneğinde arada bir pencereye ulaşmıyor: alanlar dolu,
+    // uygulama değerleri görmüş, ama düğmeye hiçbir şey varmıyor (odak
+    // şifrede kalıyor). Form gitmediyse, ilk tıklaması tutmayan bir
+    // kullanıcı gibi tekrar tıklıyoruz.
+    const submitted = page.locator('.whoami').or(page.getByRole('button', { name: 'Giriş yapılıyor…' }))
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await page.getByRole('button', { name: 'Giriş yap', exact: true }).click()
+      const sent = await submitted.first().waitFor({ timeout: 2000 }).then(() => true, () => false)
+      if (sent) break
+    }
     await expect(page.locator('.whoami')).toContainText(this.name)
   }
 

@@ -8,6 +8,7 @@ import {
   KeyRound,
   LockOpen,
   LogOut,
+  Monitor,
   Mic,
   Palette,
   RefreshCw,
@@ -92,7 +93,6 @@ function AudioPage({ audio }) {
               </option>
             ))}
           </select>
-          {audio.selectedInput && <p className="field-hint">Değişiklik mikrofonu bir sonraki açışında uygulanır.</p>}
         </div>
         <div className="settings-row">
           <button type="button" className="btn btn--secondary" onClick={audio.onTestMic}>
@@ -142,7 +142,12 @@ function KeybindsPage({ ptt }) {
   return (
     <Section
       title="Bas-konuş"
-      description="Açarsan mikrofonun sürekli açık olmaz, sadece atadığın tuşu basılı tuttuğun sürece sesin gider. Şimdilik uygulama penceresi öndeyken çalışıyor."
+      description={
+        'Açarsan mikrofonun sürekli açık olmaz, sadece atadığın tuşu basılı tuttuğun sürece sesin gider. ' +
+        (ptt.isGlobal
+          ? 'Oyundayken ya da Disco arka plandayken de çalışır.'
+          : 'Web sürümünde sadece bu sekme öndeyken çalışır; oyun içinde kullanmak için masaüstü uygulamasını kullan.')
+      }
     >
       <div className="settings-row">
         {ptt.enabled ? (
@@ -161,6 +166,11 @@ function KeybindsPage({ ptt }) {
           </button>
         )}
       </div>
+      {ptt.isCapturing && (
+        <p className="field-hint" role="status">
+          Klavyede bir tuşa ya da farenin yan tuşlarından birine bas. Vazgeçmek için Esc.
+        </p>
+      )}
     </Section>
   )
 }
@@ -199,6 +209,45 @@ function AppearancePage({ appearance }) {
         </Section>
       )}
     </>
+  )
+}
+
+function Toggle({ label, hint, checked, disabled, onChange }) {
+  return (
+    <label className={'settings-toggle' + (disabled ? ' settings-toggle--disabled' : '')}>
+      <span className="settings-toggle-text">
+        <strong>{label}</strong>
+        {hint && <span className="field-hint">{hint}</span>}
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        className="settings-switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  )
+}
+
+function DesktopPage({ desktop }) {
+  return (
+    <Section title="Pencere">
+      <Toggle
+        label="Kapatınca arka planda çalışmaya devam et"
+        hint="Pencereyi kapatınca Disco tepsiye küçülür, seste kalırsın. Tamamen çıkmak için tepsideki simgeye sağ tıkla."
+        checked={desktop.closeToTray}
+        onChange={desktop.onCloseToTrayChange}
+      />
+      <Toggle
+        label="Bilgisayar açılınca Disco'yu başlat"
+        hint={desktop.openAtLogin === null ? 'Sadece kurulmuş uygulamada değiştirilebilir.' : undefined}
+        checked={!!desktop.openAtLogin}
+        disabled={desktop.openAtLogin === null}
+        onChange={desktop.onOpenAtLoginChange}
+      />
+    </Section>
   )
 }
 
@@ -349,7 +398,19 @@ function AdminSecurityPage({ admin }) {
   )
 }
 
-export function SettingsScreen({ initialPage = 'account', onClose, onLogout, account, audio, ptt, appearance, update, server, admin }) {
+export function SettingsScreen({
+  initialPage = 'account',
+  onClose,
+  onLogout,
+  account,
+  audio,
+  ptt,
+  appearance,
+  desktop,
+  update,
+  server,
+  admin,
+}) {
   const [page, setPage] = useState(initialPage)
   const closeRef = useRef(null)
 
@@ -378,6 +439,7 @@ export function SettingsScreen({ initialPage = 'account', onClose, onLogout, acc
         { id: 'audio', label: 'Ses ve görüntü', icon: Volume2 },
         { id: 'keybinds', label: 'Tuş atamaları', icon: KeyRound },
         { id: 'appearance', label: 'Görünüm', icon: Palette },
+        ...(desktop ? [{ id: 'desktop', label: 'Masaüstü', icon: Monitor }] : []),
         ...(IS_DESKTOP_APP ? [{ id: 'update', label: 'Güncelleme', icon: Download }] : []),
       ],
     },
@@ -436,6 +498,7 @@ export function SettingsScreen({ initialPage = 'account', onClose, onLogout, acc
           {current.id === 'audio' && <AudioPage audio={audio} />}
           {current.id === 'keybinds' && <KeybindsPage ptt={ptt} />}
           {current.id === 'appearance' && <AppearancePage appearance={appearance} />}
+          {current.id === 'desktop' && desktop && <DesktopPage desktop={desktop} />}
           {current.id === 'update' && <UpdatePage update={update} />}
           {current.id === 'server' && server && <ServerPage server={server} />}
           {current.id === 'admin-users' && admin && <AdminUsersPage admin={admin} />}

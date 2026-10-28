@@ -9,6 +9,8 @@ export function formatKeyCode(code) {
   if (code === 'ControlLeft' || code === 'ControlRight') return 'Ctrl'
   if (code === 'ShiftLeft' || code === 'ShiftRight') return 'Shift'
   if (code === 'AltLeft' || code === 'AltRight') return 'Alt'
+  if (code === 'Mouse4' || code === 'Mouse5') return 'Fare ' + code.slice(5)
+  if (code.startsWith('Numpad')) return 'Num ' + code.slice(6)
   return code
 }
 

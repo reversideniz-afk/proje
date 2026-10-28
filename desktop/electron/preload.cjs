@@ -45,6 +45,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // main process'te (electron-updater), React tarafı sadece durumu
   // dinleyip bir düğme gösteriyor.
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+  // Global bas-konuş: tuş atanınca ana süreç işletim sistemi seviyesinde
+  // dinliyor ve sadece o tuşun basılıp bırakıldığını bildiriyor.
+  setPushToTalkKey: (code) => ipcRenderer.invoke("set-push-to-talk-key", code),
+  onPushToTalk: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("push-to-talk", listener);
+    return () => ipcRenderer.removeListener("push-to-talk", listener);
+  },
+  // Kapat düğmesi tepsiye küçültsün mü; bilgisayar açılınca başlasın mı.
+  setCloseToTray: (value) => ipcRenderer.send("set-close-to-tray", value),
+  getOpenAtLogin: () => ipcRenderer.invoke("get-open-at-login"),
+  setOpenAtLogin: (value) => ipcRenderer.invoke("set-open-at-login", value),
   checkForUpdates: () => ipcRenderer.send("check-for-updates"),
   installUpdate: () => ipcRenderer.send("install-update"),
   onUpdateAvailable: (callback) => {

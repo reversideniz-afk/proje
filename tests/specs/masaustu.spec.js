@@ -10,21 +10,37 @@ const electronBinary = requireFromDesktop('electron')
 
 // VS Code gibi Electron tabanlı araçlar ELECTRON_RUN_AS_NODE=1 bırakabiliyor;
 // o zaman electron.exe uygulama yerine düz Node olarak çalışıyor.
+// DISCO_TEST_HOOKS: ana süreç bas-konuş ve tepsiyi testlere açıyor.
 function desktopAppEnv(disco) {
-  const env = { ...process.env, DISCO_APP_URL: disco.clientUrl }
+  const env = { ...process.env, DISCO_APP_URL: disco.clientUrl, DISCO_TEST_HOOKS: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }
 
+// Gerçek kamera ve mikrofon yerine Chromium'un sahte cihazları.
+const FAKE_MEDIA = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+
 async function launchDesktopApp(disco, userDataDir) {
   const app = await electron.launch({
     executablePath: electronBinary,
-    args: [`--user-data-dir=${userDataDir}`, desktopDir],
+    args: [...FAKE_MEDIA, `--user-data-dir=${userDataDir}`, desktopDir],
     env: desktopAppEnv(disco),
   })
   const page = await app.firstWindow()
+  // Pencerenin konsolu test raporuna ekleniyor (bkz. afterEach).
+  consoleLines = []
+  page.on('console', (msg) => consoleLines.push(`[${msg.type()}] ${msg.text()}`))
+  page.on('pageerror', (err) => consoleLines.push(`[sayfa hatası] ${err.message}`))
   return { app, page }
 }
+
+let consoleLines = []
+test.afterEach(async ({}, testInfo) => {
+  await testInfo.attach('masaustu-konsol.txt', { body: consoleLines.join('\n'), contentType: 'text/plain' })
+  consoleLines = []
+})
+
+const windowVisible = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())
 
 test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
   test('H19: açılıyor, giriş yapılıyor, kanala giriliyor', async ({ disco }, testInfo) => {
@@ -84,6 +100,82 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
       expect(app.windows()).toHaveLength(1)
     } finally {
       await app.close()
+    }
+  })
+
+  test('pencereyi kapatınca Disco tepside çalışmaya devam ediyor, seste kalınıyor', async ({ disco }, testInfo) => {
+    const observer = await disco.observer('genel')
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'))
+    try {
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      await mert.openChannel('genel')
+      await mert.joinVoice()
+      await expect.poll(() => observer.voiceUsernames()).toEqual(['Mert'])
+
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+      await expect.poll(() => windowVisible(app)).toBe(false)
+      expect(await app.evaluate(() => globalThis.discoTest.getTray().isDestroyed())).toBe(false)
+      // Sunucunun gözünde hâlâ seste.
+      await page.waitForTimeout(1500)
+      expect(observer.voiceUsernames()).toEqual(['Mert'])
+
+      // Tepsi simgesine tıklayınca geri geliyor.
+      await app.evaluate(() => globalThis.discoTest.getTray().emit('click'))
+      await expect.poll(() => windowVisible(app)).toBe(true)
+
+      // Ayar kapatılınca pencereyi kapatmak uygulamayı kapatıyor.
+      await page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+      await page.getByRole('button', { name: 'Masaüstü' }).click()
+      await page.getByRole('switch', { name: /Kapatınca arka planda/ }).uncheck()
+      const closed = app.waitForEvent('close')
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+      await closed
+    } finally {
+      await app.close().catch(() => {})
+    }
+  })
+
+  test('H28: bas-konuş Disco arka plandayken de çalışıyor', async ({ disco }, testInfo) => {
+    const ece = await disco.client('Ece')
+    await ece.joinChannel(disco.serverId, disco.channels.genel)
+    await ece.emitAck('join-voice', { token: ece.token, channelId: disco.channels.genel })
+
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'))
+    try {
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      await mert.openChannel('genel')
+      await page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+      await page.getByRole('button', { name: 'Tuş atamaları' }).click()
+      await page.getByRole('button', { name: 'Bas-konuş tuşu ata' }).click()
+      await page.keyboard.press('KeyV')
+      await expect(page.locator('.settings-key')).toHaveText('V')
+      await page.keyboard.press('Escape')
+      await expect(mert.page.locator('.user-panel')).toContainText('Bas-konuş: V')
+
+      await mert.joinVoice()
+      await expect.poll(() => ece.received('voice-user-joined').length).toBe(1)
+
+      // Pencere arka planda (tepside); tuşa işletim sistemi seviyesinde basılıyor.
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+      await expect.poll(() => windowVisible(app)).toBe(false)
+      const keycodeV = await app.evaluate(() => globalThis.discoTest.keycodeFor('KeyV'))
+      const opened = ece.nextEvent('user-state-update', ({ state }) => state.muted === false)
+      await app.evaluate((_electron, keycode) => globalThis.discoTest.pushToTalk.uIOhook.emit('keydown', { keycode }), keycodeV)
+      await opened
+      const closed = ece.nextEvent('user-state-update', ({ state }) => state.muted === true)
+      await app.evaluate((_electron, keycode) => globalThis.discoTest.pushToTalk.uIOhook.emit('keyup', { keycode }), keycodeV)
+      await closed
+
+      // Sesten çıkınca klavye kancası da kapanıyor: tuş artık bir şey yapmıyor.
+      await app.evaluate(() => globalThis.discoTest.getTray().emit('click'))
+      await mert.leaveVoiceButton().click()
+      await expect
+        .poll(() => app.evaluate(() => globalThis.discoTest.pushToTalk.isRunning()))
+        .toBe(false)
+    } finally {
+      await app.close().catch(() => {})
     }
   })
 })

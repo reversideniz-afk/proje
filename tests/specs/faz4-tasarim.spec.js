@@ -238,6 +238,34 @@ test.describe('Faz 4: tasarım', { tag: '@faz4' }, () => {
   })
 
   test('konuşan kişi kutucukta, kenar çubuğunda ve üye listesinde ışıklanıyor', async ({ disco }) => {
+    // Sahte mikrofon yaklaşık saniyede bir kısa bip çalıyor, ışık da her bipte
+    // yarım saniye kadar yanıyor. Saniyede bir yoklamak hep sessiz anlara denk
+    // gelebildiği için her ekran karesinde bakılıyor.
+    const lightsUp = (user, selector, name = '') =>
+      user.page.waitForFunction(
+        ({ selector, name }) =>
+          [...document.querySelectorAll(selector)].some(
+            (el) => el.classList.contains('is-speaking') && el.textContent.includes(name)
+          ),
+        { selector, name },
+        { polling: 'raf', timeout: 15_000 }
+      )
+    const staysDark = (user, selector, name, ms) =>
+      user.page.evaluate(
+        async ({ selector, name, ms }) => {
+          const end = performance.now() + ms
+          while (performance.now() < end) {
+            const lit = [...document.querySelectorAll(selector)].some(
+              (el) => el.classList.contains('is-speaking') && el.textContent.includes(name)
+            )
+            if (lit) return false
+            await new Promise(requestAnimationFrame)
+          }
+          return true
+        },
+        { selector, name, ms }
+      )
+
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
     await ece.openChannel('genel')
@@ -245,20 +273,22 @@ test.describe('Faz 4: tasarım', { tag: '@faz4' }, () => {
     await mert.openChannel('genel')
     await mert.joinVoice()
     await expect(mert.peerTile('Ece')).toBeVisible()
-    await expect(mert.peerTile('Ece')).not.toHaveClass(/is-speaking/)
+    expect(await staysDark(mert, '.remote-video-wrapper', 'Ece', 1500)).toBe(true)
 
     await ece.micOn()
-    await expect(mert.peerTile('Ece')).toHaveClass(/is-speaking/, { timeout: 15_000 })
-    await expect(mert.page.locator('.channel-voicer.is-speaking', { hasText: 'Ece' })).toBeVisible()
+    await lightsUp(mert, '.remote-video-wrapper', 'Ece')
+    await lightsUp(mert, '.channel-voicer', 'Ece')
     // Kendi mikrofonu açık olan da kendi kutucuğunda ışıklanıyor.
-    await expect(ece.page.locator('.tile--local').first()).toHaveClass(/is-speaking/, { timeout: 15_000 })
+    await lightsUp(ece, '.tile--local')
 
     // Sağırlaştırınca da kimin konuştuğu görünmeye devam ediyor.
     await mert.mediaButton('Sağırlaştır (herkesi sustur)').click()
-    await expect(mert.peerTile('Ece')).toHaveClass(/is-speaking/, { timeout: 5000 })
+    await lightsUp(mert, '.remote-video-wrapper', 'Ece')
 
+    // Mikrofonu kapatınca ışık sönüyor ve sönük kalıyor.
     await ece.mediaButton('Mikrofonu kapat').click()
-    await expect(mert.peerTile('Ece')).not.toHaveClass(/is-speaking/, { timeout: 5000 })
+    await mert.page.waitForTimeout(1000)
+    expect(await staysDark(mert, '.remote-video-wrapper', 'Ece', 2500)).toBe(true)
   })
 
   test('mesajlar gün ayraçlarıyla ve aynı kişinin ardışık mesajları gruplu', async ({ disco }) => {
