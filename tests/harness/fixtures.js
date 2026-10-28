@@ -169,6 +169,16 @@ export const test = base.extend({
     clients.forEach((client) => client.close())
     await Promise.all(users.map((session) => session.context.close().catch(() => {})))
     await env.dispose()
+
+    // Güvenlik politikasının (index.html'deki CSP) engellediği bir şey varsa
+    // uygulamanın bir parçası çalışmıyor demektir (ör. yazı tipi, avatar):
+    // test başka açıdan geçse de kırmızı olsun.
+    const blocked = users.flatMap((session) =>
+      session.consoleLines.filter((line) => line.includes('Content Security Policy')).map((line) => `${session.name}: ${line}`)
+    )
+    if (blocked.length > 0) {
+      throw new Error(`Güvenlik politikası bir şeyi engelledi:\n${blocked.map((line) => line.slice(0, 300)).join('\n')}`)
+    }
   },
 })
 

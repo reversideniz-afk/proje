@@ -30,7 +30,8 @@ test.describe('Faz 2: güvenlik ve yetki', { tag: '@faz2' }, () => {
     const existing = bora.nextEvent('existing-voice-users')
     bora.socket.emit('join-voice', { token: bora.token })
     const mertAsSeenByBora = (await existing).find((u) => u.socketId === mert.socket.id)
-    expect(mertAsSeenByBora).toMatchObject({ username: 'Mert', avatarData: null, muted: false, cameraOn: false })
+    expect(mertAsSeenByBora).toMatchObject({ username: 'Mert', avatarUrl: null, muted: false, cameraOn: false })
+    expect(mertAsSeenByBora).not.toHaveProperty('avatarData')
   })
 
   test('H7: sunucudan atılan kişi kanaldan çıkarılıyor, artık mesaj gönderemiyor', async ({ disco }) => {
@@ -236,7 +237,7 @@ test.describe('Faz 2: güvenlik ve yetki', { tag: '@faz2' }, () => {
 
     // Hiçbir kanala girmeden Ayarlar > Çıkış yap.
     await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
-    await mert.page.getByRole('button', { name: /Çıkış Yap/ }).click()
+    await mert.page.getByRole('button', { name: 'Çıkış yap' }).click()
     await expect(mert.page.getByRole('button', { name: 'Giriş Yap' })).toBeVisible()
     await expect.poll(stillValid).toBe(false)
   })

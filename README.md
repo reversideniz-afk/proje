@@ -21,10 +21,20 @@ server/
                    grupları: account, servers, channels, voice, admin
 desktop/
   electron/        ana süreç (main.cjs) ve preload köprüsü
-  src/App.jsx      uygulamanın kendisi
-  src/lib/         config, debug, format, sounds, mentions, webrtc
-  src/components/  RemoteCameraTile, RemoteScreenTile, EyeIcon, ZoomControl
+  src/App.jsx      uygulamanın durumu ve bağlantı mantığı (bağlantı, ses, istekler)
+  src/styles/      base.css: renkler, yazı tipleri, düğme/alan/avatar gibi ortak parçalar
+  src/components/  arayüz: AuthScreen, ServerRail, ChannelSidebar, ChannelHeader,
+                   ChatPanel (MessageList, Composer), MemberList, VoiceStage
+                   (StageTile, Remote*Tile), SettingsScreen, Dialog(s), Avatar
+  src/lib/         config, debug, format, sounds, mentions, webrtc, speaking (kim
+                   konuşuyor), userColor (kişiye özel renk), useDismiss
 ```
+
+Tasarım "gece kulübü": koyu mor gece zemin, Ayarlar > Görünüm'den seçilen tek vurgu rengi ve
+sadece "konuşuyor / canlı" için Spot ışığı (`#66e0c2`). Yazı tipleri Unbounded (başlıklar),
+Onest (metin) ve JetBrains Mono (saat, ping); @fontsource paketleriyle uygulamanın içine
+gömülü. Simgeler Lucide. Seste konuşan kişinin avatarının etrafında disko topu ışığı gibi
+dönen halka var; hareket azaltma açıksa sabit duruyor.
 
 Uygulama tek bir Socket.IO bağlantısı kullanıyor: açılışta kuruluyor, oturum anahtarı el
 sıkışmada gidiyor. Seste her kişiyle tek bir WebRTC bağlantısı ve sabit dört kanal var
@@ -82,10 +92,17 @@ Dosyalar:
   H11, H17–H20) kalıcı testleri.
 - `specs/faz3-mimari.spec.js` — tek bağlantı, sunucu odaları ve anında güncellemeler (H16), sunucu
   genelinde çevrimiçi bilgisi, her eşle tek WebRTC bağlantısı.
+- `specs/faz4-tasarim.spec.js` — Faz 4'te düzeltilen hataların (H15, H21–H24, H26, H27) ve yeni
+  arayüz davranışlarının (kim konuşuyor, gruplama, emoji, kanal oluşturma, ayarlar) testleri.
+- `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
+  ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
   yeni pencere engeli, tek kopya. `desktop/node_modules` içindeki Electron kullanılıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).
+
+Bir tarayıcı sayfasında güvenlik politikası (CSP) bir şeyi engellerse test, başka açıdan geçse
+de kırmızıya döner.
 
 Henüz düzeltilmemiş bir hata için test yazarken `test.fail` kullan: doğru davranışı tarif eden
 test bugün başarısız olduğu için yeşil görünür. Hata düzelince "beklenmedik şekilde geçti" diye

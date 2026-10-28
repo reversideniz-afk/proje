@@ -6,8 +6,8 @@ import { PASSWORD, REGISTER_INVITE_CODE } from '../harness/seed.js'
 test.describe('Temel akışlar', { tag: '@temel' }, () => {
   test('yanlış şifreyle giriş reddediliyor', async ({ disco }) => {
     const mert = await disco.user('Mert', { login: false })
-    await mert.page.getByPlaceholder('Kullanıcı adı').fill('Mert')
-    await mert.page.getByPlaceholder('Şifre', { exact: true }).fill('yanlis-sifre')
+    await mert.page.getByLabel('Kullanıcı adı').fill('Mert')
+    await mert.page.getByLabel('Şifre', { exact: true }).fill('yanlis-sifre')
     await mert.page.getByRole('button', { name: 'Giriş Yap' }).click()
     await expect(mert.page.getByText('Kullanıcı adı veya şifre hatalı.')).toBeVisible()
   })
@@ -15,13 +15,13 @@ test.describe('Temel akışlar', { tag: '@temel' }, () => {
   test('davet koduyla kayıt olup giriş yapılabiliyor', async ({ disco }) => {
     const page = (await disco.user('Yeni', { login: false })).page
     await page.getByRole('button', { name: 'Kayıt ol' }).click()
-    await page.getByPlaceholder('Kullanıcı adı').fill('Yeni')
-    await page.getByPlaceholder('Şifre (en az 6 karakter)').fill(PASSWORD)
-    await page.getByPlaceholder('Davet kodu').fill(REGISTER_INVITE_CODE)
+    await page.getByLabel('Kullanıcı adı').fill('Yeni')
+    await page.getByLabel('Şifre', { exact: true }).fill(PASSWORD)
+    await page.getByLabel('Davet kodu').fill(REGISTER_INVITE_CODE)
     await page.getByRole('button', { name: 'Kayıt Ol' }).click()
     await expect(page.getByText('Kayıt başarılı!')).toBeVisible()
 
-    await page.getByPlaceholder('Şifre', { exact: true }).fill(PASSWORD)
+    await page.getByLabel('Şifre', { exact: true }).fill(PASSWORD)
     await page.getByRole('button', { name: 'Giriş Yap' }).click()
     await expect(page.locator('.whoami')).toContainText('Yeni')
   })

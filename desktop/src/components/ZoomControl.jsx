@@ -1,27 +1,26 @@
-// Ayarlar > Kişiselleştirme'deki yakınlaştırma kontrolü (sadece masaüstünde).
+// Ayarlar > Görünüm'deki yakınlaştırma kontrolü (sadece masaüstünde).
+import { Expand, Minus, Plus, Shrink } from 'lucide-react'
 
-// Ayarlar > Kişiselleştirme'deki yakınlaştırma kontrolü — Ctrl+/Ctrl- ile
-// aynı işi yapar. Eskiden her ekranın köşesinde sabit duruyordu ve dar
-// ekranda "Gönder" düğmesini kapatıyordu (H13).
+// Ctrl+/Ctrl- ile aynı işi yapar. Eskiden her ekranın köşesinde sabit
+// duruyordu ve dar ekranda "Gönder" düğmesini kapatıyordu (H13).
 export function ZoomControl({ zoomLevel, onZoomOut, onZoomIn, onReset, isFullscreen, onToggleFullscreen }) {
   return (
     <div className="zoom-control">
-      <button onClick={onZoomOut} title="Küçült (Ctrl -)">
-        −
-      </button>
-      <span onClick={onReset} title="Sıfırla (Ctrl 0)">
-        {Math.round(zoomLevel * 100)}%
-      </span>
-      <button onClick={onZoomIn} title="Büyüt (Ctrl +)">
-        +
-      </button>
-      {/* YENİ: tek tuşla çerçevesiz tam ekran. */}
+      <div className="zoom-control-stepper">
+        <button type="button" className="icon-btn" onClick={onZoomOut} title="Küçült (Ctrl -)" aria-label="Küçült">
+          <Minus className="icon" />
+        </button>
+        <button type="button" className="zoom-control-value" onClick={onReset} title="Sıfırla (Ctrl 0)">
+          {Math.round(zoomLevel * 100)}%
+        </button>
+        <button type="button" className="icon-btn" onClick={onZoomIn} title="Büyüt (Ctrl +)" aria-label="Büyüt">
+          <Plus className="icon" />
+        </button>
+      </div>
       {onToggleFullscreen && (
-        <button
-          onClick={onToggleFullscreen}
-          title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran yap'}
-        >
-          {isFullscreen ? '⤢' : '⛶'}
+        <button type="button" className="btn btn--secondary" onClick={onToggleFullscreen}>
+          {isFullscreen ? <Shrink className="icon" /> : <Expand className="icon" />}
+          {isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
         </button>
       )}
     </div>

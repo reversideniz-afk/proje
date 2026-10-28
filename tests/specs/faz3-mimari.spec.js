@@ -47,7 +47,6 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     await mert.joinVoice()
     await expect(ece.peerTile('Mert')).toBeVisible()
     await mert.leaveVoiceButton().click()
-    await mert.page.getByRole('button', { name: 'Kanaldan Ayrıl' }).click()
     await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
 
     const sockets = await mert.probe(() => window.__disco.webSockets.filter((url) => url.includes('/socket.io/')))
@@ -89,7 +88,7 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     const screenOf = (viewer, name) =>
       viewer.page
         .locator('.remote-video-wrapper', {
-          has: viewer.page.locator('.remote-video-label', { hasText: `${name} 🖥️ ekranı` }),
+          has: viewer.page.locator('.remote-video-label', { hasText: `${name} · ekran` }),
         })
         .locator('video')
     await expect.poll(() => screenOf(ece, 'Mert').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)

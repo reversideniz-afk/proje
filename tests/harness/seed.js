@@ -98,3 +98,20 @@ export function listSessionTokens(mongoUri) {
     (await Session.find({}).select('token').lean()).map((s) => s.token)
   )
 }
+
+// Gerçekçi bir sohbet geçmişi: [{ username, text, minutesAgo | at, reactions }].
+export function insertChat(mongoUri, channelId, messages) {
+  const { Message } = requireFromServer('./db.js')
+  const now = Date.now()
+  return withDatabase(mongoUri, () =>
+    Message.insertMany(
+      messages.map(({ username, text, minutesAgo, at, reactions = [] }) => ({
+        channelId,
+        username,
+        text,
+        reactions,
+        createdAt: at || new Date(now - minutesAgo * 60_000),
+      }))
+    )
+  )
+}

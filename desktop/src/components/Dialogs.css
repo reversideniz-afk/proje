@@ -1,0 +1,145 @@
+/* Pencerelerin içerikleri, ses seviyesi kutusu, ekran seçici ve fotoğraf büyütme. */
+
+.dialog--wide {
+  width: min(760px, 100%);
+}
+
+.dialog-title-icon {
+  margin-right: 4px;
+  vertical-align: -3px;
+  color: var(--tehlike);
+}
+
+.dialog-message {
+  margin: 0;
+  color: var(--metin-mesaj);
+}
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--gece);
+}
+
+.segmented-option {
+  height: 34px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ikincil);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.segmented-option[aria-selected='true'] {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.invite-code-row {
+  display: flex;
+  gap: 8px;
+}
+
+.invite-code {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.volume-popup {
+  position: fixed;
+  z-index: 45;
+  display: grid;
+  gap: 10px;
+  width: 240px;
+  padding: 12px;
+  animation: rise-in 0.12s var(--ease-out);
+}
+
+.volume-popup-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.volume-popup-head strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.volume-popup-value {
+  color: var(--ikincil);
+  font: 500 13px/1 var(--font-mono);
+}
+
+.volume-popup input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.volume-popup .btn {
+  justify-self: start;
+}
+
+.screen-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.screen-picker-item {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-lg);
+  background: var(--gece);
+  color: var(--ikincil);
+  font-size: 13px;
+  text-align: left;
+}
+
+.screen-picker-item:hover {
+  border-color: var(--accent);
+  color: var(--metin);
+}
+
+.screen-picker-item img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius);
+  background: #000;
+  object-fit: contain;
+}
+
+.screen-picker-item span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(8 6 12 / 90%);
+  cursor: zoom-out;
+  animation: fade-in 0.15s ease-out;
+}
+
+.photo-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-lg);
+  object-fit: contain;
+}

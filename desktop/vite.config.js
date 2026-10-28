@@ -36,8 +36,8 @@ export default defineConfig({
         name: 'Disco',
         short_name: 'Disco',
         description: 'Arkadaş grubu için sesli/görüntülü sohbet uygulaması',
-        theme_color: '#1c1a19',
-        background_color: '#1c1a19',
+        theme_color: '#120e18',
+        background_color: '#120e18',
         display: 'standalone',
         start_url: '.',
         icons: [
@@ -68,4 +68,10 @@ export default defineConfig({
   // sorunsuz çalışır. (Bunu şimdiden ekliyoruz ki Aşama 9'da paketlerken
   // sürpriz bir hatayla karşılaşmayalım.)
   base: './',
+  build: {
+    // Küçük dosyalar normalde "data:" adresi olarak gömülüyor; index.html'deki
+    // güvenlik politikası yazı tiplerini sadece uygulamanın kendi
+    // dosyalarından yüklemeye izin veriyor, bu yüzden yazı tipleri ayrı dosya.
+    assetsInlineLimit: (filePath) => (filePath.endsWith('.woff2') ? false : undefined),
+  },
 })

@@ -10,7 +10,9 @@
     "test:faz2": "playwright test --grep @faz2",
     "report": "playwright show-report",
     "test:masaustu": "playwright test --grep @masaustu",
-    "test:faz3": "playwright test --grep @faz3"
+    "test:faz3": "playwright test --grep @faz3",
+    "test:faz4": "playwright test --grep @faz4",
+    "test:gorunum": "playwright test --grep @gorunum"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

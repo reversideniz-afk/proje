@@ -1,17 +1,34 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { io } from 'socket.io-client'
+import { AlertTriangle, Compass, Plus, ServerCrash, WifiOff } from 'lucide-react'
 import './App.css'
-import logoUrl from './assets/logo.png'
-import { EyeIcon } from './components/EyeIcon.jsx'
-import { RemoteCameraTile } from './components/RemoteCameraTile.jsx'
-import { RemoteScreenTile } from './components/RemoteScreenTile.jsx'
-import { ZoomControl } from './components/ZoomControl.jsx'
-import { SERVER_URL, QUICK_REACTIONS, DEFAULT_ICE_SERVERS, THEMES, IS_DESKTOP_APP } from './lib/config.js'
+import { AuthScreen, RestoringScreen } from './components/AuthScreen.jsx'
+import { ChannelHeader } from './components/ChannelHeader.jsx'
+import { ChannelSidebar } from './components/ChannelSidebar.jsx'
+import { ChatPanel } from './components/ChatPanel.jsx'
+import {
+  ConfirmDialog,
+  CreateChannelDialog,
+  InviteDialog,
+  PhotoLightbox,
+  ScreenPicker,
+  SecurityAlertDialog,
+  ServerDialog,
+  VolumePopover,
+} from './components/Dialogs.jsx'
+import { MemberList } from './components/MemberList.jsx'
+import { ServerRail } from './components/ServerRail.jsx'
+import { SettingsScreen } from './components/SettingsScreen.jsx'
+import { VoiceStage } from './components/VoiceStage.jsx'
+import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
-import { formatKeyCode, formatMessageTime, describeMediaError } from './lib/format.js'
-import { renderMessageTextWithMentions } from './lib/mentions.jsx'
+import { describeMediaError } from './lib/format.js'
+import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
+
+const TYPING_HEARTBEAT_MS = 4000
+const TYPING_EXPIRY_MS = 6000
 
 function App() {
   // YENİ: Arayüz yakınlaştırma — tüm pencereyi büyütüp küçültüyor.
@@ -120,6 +137,11 @@ function App() {
   // sadece kişiselleştirme (tema) var, ileride büyüyebilir diye ayrı bir
   // panel olarak kurduk (sesteki cihaz ayarlarından bağımsız).
   const [showAppSettings, setShowAppSettings] = useState(false)
+  const [settingsInitialPage, setSettingsInitialPage] = useState('account')
+  const openSettings = useCallback((page = 'account') => {
+    setSettingsInitialPage(page)
+    setShowAppSettings(true)
+  }, [])
 
   // YENİ: Alganis rolü için uygulama içi üye/rol yönetimi — Ayarlar
   // panelinin bir bölümü, sadece isAdmin true iken görünüyor.
@@ -211,14 +233,17 @@ function App() {
   // YENİ: sunucu oluştur/katıl modalı.
   const [showServerModal, setShowServerModal] = useState(false)
   const [serverModalTab, setServerModalTab] = useState('create') // 'create' | 'join'
-  const [newServerName, setNewServerName] = useState('')
-  const [joinInviteCode, setJoinInviteCode] = useState('')
   const [serverModalError, setServerModalError] = useState(null)
   const [serverModalBusy, setServerModalBusy] = useState(false)
   // YENİ: sunucu davet kodu popover'ı (sadece sahibiyken açılabiliyor).
   const [serverInvitePopover, setServerInvitePopover] = useState(null) // { code } | null
   // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
   const [serverMembers, setServerMembers] = useState([])
+  // Kanal oluşturma penceresi ve sunucuyu silme onayı. (Kanal adı eskiden
+  // window.prompt ile soruluyordu; masaüstü uygulamasında prompt hiç
+  // açılmıyor, kanal eklenemiyordu.)
+  const [createChannelDialog, setCreateChannelDialog] = useState(null) // { busy, error } | null
+  const [confirmDeleteServer, setConfirmDeleteServer] = useState(false)
 
   // --- Kanal (metin) durumu ---
   const [activeChannel, setActiveChannel] = useState(null)
@@ -265,33 +290,36 @@ function App() {
   // durumunu tutuyor.
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [mobileMembersOpen, setMobileMembersOpen] = useState(false)
+  // Masaüstünde üye listesi ve ses ekranındaki sohbet paneli başlıktaki
+  // düğmelerle gizlenip açılabiliyor.
+  const [membersPanelOpen, setMembersPanelOpen] = useState(true)
+  const [voiceChatOpen, setVoiceChatOpen] = useState(true)
 
   // YENİ: sese girmek artık AYRI, isteğe bağlı bir adım.
   const [inVoice, setInVoice] = useState(false)
 
   // --- Sohbet ---
   const [messages, setMessages] = useState([])
-  const [chatInput, setChatInput] = useState('')
   // YENİ: fotoğraflar — WhatsApp'ın "tek seferlik" fotoğrafı gibi,
   // HİÇBİR YERE kaydedilmiyor. Bu yüzden mesajlardan (messages) AYRI,
   // sadece bu oturumda tutulan bir liste — kanaldan çıkıp girince,
   // ya da geçmiş mesaj yüklenince buraya hiç dokunulmuyor.
   const [ephemeralPhotos, setEphemeralPhotos] = useState([])
   const [isSendingPhoto, setIsSendingPhoto] = useState(false)
-  const photoFileInputRef = useRef(null)
-  const chatInputRef = useRef(null)
-  const avatarFileInputRef = useRef(null)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
   // YENİ: o an aktif kanalda kimlerin yazıyor olduğu.
   const [typingUsers, setTypingUsers] = useState([])
   const isTypingRef = useRef(false)
   const typingStopTimeoutRef = useRef(null)
+  const lastTypingSentAtRef = useRef(0)
+  // Karşıdan gelen "yazıyor" kayıtları 6 saniyede kendiliğinden siliniyor;
+  // "yazmayı bıraktı" hiç gelmezse (uygulama kapandı, internet gitti)
+  // gösterge takılı kalmıyor (H21).
+  const typingExpiryRef = useRef(new Map()) // username -> zamanlayıcı
   // YENİ: hangi kanallarda (SADECE üye olunanlarda — sunucu zaten
   // sadece üyelere bildirim gönderiyor) okunmamış aktivite var.
   const [unreadChannels, setUnreadChannels] = useState([])
-  // YENİ: sohbet üstüne dosya sürüklenirken görsel ipucu için.
-  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
@@ -478,14 +506,16 @@ function App() {
   const openVolumePopup = useCallback((username, e) => {
     e.preventDefault()
     e.stopPropagation()
-    setVolumePopup({ username, x: e.clientX, y: e.clientY })
+    let x = e.clientX
+    let y = e.clientY
+    // Klavyeyle açılınca fare konumu yok: düğmenin altında açılsın.
+    if (!x && !y) {
+      const rect = e.currentTarget.getBoundingClientRect()
+      x = rect.left
+      y = rect.bottom + 4
+    }
+    setVolumePopup({ username, x, y })
   }, [])
-  useEffect(() => {
-    if (!volumePopup) return
-    const closeIt = () => setVolumePopup(null)
-    window.addEventListener('click', closeIt)
-    return () => window.removeEventListener('click', closeIt)
-  }, [volumePopup])
 
   const audioContextRef = useRef(null)
   // DÜZELTME: setSinkId()/resume() birer PROMISE — context'i kurar kurmaz
@@ -498,7 +528,8 @@ function App() {
   // önce BU promise'i bekliyoruz.
   const audioContextReadyRef = useRef(Promise.resolve())
   const gainNodesRef = useRef(new Map()) // peerSocketId -> GainNode
-  const analysersRef = useRef(new Map()) // peerSocketId -> AnalyserNode (teşhis)
+  const analysersRef = useRef(new Map()) // peerSocketId -> AnalyserNode (kim konuşuyor + teşhis)
+  const localAnalyserRef = useRef(null) // kendi mikrofonun
   const connectedAudioTracksRef = useRef(new Map()) // peerSocketId -> hangi track'e bağlandık
 
   const getAudioContext = useCallback(() => {
@@ -660,14 +691,13 @@ function App() {
           gainNode.gain.value = isDeafened ? 0 : currentVolume / 100
           source.connect(gainNode).connect(ctx.destination)
 
-          // YENİ (teşhis): bu düğümden GERÇEKTEN sinyal geçiyor mu, yoksa
-          // bağlantı kurulmuş ama gelen ses "sessiz" mi — bunu periyodik
-          // istatistik döngüsünde (aşağıda) ölçüp konsola basabilmek için
-          // bir AnalyserNode da takıyoruz (ana çıkışı etkilemiyor, sadece
-          // "dinliyor").
+          // Kim konuşuyor göstergesi (ve teşhis kayıtları) için gelen sesi
+          // bir AnalyserNode ile de dinliyoruz. Ses seviyesinden önce
+          // bağlı: kişinin sesini kısınca ya da sağırlaştırınca da kimin
+          // konuştuğu görünüyor. Hoparlöre gitmiyor, sadece ölçüyor.
           const analyser = ctx.createAnalyser()
           analyser.fftSize = 512
-          gainNode.connect(analyser)
+          source.connect(analyser)
           const oldAnalyser = analysersRef.current.get(peerSocketId)
           if (oldAnalyser) {
             try {
@@ -732,6 +762,32 @@ function App() {
     },
     [peers]
   )
+
+  // Kendi mikrofonunun seviyesi (kutucuğun ve kullanıcı panelindeki
+  // avatarın ışıklanması için). Mikrofon kapalıyken (enabled = false) iz
+  // sessizlik veriyor, ışık yanmıyor.
+  useEffect(() => {
+    const track = localMainStream?.getAudioTracks()[0]
+    if (!inVoice || !track) return
+    const ctx = getAudioContext()
+    const source = ctx.createMediaStreamSource(new MediaStream([track]))
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    source.connect(analyser)
+    localAnalyserRef.current = analyser
+    return () => {
+      source.disconnect()
+      if (localAnalyserRef.current === analyser) localAnalyserRef.current = null
+    }
+  }, [localMainStream, inVoice, getAudioContext])
+
+  const getSpeakingSources = useCallback(() => {
+    const sources = [...analysersRef.current.entries()]
+    if (localAnalyserRef.current) sources.push(['local', localAnalyserRef.current])
+    return sources
+  }, [])
+  // Seste kim konuşuyor: karşı tarafların bağlantı kimlikleri ve 'local'.
+  const speakingIds = useSpeakingDetector(getSpeakingSources, inVoice)
 
   // Uygulama başına TEK bağlantı: açılışta kuruluyor, uygulama kapanana
   // kadar açık kalıyor. Giriş, kanallar, ses ve bütün istekler bundan
@@ -1177,6 +1233,8 @@ function App() {
     setMessages([])
     setEphemeralPhotos([])
     setTypingUsers([])
+    typingExpiryRef.current.forEach(clearTimeout)
+    typingExpiryRef.current.clear()
     setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
     setHasMoreHistory(true)
     setConnectionError(null)
@@ -1242,6 +1300,23 @@ function App() {
       if (serverId === activeServerIdRef.current) refreshPresenceRef.current?.()
     })
 
+    // Okumak için yukarı kaydırmış birini yeni mesaj aşağı çekmesin.
+    const scrollChatToBottom = (force) => {
+      const el = chatMessagesRef.current
+      if (!el) return
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160
+      if (!force && !nearBottom) return
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight
+      })
+    }
+
+    const clearTyping = (username) => {
+      clearTimeout(typingExpiryRef.current.get(username))
+      typingExpiryRef.current.delete(username)
+      setTypingUsers((prev) => prev.filter((u) => u !== username))
+    }
+
     socket.on('message-history', (history) => {
       setMessages(history)
       setHasMoreHistory(history.length >= 50)
@@ -1253,7 +1328,10 @@ function App() {
     })
 
     socket.on('new-message', (message) => {
+      const isOwn = message.username === displayNameRef.current
+      scrollChatToBottom(isOwn)
       setMessages((prev) => [...prev, message])
+      if (message.username) clearTyping(message.username)
       // YENİ: Kendi mesajım değilse ses çal — beni @bahsetmişse (ve
       // pencere görünür değilse) daha belirgin olan bahsetme sesi,
       // aksi halde her mesaj için nazik bir "tık" sesi. İkisi asla
@@ -1273,32 +1351,27 @@ function App() {
           playMessageSound()
         }
       }
-      requestAnimationFrame(() => {
-        if (chatMessagesRef.current) {
-          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
-        }
-      })
     })
 
     // YENİ: fotoğraf geldiğinde — kalıcı 'messages' listesine DEĞİL,
     // ayrı ve geçici 'ephemeralPhotos' listesine ekleniyor.
     socket.on('new-photo', (photo) => {
+      const isOwn = photo.username === displayNameRef.current
+      scrollChatToBottom(isOwn)
       setEphemeralPhotos((prev) => [...prev, photo])
-      if (photo.username !== displayNameRef.current) playMessageSound()
-      requestAnimationFrame(() => {
-        if (chatMessagesRef.current) {
-          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
-        }
-      })
+      if (!isOwn) playMessageSound()
     })
 
     // YENİ: Yazıyor göstergesi.
     socket.on('user-typing', ({ username }) => {
+      clearTimeout(typingExpiryRef.current.get(username))
+      typingExpiryRef.current.set(
+        username,
+        setTimeout(() => clearTyping(username), TYPING_EXPIRY_MS)
+      )
       setTypingUsers((prev) => (prev.includes(username) ? prev : [...prev, username]))
     })
-    socket.on('user-stopped-typing', ({ username }) => {
-      setTypingUsers((prev) => prev.filter((u) => u !== username))
-    })
+    socket.on('user-stopped-typing', ({ username }) => clearTyping(username))
 
     // YENİ: Bir mesajın tepkileri değiştiğinde, o mesajı güncelle.
     socket.on('reactions-updated', ({ messageId, reactions }) => {
@@ -1471,8 +1544,8 @@ function App() {
 
     // YENİ: profil fotoğrafını değiştirince sunucudan kesin onay —
     // kendi görünümümüzü de anında güncelliyoruz.
-    socket.on('avatar-saved', ({ avatarData }) => {
-      setMyAvatar(avatarData || null)
+    socket.on('avatar-saved', ({ avatarUrl, avatarData }) => {
+      setMyAvatar(avatarUrl || avatarData || null)
       setIsUploadingAvatar(false)
     })
 
@@ -1521,17 +1594,6 @@ function App() {
     resetVoiceState,
     rejoinVoice,
   ])
-
-  useEffect(() => {
-    if (localVideoRef.current) localVideoRef.current.srcObject = localMainStream
-  }, [localMainStream])
-
-  useEffect(() => {
-    if (localScreenVideoRef.current) {
-      localScreenVideoRef.current.srcObject = null
-      localScreenVideoRef.current.srcObject = localScreenStream
-    }
-  }, [localScreenStream])
 
   // YENİ: mikrofonu DOĞRUDAN bir duruma getiren fonksiyon (toggle değil,
   // "aç" ya da "kapat" diye kesin bir komut) — hem normal buton hem de
@@ -1787,7 +1849,7 @@ function App() {
     // listesi geliyor — hangi sunucunun kanallarının gösterileceğine
     // aşağıdaki myServers izleyen useEffect karar veriyor.
     setMyServers(Array.isArray(response.myServers) ? response.myServers : [])
-    setMyAvatar(response.avatarData || null)
+    setMyAvatar(response.avatarUrl || response.avatarData || null)
     debugLog('[giriş] sunucudan gelen roller:', response.roles)
     setMyRoles(Array.isArray(response.roles) ? response.roles : [])
     setLoggedIn(true)
@@ -1832,6 +1894,14 @@ function App() {
       setOfflineMembers(members.filter((m) => !m.online).sort(byName))
     },
     [emitRequest]
+  )
+
+  const avatarByName = useMemo(
+    () =>
+      new Map(
+        [...onlineMembers, ...offlineMembers].filter((m) => m.avatarUrl).map((m) => [m.username, m.avatarUrl])
+      ),
+    [onlineMembers, offlineMembers]
   )
 
   // Aktif sunucu değişince ve giriş yapılınca listeyi getir; art arda gelen
@@ -1880,65 +1950,75 @@ function App() {
     }
   }, [refreshMyServers, fetchServerChannels])
 
-  const handleCreateServer = useCallback(async () => {
-    if (!newServerName.trim()) return
-    setServerModalBusy(true)
-    setServerModalError(null)
-    const response = await emitRequest('create-server', {
-      token: sessionTokenRef.current,
-      name: newServerName.trim(),
-    })
-    setServerModalBusy(false)
-    if (response?.success) {
-      setNewServerName('')
-      setShowServerModal(false)
-      await refreshMyServers()
-      selectServer(response.server.id)
-    } else {
-      setServerModalError(response?.message || 'Sunucu oluşturulamadı.')
-    }
-  }, [newServerName, emitRequest, refreshMyServers, selectServer])
+  const handleCreateServer = useCallback(
+    async (name) => {
+      setServerModalBusy(true)
+      setServerModalError(null)
+      const response = await emitRequest('create-server', {
+        token: sessionTokenRef.current,
+        name,
+      })
+      setServerModalBusy(false)
+      if (response?.success) {
+        setShowServerModal(false)
+        await refreshMyServers()
+        selectServer(response.server.id)
+      } else {
+        setServerModalError(response?.message || 'Sunucu oluşturulamadı.')
+      }
+    },
+    [emitRequest, refreshMyServers, selectServer]
+  )
 
-  const handleJoinServer = useCallback(async () => {
-    if (!joinInviteCode.trim()) return
-    setServerModalBusy(true)
-    setServerModalError(null)
-    const response = await emitRequest('join-server-by-invite', {
-      token: sessionTokenRef.current,
-      inviteCode: joinInviteCode.trim(),
-    })
-    setServerModalBusy(false)
-    if (response?.success) {
-      setJoinInviteCode('')
-      setShowServerModal(false)
-      await refreshMyServers()
-      selectServer(response.server.id)
-    } else {
-      setServerModalError(response?.message || 'Sunucuya katılamadın.')
-    }
-  }, [joinInviteCode, emitRequest, refreshMyServers, selectServer])
+  const handleJoinServer = useCallback(
+    async (inviteCode) => {
+      setServerModalBusy(true)
+      setServerModalError(null)
+      const response = await emitRequest('join-server-by-invite', {
+        token: sessionTokenRef.current,
+        inviteCode,
+      })
+      setServerModalBusy(false)
+      if (response?.success) {
+        setShowServerModal(false)
+        await refreshMyServers()
+        selectServer(response.server.id)
+      } else {
+        setServerModalError(response?.message || 'Sunucuya katılamadın.')
+      }
+    },
+    [emitRequest, refreshMyServers, selectServer]
+  )
+
+  const openServerModal = useCallback(
+    (tab) => {
+      setServerModalTab(tab || (myServers.some((s) => s.isOwner) ? 'join' : 'create'))
+      setServerModalError(null)
+      setShowServerModal(true)
+      setMobileSidebarOpen(false)
+    },
+    [myServers]
+  )
 
   // YENİ: sunucuyu tamamen sil — sadece sahibi/platform admini
-  // çağırabiliyor (arayüzden de sadece onlara gösteriliyor).
+  // çağırabiliyor (arayüzden de sadece onlara gösteriliyor). Önce onay
+  // penceresi açılıyor (bkz. confirmDeleteServer).
   const handleDeleteServer = useCallback(async () => {
+    setConfirmDeleteServer(false)
     if (!activeServerIdRef.current) return
-    if (
-      !window.confirm(
-        'Bu sunucuyu tamamen silmek istediğine emin misin? Tüm kanalları ve mesajları da silinecek.'
-      )
-    ) {
-      return
-    }
     const response = await emitRequest('delete-server', {
       token: sessionTokenRef.current,
       serverId: activeServerIdRef.current,
     })
     if (response?.success) {
       setServerInvitePopover(null)
+      setShowAppSettings(false)
       leaveChannel()
       setActiveServerId(null)
       window.localStorage?.removeItem('activeServerId')
       await refreshMyServers()
+    } else {
+      setNotice(response?.message || 'Sunucu silinemedi.')
     }
   }, [emitRequest, leaveChannel, refreshMyServers])
 
@@ -1950,22 +2030,23 @@ function App() {
     if (response?.success) setServerInvitePopover({ code: response.inviteCode })
   }, [emitRequest])
 
-  // YENİ: sunucu sahibi kanal eklesin diye — v1'de basit bir prompt()
-  // yeterli, kanalın kendine has bir ayar ekranı yok henüz.
-  const handleCreateChannel = useCallback(async () => {
-    const name = window.prompt('Yeni kanalın adı:')
-    if (!name || !name.trim()) return
-    const response = await emitRequest('create-channel', {
-      token: sessionTokenRef.current,
-      serverId: activeServerIdRef.current,
-      name: name.trim(),
-    })
-    if (response?.success) {
-      fetchServerChannels(activeServerIdRef.current)
-    } else {
-      window.alert(response?.message || 'Kanal oluşturulamadı.')
-    }
-  }, [emitRequest, fetchServerChannels])
+  const handleCreateChannel = useCallback(
+    async (name) => {
+      setCreateChannelDialog({ busy: true, error: null })
+      const response = await emitRequest('create-channel', {
+        token: sessionTokenRef.current,
+        serverId: activeServerIdRef.current,
+        name,
+      })
+      if (response?.success) {
+        setCreateChannelDialog(null)
+        fetchServerChannels(activeServerIdRef.current)
+      } else {
+        setCreateChannelDialog({ busy: false, error: response?.message || 'Kanal oluşturulamadı.' })
+      }
+    },
+    [emitRequest, fetchServerChannels]
+  )
 
   const fetchServerMembers = useCallback(async () => {
     if (!activeServerIdRef.current) return
@@ -2096,9 +2177,7 @@ function App() {
     })
   }
 
-  const handleSendMessage = (e) => {
-    e.preventDefault()
-    const text = chatInput.trim()
+  const handleSendMessage = (text) => {
     if (!text || !socketRef.current) return
 
     // YENİ: "!sil n" komutu — kendi son N mesajını topluca siler.
@@ -2108,7 +2187,6 @@ function App() {
         token: sessionTokenRef.current,
         n: Number(silMatch[1]),
       })
-      setChatInput('')
       return
     }
 
@@ -2122,7 +2200,6 @@ function App() {
         targetUsername: silUserCountMatch[1],
         n: Number(silUserCountMatch[2]),
       })
-      setChatInput('')
       return
     }
 
@@ -2136,12 +2213,10 @@ function App() {
         token: sessionTokenRef.current,
         targetUsername: silUserMatch[1],
       })
-      setChatInput('')
       return
     }
 
     socketRef.current.emit('send-message', { token: sessionTokenRef.current, text })
-    setChatInput('')
     // Mesaj gönderilince "yazıyor" durumunu hemen bitir.
     if (typingStopTimeoutRef.current) {
       clearTimeout(typingStopTimeoutRef.current)
@@ -2153,53 +2228,24 @@ function App() {
     }
   }
 
-  // YENİ: Yazıyor göstergesi — her tuşta "typing-start" göndermek yerine,
-  // sadece BAŞLARKEN bir kere gönderiyoruz; 3 saniye sessizlik olunca
-  // otomatik "typing-stop" gidiyor.
-  const handleChatInputChange = (e) => {
-    setChatInput(e.target.value)
-    if (!socketRef.current) return
-
-    if (!isTypingRef.current) {
+  // Yazıyor göstergesi: her tuşta değil, yazmaya başlayınca ve yazmaya
+  // devam ettikçe 4 saniyede bir "typing-start" gidiyor (karşı taraf 6
+  // saniye haber alamazsa göstergeyi kendisi siliyor, H21); 3 saniye
+  // sessizlikte "typing-stop".
+  const handleTyping = () => {
+    const socket = socketRef.current
+    if (!socket) return
+    const now = Date.now()
+    if (!isTypingRef.current || now - lastTypingSentAtRef.current > TYPING_HEARTBEAT_MS) {
       isTypingRef.current = true
-      socketRef.current.emit('typing-start', { token: sessionTokenRef.current })
+      lastTypingSentAtRef.current = now
+      socket.emit('typing-start', { token: sessionTokenRef.current })
     }
-    if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current)
+    clearTimeout(typingStopTimeoutRef.current)
     typingStopTimeoutRef.current = setTimeout(() => {
       isTypingRef.current = false
       socketRef.current?.emit('typing-stop', { token: sessionTokenRef.current })
     }, 3000)
-  }
-
-  // YENİ: @ yazarken üye önerisi. NOT: basit tutmak için imlecin metnin
-  // TAM SONUNDA olduğunu varsayıyor (metnin ortasına @ eklemeyi
-  // desteklemiyor) — en yaygın kullanım şekli olan "mesajın sonuna
-  // birini etiketle" senaryosunu karşılıyor.
-  const mentionRegex = /(^|\s)@(\w*)$/i
-  const mentionMatch = chatInput.match(mentionRegex)
-  const mentionQuery = mentionMatch ? mentionMatch[2].toLowerCase() : null
-  // DÜZELTME: sadece çevrimiçi üyeler öneriliyordu — çevrimdışı birinin
-  // (ör. "!sil @kullanıcı" ile moderasyon yapmak istediğin, artık bağlı
-  // olmayan biri) tam kullanıcı adını bilmeden etiketlemek/hedeflemek
-  // imkânsız hâle geliyordu. Artık çevrimdışı üyeler de öneriliyor
-  // (ayırt edilebilsin diye etiketinde belirtiliyor).
-  const mentionCandidates =
-    mentionQuery === null
-      ? []
-      : [
-          { username: 'all', label: '@all — herkese' },
-          ...onlineMembers
-            .filter((m) => m.username !== displayName)
-            .map((m) => ({ username: m.username, label: `@${m.username}` })),
-          ...offlineMembers.map((m) => ({
-            username: m.username,
-            label: `@${m.username} (çevrimdışı)`,
-          })),
-        ].filter((c) => c.username.toLowerCase().startsWith(mentionQuery))
-
-  const insertMention = (targetUsername) => {
-    setChatInput((prev) => prev.replace(mentionRegex, (_match, leading) => `${leading}@${targetUsername} `))
-    chatInputRef.current?.focus()
   }
 
   // YENİ: Fotoğraf gönderme — dosya seçme VE Ctrl+V yapıştırma, ikisi de
@@ -2308,12 +2354,6 @@ function App() {
     reader.readAsDataURL(file)
   }
 
-  const handleAvatarFileSelected = (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    uploadAvatar(file)
-  }
-
   // YENİ: Alganis rolü için üye/rol yönetimi — Ayarlar panelindeki
   // "Üye Yönetimi" bölümü açıldığında tüm kayıtlı kullanıcıları çekiyoruz.
   // NOT: burada gösterilmesi sadece arayüz kolaylığı — gerçek yetki
@@ -2404,99 +2444,15 @@ function App() {
     })
   }
 
-  // YENİ: Sohbet alanına dosya sürükleyip bırakma — fotoğraf yapıştırmayla
-  // aynı ortak fonksiyonu (sendPhotoFile) kullanıyor.
-  const handleChatDragOver = (e) => {
-    e.preventDefault()
-    setIsDraggingPhoto(true)
-  }
-  const handleChatDragLeave = () => {
-    setIsDraggingPhoto(false)
-  }
-  const handleChatDrop = (e) => {
-    e.preventDefault()
-    setIsDraggingPhoto(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) sendPhotoFile(file)
-  }
-
-  // YENİ: tepki paneli artık üzerine gelince değil, sağ tıklayınca
-  // açılıyor — sürekli fare gezdirirken panelin açılıp kapanması göz
-  // yoruyordu.
-  const [reactionPickerForMessageId, setReactionPickerForMessageId] = useState(null)
-  // Menü normalde mesajın üstünde açılıyor; mesaj sohbetin en üstündeyse
-  // orada yer olmadığı için kesiliyor ve düğmelerine tıklanamıyordu, o
-  // durumda altında açılıyor.
-  const [reactionPickerBelow, setReactionPickerBelow] = useState(false)
-  const handleMessageContextMenu = (e, messageId) => {
-    e.preventDefault()
-    const messageTop = e.currentTarget.getBoundingClientRect().top
-    const chatTop = chatMessagesRef.current?.getBoundingClientRect().top ?? 0
-    setReactionPickerBelow(messageTop - chatTop < 48)
-    setReactionPickerForMessageId((prev) => (prev === messageId ? null : messageId))
-  }
-  useEffect(() => {
-    if (!reactionPickerForMessageId) return
-    const closeIt = () => setReactionPickerForMessageId(null)
-    window.addEventListener('click', closeIt)
-    return () => window.removeEventListener('click', closeIt)
-  }, [reactionPickerForMessageId])
-
-  // YENİ: Mesaj düzenleme/silme — sadece KENDİ mesajın için.
-  const [editingMessageId, setEditingMessageId] = useState(null)
-  const [editingText, setEditingText] = useState('')
-
-  const handleStartEdit = (message) => {
-    setEditingMessageId(message.id)
-    setEditingText(message.text)
-    setReactionPickerForMessageId(null)
-  }
-  const handleCancelEdit = () => {
-    setEditingMessageId(null)
-    setEditingText('')
-  }
-  const handleSubmitEdit = (messageId) => {
-    const trimmed = editingText.trim()
-    if (trimmed) {
-      socketRef.current?.emit('edit-message', {
-        token: sessionTokenRef.current,
-        messageId,
-        newText: trimmed,
-      })
-    }
-    setEditingMessageId(null)
-    setEditingText('')
+  const handleEditMessage = (messageId, newText) => {
+    socketRef.current?.emit('edit-message', {
+      token: sessionTokenRef.current,
+      messageId,
+      newText,
+    })
   }
   const handleDeleteMessage = (messageId) => {
     socketRef.current?.emit('delete-message', { token: sessionTokenRef.current, messageId })
-    setReactionPickerForMessageId(null)
-  }
-
-  const handlePhotoButtonClick = () => {
-    photoFileInputRef.current?.click()
-  }
-
-  const handlePhotoFileSelected = (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = '' // aynı dosyayı üst üste seçebilsin diye
-    sendPhotoFile(file)
-  }
-
-  // YENİ: Mesaj kutusuna Ctrl+V ile bir fotoğraf yapıştırılırsa,
-  // normal metin yapıştırma yerine fotoğraf gönderme akışını başlatıyoruz.
-  const handleChatInputPaste = (e) => {
-    const items = e.clipboardData?.items
-    if (!items) return
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault() // metin kutusuna resmin dosya adı vs. yapıştırılmasın
-        const file = item.getAsFile()
-        if (file) sendPhotoFile(file)
-        return
-      }
-    }
-    // Görsel yoksa hiçbir şey yapmıyoruz — normal metin yapıştırma
-    // (tarayıcının kendi varsayılan davranışı) olduğu gibi devam eder.
   }
 
   const handleLoadOlderMessages = () => {
@@ -2522,137 +2478,39 @@ function App() {
     )
   }
 
-  // YENİ: "beni hatırla" ile kaydedilmiş bir oturum varsa, onu deneme
-  // sonuçlanana kadar giriş formunu HİÇ göstermiyoruz — yoksa her
-  // açılışta bir anlığına giriş ekranı "çakıp" sonra otomatik
-  // giriş yapılmış gibi görünürdü, rahatsız edici bir titreşim olurdu.
-  if (isRestoringSession) {
-    return (
-      <div className="name-entry">
-        <img src={logoUrl} alt="Disco" className="app-logo app-logo--login" />
-        <h1>Disco</h1>
-        <p>Oturum açılıyor…</p>
-      </div>
-    )
-  }
+  // "Beni hatırla" ile kaydedilmiş bir oturum varsa, deneme sonuçlanana
+  // kadar giriş formunu göstermiyoruz; yoksa her açılışta giriş ekranı bir
+  // anlığına çakıp kayboluyordu.
+  if (isRestoringSession) return <RestoringScreen />
 
   if (!loggedIn) {
     return (
-      <div className="name-entry">
-        <img src={logoUrl} alt="Disco" className="app-logo app-logo--login" />
-        <h1>Disco</h1>
-        {authMode === 'login' ? (
-          <>
-            <p>Hesabınla giriş yap:</p>
-            <form onSubmit={handleLogin}>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Kullanıcı adı"
-                autoFocus
-              />
-              <div className="password-field-wrapper">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Şifre"
-                />
-                <button
-                  type="button"
-                  className="password-toggle-button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  tabIndex={-1}
-                  title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
-                >
-                  <EyeIcon visible={showPassword} />
-                </button>
-              </div>
-              <label className="remember-me-label">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                />
-                Beni hatırla
-              </label>
-              <button type="submit" disabled={isLoggingIn}>
-                {isLoggingIn ? 'Giriş yapılıyor…' : 'Giriş Yap'}
-              </button>
-            </form>
-            {loginError && <p className="error-text">{loginError}</p>}
-            {registerSuccessMessage && <p className="register-success-text">{registerSuccessMessage}</p>}
-            <p className="name-entry-hint">
-              Hesabın yok mu?{' '}
-              <button
-                type="button"
-                className="auth-mode-link"
-                onClick={() => {
-                  setAuthMode('register')
-                  setLoginError(null)
-                  setRegisterSuccessMessage(null)
-                }}
-              >
-                Kayıt ol
-              </button>
-            </p>
-          </>
-        ) : (
-          <>
-            <p>Davet koduyla kayıt ol:</p>
-            <form onSubmit={handleRegister}>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Kullanıcı adı"
-                autoFocus
-              />
-              <div className="password-field-wrapper">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Şifre (en az 6 karakter)"
-                />
-                <button
-                  type="button"
-                  className="password-toggle-button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  tabIndex={-1}
-                  title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
-                >
-                  <EyeIcon visible={showPassword} />
-                </button>
-              </div>
-              <input
-                type="text"
-                value={inviteCode}
-                onChange={(e) => setInviteCode(e.target.value)}
-                placeholder="Davet kodu"
-              />
-              <button type="submit" disabled={isRegistering}>
-                {isRegistering ? 'Kayıt olunuyor…' : 'Kayıt Ol'}
-              </button>
-            </form>
-            {registerError && <p className="error-text">{registerError}</p>}
-            <p className="name-entry-hint">
-              Zaten hesabın var mı?{' '}
-              <button
-                type="button"
-                className="auth-mode-link"
-                onClick={() => {
-                  setAuthMode('login')
-                  setRegisterError(null)
-                }}
-              >
-                Giriş yap
-              </button>
-            </p>
-          </>
-        )}
-      </div>
+      <AuthScreen
+        mode={authMode}
+        onSwitchMode={(mode) => {
+          setAuthMode(mode)
+          setLoginError(null)
+          setRegisterError(null)
+          if (mode === 'register') setRegisterSuccessMessage(null)
+        }}
+        username={username}
+        onUsernameChange={setUsername}
+        password={password}
+        onPasswordChange={setPassword}
+        showPassword={showPassword}
+        onToggleShowPassword={() => setShowPassword((prev) => !prev)}
+        rememberMe={rememberMe}
+        onRememberMeChange={setRememberMe}
+        inviteCode={inviteCode}
+        onInviteCodeChange={setInviteCode}
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+        isLoggingIn={isLoggingIn}
+        isRegistering={isRegistering}
+        loginError={loginError}
+        registerError={registerError}
+        registerSuccessMessage={registerSuccessMessage}
+      />
     )
   }
 
@@ -2667,6 +2525,7 @@ function App() {
   // YENİ: activeChannel/voiceChannel artık isim değil, kanalın ObjectId'si —
   // görüntülemek için ada bakıyoruz. activeServer* de aktif sunucunun
   // görüntü adı/sahiplik durumu için.
+  const channelNameOf = (channelId) => channels.find((c) => c.id === channelId)?.name ?? '…'
   const activeChannelName = channels.find((c) => c.id === activeChannel)?.name || ''
   const voiceChannelName = channels.find((c) => c.id === voiceChannel)?.name || ''
   const activeServer = myServers.find((s) => s.id === activeServerId)
@@ -2676,23 +2535,232 @@ function App() {
   // sahibi. Sunucu sahibine zaten izin veriyordu ama arayüz düğmeyi sadece
   // platform yöneticisine gösteriyordu (H17).
   const canModerateActiveServer = isAdmin || activeServerIsOwner
+  const isVoiceView = inVoice && voiceChannel === activeChannel && !!activeChannel
+  const reconnecting = connectionStatus === 'reconnecting'
+
+  const speakingUsernames = new Set(
+    [...speakingIds].map((id) => (id === 'local' ? displayName : peers.find((p) => p.socketId === id)?.username))
+  )
+  const pingValues = Object.values(peerPings).filter((p) => typeof p === 'number')
+  const averagePing = pingValues.length
+    ? Math.round(pingValues.reduce((sum, p) => sum + p, 0) / pingValues.length)
+    : null
+
+  // Kenar çubuğunda her kanalın altında o kanalın sesindekiler.
+  const voicersByChannel = new Map()
+  for (const member of onlineMembers) {
+    if (!member.voiceChannelId) continue
+    const isMe = member.username === displayName
+    const peer = peers.find((p) => p.username === member.username)
+    const inMyVoice = inVoice && member.voiceChannelId === voiceChannel
+    if (!voicersByChannel.has(member.voiceChannelId)) voicersByChannel.set(member.voiceChannelId, [])
+    voicersByChannel.get(member.voiceChannelId).push({
+      username: member.username,
+      avatarUrl: isMe ? myAvatar : member.avatarUrl,
+      speaking: inMyVoice && speakingUsernames.has(member.username),
+      muted: isMe ? inVoice && !isMicOn : inMyVoice && !!peer?.muted,
+    })
+  }
+  const voiceCountHere = voicersByChannel.get(activeChannel)?.length || 0
+
+  const membersForMentions = [
+    ...onlineMembers.map((m) => ({ ...m, online: true })),
+    ...offlineMembers.map((m) => ({ ...m, online: false })),
+  ]
+  const isNarrow = () => window.matchMedia('(max-width: 760px)').matches
+  const membersVisible = !isVoiceView && (membersPanelOpen || mobileMembersOpen)
+
+  const chatPanel = activeChannel && (
+    <ChatPanel
+      variant={isVoiceView ? 'side' : 'full'}
+      channelName={activeChannelName}
+      items={chatTimeline}
+      avatars={avatarByName}
+      members={membersForMentions}
+      displayName={displayName}
+      canModerate={canModerateActiveServer}
+      hasMoreHistory={hasMoreHistory}
+      isLoadingOlder={isLoadingOlder}
+      onLoadOlder={handleLoadOlderMessages}
+      typingUsers={typingUsers}
+      onSend={handleSendMessage}
+      onTyping={handleTyping}
+      onPhotoFile={sendPhotoFile}
+      isSendingPhoto={isSendingPhoto}
+      onReact={handleToggleReaction}
+      onEdit={handleEditMessage}
+      onDelete={handleDeleteMessage}
+      onOpenPhoto={setPhotoLightbox}
+      messagesRef={chatMessagesRef}
+    />
+  )
+
+  let mainContent
+  if (connectionError) {
+    mainContent = (
+      <div className="empty-state" role="alert">
+        <ServerCrash className="icon empty-state-icon" />
+        <p className="empty-state-title">{connectionError}</p>
+        <p className="empty-state-text">Soldan başka bir kanal ya da sunucu seçebilirsin.</p>
+      </div>
+    )
+  } else if (myServers.length === 0) {
+    mainContent = (
+      <div className="empty-state">
+        <Compass className="icon empty-state-icon" />
+        <p className="empty-state-title">Henüz bir sunucun yok</p>
+        <p className="empty-state-text">
+          Arkadaşlarınla konuşmak için kendi sunucunu oluştur ya da sana gönderilen davet koduyla katıl.
+        </p>
+        <div className="empty-state-actions">
+          <button type="button" className="btn" onClick={() => openServerModal('create')}>
+            <Plus className="icon" />
+            Sunucu oluştur
+          </button>
+          <button type="button" className="btn btn--secondary" onClick={() => openServerModal('join')}>
+            Davet koduyla katıl
+          </button>
+        </div>
+      </div>
+    )
+  } else if (!activeChannel) {
+    mainContent = (
+      <div className="empty-state">
+        <Compass className="icon empty-state-icon" />
+        <p className="empty-state-title">Bir kanal seç</p>
+        <p className="empty-state-text">
+          Soldaki listeden bir kanala gir. Seste kim varsa kanalın altında görünüyor.
+        </p>
+        <button type="button" className="btn btn--secondary mobile-only" onClick={() => setMobileSidebarOpen(true)}>
+          Kanal listesini aç
+        </button>
+      </div>
+    )
+  } else if (isVoiceView) {
+    mainContent = (
+      <div className={'channel-body channel-body--voice' + (voiceChatOpen ? '' : ' channel-body--chat-hidden')}>
+        <VoiceStage
+          displayName={displayName}
+          myAvatar={myAvatar}
+          localStream={localMainStream}
+          localScreenStream={localScreenStream}
+          localVideoRef={localVideoRef}
+          localScreenVideoRef={localScreenVideoRef}
+          peers={peers}
+          remoteStreams={remoteStreams}
+          peerPings={peerPings}
+          speakingIds={speakingIds}
+          enlargedTile={enlargedTile}
+          onToggleEnlarge={toggleEnlarge}
+          onOpenVolume={openVolumePopup}
+          outputDeviceId={selectedAudioOutput}
+          mediaError={mediaError}
+          onDismissMediaError={() => setMediaError(null)}
+          controls={{
+            isMicOn,
+            isDeafened,
+            isCameraOn,
+            isScreenSharing,
+            pttEnabled,
+            pttKey,
+            onToggleMic: toggleMic,
+            onToggleDeafen: toggleDeafen,
+            onToggleCamera: toggleCamera,
+            onToggleScreenShare: toggleScreenShare,
+            onLeave: leaveVoice,
+          }}
+        />
+        {voiceChatOpen && chatPanel}
+      </div>
+    )
+  } else {
+    mainContent = (
+      <div className="channel-body">
+        {chatPanel}
+        {membersVisible && (
+          <div className={'member-drawer' + (mobileMembersOpen ? ' member-drawer--open' : '')}>
+            <MemberList
+              online={onlineMembers}
+              offline={offlineMembers}
+              displayName={displayName}
+              channelNameOf={channelNameOf}
+              speakingUsernames={speakingUsernames}
+              onOpenVolume={openVolumePopup}
+              onClose={() => setMobileMembersOpen(false)}
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
-      {/* YENİ: mobilde soldaki kanal çekmecesini açan sabit konumlu
-          düğme — dikey/yatay ekran fark etmeden her zaman erişilebilir
-          (kanal seçili olmasa bile görünür, "no-channel" ekranında da). */}
-      <button
-        type="button"
-        className="mobile-sidebar-toggle"
-        onClick={() => setMobileSidebarOpen(true)}
-        aria-label="Kanalları göster"
-      >
-        ☰
-      </button>
-
-      {/* YENİ: çekmecelerden biri açıkken arkaya karartma — üzerine
-          dokununca ikisini de kapatıyor. */}
+      <div className={'nav-drawer' + (mobileSidebarOpen ? ' nav-drawer--open' : '')}>
+        <ServerRail
+          servers={myServers}
+          activeServerId={activeServerId}
+          onSelect={selectServer}
+          onAdd={() => openServerModal()}
+        />
+        <ChannelSidebar
+          server={activeServer}
+          channels={channels}
+          activeChannel={activeChannel}
+          unreadChannels={unreadChannels}
+          voiceChannel={voiceChannel}
+          inVoice={inVoice}
+          voicersByChannel={voicersByChannel}
+          onOpenChannel={(channelId) => {
+            joinChannel(channelId)
+            setMobileSidebarOpen(false)
+          }}
+          onJoinVoiceIn={(channelId) => {
+            joinChannel(channelId)
+            joinVoice()
+            setMobileSidebarOpen(false)
+          }}
+          onInvite={openServerInvitePopover}
+          onCreateChannel={() => setCreateChannelDialog({ busy: false, error: null })}
+          onOpenServerSettings={() => openSettings('server')}
+          onAddServer={() => openServerModal()}
+          onClose={() => setMobileSidebarOpen(false)}
+          voicePanel={
+            inVoice && {
+              channelName: voiceChannelName,
+              ping: averagePing,
+              reconnecting,
+              isScreenSharing,
+              onOpenChannel: () => {
+                joinChannel(voiceChannel)
+                setMobileSidebarOpen(false)
+              },
+              onToggleScreenShare: toggleScreenShare,
+              onLeave: leaveVoice,
+            }
+          }
+          userPanel={{
+            displayName,
+            avatarUrl: myAvatar,
+            speaking: speakingIds.has('local'),
+            inVoice,
+            isMicOn,
+            isDeafened,
+            pttEnabled,
+            pttKey,
+            onToggleMic: toggleMic,
+            onToggleDeafen: toggleDeafen,
+            onOpenSettings: () => openSettings(),
+          }}
+          update={
+            updateReady
+              ? { ready: true, onInstall: () => window.electronAPI?.installUpdate() }
+              : updateInfo && updateProgress !== null
+                ? { ready: false, progress: updateProgress }
+                : null
+          }
+        />
+      </div>
       {(mobileSidebarOpen || mobileMembersOpen) && (
         <div
           className="mobile-backdrop"
@@ -2703,1215 +2771,169 @@ function App() {
         />
       )}
 
-      {/* YENİ: sunucu şeridi — Discord'daki gibi, her sunucu bir ikon.
-          Kanal listesinden AYRI: burası hangi sunucudayım, kanal listesi o
-          sunucunun kanalları. */}
-      <nav className="server-rail">
-        {myServers.map((server) => (
-          <button
-            key={server.id}
-            type="button"
-            className={
-              'server-rail-icon' + (activeServerId === server.id ? ' server-rail-icon--active' : '')
-            }
-            title={server.name}
-            onClick={() => selectServer(server.id)}
-          >
-            {server.name.charAt(0).toUpperCase()}
-          </button>
-        ))}
-        <button
-          type="button"
-          className="server-rail-icon server-rail-icon--add"
-          title="Sunucu oluştur / katıl"
-          onClick={() => {
-            setServerModalTab(myServers.some((s) => s.isOwner) ? 'join' : 'create')
-            setShowServerModal(true)
-          }}
-        >
-          +
-        </button>
-      </nav>
-
-      <aside className={'channel-sidebar' + (mobileSidebarOpen ? ' channel-sidebar--open' : '')}>
-        <div className="sidebar-brand">
-          <img src={logoUrl} alt="Disco" className="app-logo app-logo--sidebar" />
-          <h1 className="app-title">{activeServerName || 'Disco'}</h1>
-          {activeServerIsOwner && (
-            <button
-              type="button"
-              className="server-invite-button"
-              title="Davet kodunu göster"
-              onClick={openServerInvitePopover}
-            >
-              🔗
-            </button>
-          )}
-          <button
-            type="button"
-            className="mobile-drawer-close"
-            onClick={() => setMobileSidebarOpen(false)}
-            aria-label="Kapat"
-          >
-            ✕
-          </button>
-        </div>
-        <p className="whoami">{displayName} olarak bağlısın</p>
-        <nav className="channel-list">
-          {channels.map((channel) => {
-            const hasUnread = unreadChannels.includes(channel.id)
-            const isVoiceHere = voiceChannel === channel.id
-            return (
-              <button
-                key={channel.id}
-                className={
-                  'channel-button' +
-                  (activeChannel === channel.id ? ' channel-button--active' : '')
-                }
-                onClick={() => {
-                  joinChannel(channel.id)
-                  setMobileSidebarOpen(false)
-                }}
-              >
-                # {channel.name}
-                {/* YENİ: sesin hangi kanalda olduğunu, o kanalı görüntülemesen
-                    bile listede görebilesin diye. */}
-                {isVoiceHere && <span className="channel-voice-indicator">🎙️</span>}
-                {hasUnread && <span className="channel-unread-dot" />}
-              </button>
-            )
-          })}
-          {/* YENİ: aktif sunucunun sahibiyse (ya da platform adminse), yeni
-              kanal ekleyebilme düğmesi — çoklu sunucuda kanal artık env
-              yerine veritabanından, sahibi ekleyebiliyor. */}
-          {activeServerIsOwner && (
-            <button
-              type="button"
-              className="channel-button channel-button--add"
-              onClick={handleCreateChannel}
-            >
-              + Kanal ekle
-            </button>
-          )}
-        </nav>
-
-        {/* YENİ: Discord tarzı güncelleme bildirimi — indirilirken küçük
-            bir ilerleme yazısı, indirme bitince tıklanabilir "yeniden
-            başlat" düğmesi. Güncelleme yoksa hiçbir şey görünmüyor. */}
-        {updateReady ? (
-          <button
-            type="button"
-            className="update-ready-button"
-            onClick={() => window.electronAPI?.installUpdate()}
-            title={updateInfo?.version ? `Sürüm ${updateInfo.version}` : undefined}
-          >
-            🆕 Güncelleme hazır — Yeniden başlat
-          </button>
-        ) : (
-          updateInfo &&
-          updateProgress !== null && (
-            <p className="update-progress-text">Güncelleme iniyor… %{updateProgress}</p>
-          )
-        )}
-
-        {/* YENİ: kanalların hizasında, sabit (her zaman görünür) genel
-            ayarlar düğmesi — sesteki ⚙️'den FARKLI: o sadece o anki ses
-            görüşmesinin mikrofon/hoparlör seçimiydi, bu ise kalıcı,
-            hesap/uygulama genelindeki kişiselleştirme ayarları için. */}
-        <button
-          type="button"
-          className="app-settings-button"
-          onClick={() => setShowAppSettings(true)}
-        >
-          ⚙️ Ayarlar
-        </button>
-      </aside>
-
       <main className="main-panel">
+        <ChannelHeader
+          title={activeChannel && !connectionError ? activeChannelName : activeServerName || 'Disco'}
+          isChannel={!!activeChannel && !connectionError}
+          voiceCount={voiceCountHere}
+          showJoinVoice={!!activeChannel && !connectionError && !inVoice}
+          onJoinVoice={joinVoice}
+          membersOpen={isNarrow() ? mobileMembersOpen : membersPanelOpen}
+          onToggleMembers={
+            activeChannel && !connectionError && !isVoiceView
+              ? () => (isNarrow() ? setMobileMembersOpen((open) => !open) : setMembersPanelOpen((open) => !open))
+              : null
+          }
+          chatToggle={isVoiceView ? { open: voiceChatOpen, onToggle: () => setVoiceChatOpen((open) => !open) } : null}
+          onOpenNav={() => setMobileSidebarOpen(true)}
+        />
+        {reconnecting && (
+          <div className="status-banner status-banner--warn reconnecting-banner" role="status">
+            <WifiOff className="icon" />
+            Bağlantı koptu, yeniden bağlanılıyor…
+          </div>
+        )}
         {notice && notice !== connectionError && (
-          <div className="notice-banner" role="status">
+          <div className="status-banner notice-banner" role="status">
+            <AlertTriangle className="icon" />
             {notice}
           </div>
         )}
-        {connectionError && (
-          <div className="no-channel-placeholder">
-            <p className="error-text">{connectionError}</p>
-          </div>
-        )}
-
-        {!activeChannel && !connectionError && myServers.length === 0 && (
-          <div className="no-channel-placeholder">
-            <p>Henüz bir sunucun yok — sağdaki "+" ile kendi sunucunu oluştur ya da bir davet koduyla katıl.</p>
-          </div>
-        )}
-
-        {!activeChannel && !connectionError && myServers.length > 0 && (
-          <div className="no-channel-placeholder">
-            <p>Başlamak için soldan bir kanal seç.</p>
-          </div>
-        )}
-
-        {activeChannel && !connectionError && (
-          <div className="channel-view">
-            {connectionStatus === 'reconnecting' && (
-              <div className="reconnecting-banner">🔄 Bağlantı koptu, yeniden bağlanılıyor…</div>
-            )}
-
-            <div className="channel-main">
-              <div className="channel-header">
-                <h2># {activeChannelName}</h2>
-                <div className="channel-header-actions">
-                  {/* YENİ: sesteyken BAŞKA bir kanala bakıyorsan burada ne
-                      "Sese Katıl" (zaten sestesin, başka kanalda ses
-                      açılamaz) ne de "Sesten Çık" (bu kanalın sesi değil ki)
-                      gösteriyoruz — onun yerine aşağıdaki banner var. */}
-                  {!inVoice && (
-                    <button className="join-voice-button" onClick={joinVoice}>
-                      📞 Sese Katıl
-                    </button>
-                  )}
-                  {inVoice && voiceChannel === activeChannel && (
-                    <button className="leave-voice-button" onClick={leaveVoice}>
-                      📞 Sesten Çık
-                    </button>
-                  )}
-                  <button className="leave-button" onClick={leaveChannel}>
-                    Kanaldan Ayrıl
-                  </button>
-                  {/* YENİ: mobilde sağdaki üye listesini açan düğme —
-                      liste artık kaydırmalı bir çekmece. */}
-                  <button
-                    type="button"
-                    className="mobile-members-toggle"
-                    onClick={() => setMobileMembersOpen(true)}
-                    aria-label="Üyeleri göster"
-                  >
-                    👥
-                  </button>
-                </div>
-              </div>
-
-              {/* YENİ: sesli sohbet BAŞKA bir kanaldayken (ör. #Genel'de
-                  sesteyken #Cereyancılar'ın mesajlarına bakıyorsun), sesin
-                  kesilmediğini hatırlatan ve geri dönüş imkânı veren
-                  kalıcı bir şerit. */}
-              {inVoice && voiceChannel && voiceChannel !== activeChannel && (
-                <div className="voice-elsewhere-banner">
-                  <span>
-                    🎙️ Sesli sohbettesin: <strong># {voiceChannelName}</strong>
-                  </span>
-                  <div className="voice-elsewhere-banner-actions">
-                    <button onClick={() => joinChannel(voiceChannel)}>Kanala dön</button>
-                    <button
-                      className={
-                        'control-button control-button--small' +
-                        (isMicOn ? '' : ' control-button--off')
-                      }
-                      onClick={toggleMic}
-                      title={isMicOn ? 'Mikrofonu kapat' : 'Mikrofonu aç'}
-                    >
-                      {isMicOn ? '🎤' : '🔇'}
-                    </button>
-                    <button onClick={leaveVoice}>Sesten çık</button>
-                  </div>
-                </div>
-              )}
-
-              {inVoice && voiceChannel === activeChannel && (
-                <div className={'video-grid' + (enlargedTile ? ' video-grid--has-enlarged' : '')}>
-                  {/* YENİ: büyütülmüş kutucuk artık gerçek bir lightbox —
-                      arkasına tıklayınca da küçülsün diye karartma katmanı. */}
-                  {enlargedTile && (
-                    <div
-                      className="enlarged-tile-backdrop"
-                      onClick={() => setEnlargedTile(null)}
-                    />
-                  )}
-                  {mediaError && <p className="error-text">{mediaError}</p>}
-
-                  <div
-                    className={
-                      'video-tile local-media-panel' +
-                      (enlargedTile === 'local-camera' ? ' video-tile--enlarged' : '')
-                    }
-                    onClick={() => toggleEnlarge('local-camera')}
-                  >
-                    {enlargedTile === 'local-camera' && (
-                      <button
-                        className="enlarged-tile-close"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleEnlarge('local-camera')
-                        }}
-                        title="Küçült"
-                      >
-                        ✕
-                      </button>
-                    )}
-                    {isCameraOn ? (
-                      <video
-                        ref={localVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="local-video"
-                      />
-                    ) : (
-                      <div className="camera-off-placeholder">
-                        {myAvatar ? (
-                          <img src={myAvatar} alt="" className="avatar-circle avatar-circle--photo" />
-                        ) : (
-                          <div className="avatar-circle">{displayName.charAt(0).toUpperCase()}</div>
-                        )}
-                      </div>
-                    )}
-                    <div className="media-controls" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className={'control-button' + (isMicOn ? '' : ' control-button--off')}
-                        onClick={pttEnabled ? undefined : toggleMic}
-                        disabled={pttEnabled}
-                        title={
-                          pttEnabled
-                            ? `Bas-konuş açık (${formatKeyCode(pttKey)}) — konuşmak için tuşu basılı tut`
-                            : isMicOn
-                              ? 'Mikrofonu kapat'
-                              : 'Mikrofonu aç'
-                        }
-                      >
-                        {isMicOn ? '🎤' : '🔇'}
-                      </button>
-                      <button
-                        className={'control-button' + (isDeafened ? ' control-button--off' : '')}
-                        onClick={toggleDeafen}
-                        title={isDeafened ? 'Sağırlığı kaldır' : 'Sağırlaştır (herkesi sustur)'}
-                      >
-                        {isDeafened ? '🔇' : '🎧'}
-                      </button>
-                      <button
-                        className={'control-button' + (isCameraOn ? '' : ' control-button--off')}
-                        onClick={toggleCamera}
-                        title={isCameraOn ? 'Kamerayı kapat' : 'Kamerayı aç'}
-                      >
-                        {isCameraOn ? '🎥' : '📷'}
-                      </button>
-                      <button
-                        className={
-                          'control-button' + (isScreenSharing ? '' : ' control-button--off')
-                        }
-                        onClick={toggleScreenShare}
-                        title={isScreenSharing ? 'Ekran paylaşımını durdur' : 'Ekranı paylaş'}
-                      >
-                        {isScreenSharing ? '🛑' : '🖥️'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {isScreenSharing && (
-                    <div
-                      className={
-                        'video-tile local-media-panel' +
-                        (enlargedTile === 'local-screen' ? ' video-tile--enlarged' : '')
-                      }
-                      onClick={() => toggleEnlarge('local-screen')}
-                    >
-                      <video
-                        ref={localScreenVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="local-video local-video--screen"
-                      />
-                      <span className="remote-video-label">Ekranın (sen)</span>
-                      {enlargedTile === 'local-screen' && (
-                        <button
-                          className="enlarged-tile-close"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            toggleEnlarge('local-screen')
-                          }}
-                          title="Küçült"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {Object.entries(remoteStreams).map(([socketId, streams]) => {
-                    const peer = peers.find((p) => p.socketId === socketId)
-                    const label = peer ? peer.username : '...'
-                    return (
-                      <div key={socketId} className="peer-tiles-group">
-                        {streams.mainStream && (
-                          <RemoteCameraTile
-                            stream={streams.mainStream}
-                            label={label}
-                            cameraOn={peer ? peer.cameraOn : false}
-                            micOn={peer ? !peer.muted : false}
-                            isEnlarged={enlargedTile === `${socketId}-camera`}
-                            onToggleEnlarge={() => toggleEnlarge(`${socketId}-camera`)}
-                            onOpenVolumeMenu={(e) => label && openVolumePopup(label, e)}
-                            ping={peerPings[socketId]}
-                            avatarUrl={peer?.avatarData}
-                          />
-                        )}
-                        {peer?.sharingScreen && streams.screenStream && (
-                          <RemoteScreenTile
-                            stream={streams.screenStream}
-                            label={label}
-                            isEnlarged={enlargedTile === `${socketId}-screen`}
-                            onToggleEnlarge={() => toggleEnlarge(`${socketId}-screen`)}
-                            outputDeviceId={selectedAudioOutput}
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              <div className="chat-panel">
-                <div
-                  className={'chat-messages' + (isDraggingPhoto ? ' chat-messages--dragging' : '')}
-                  ref={chatMessagesRef}
-                  onDragOver={handleChatDragOver}
-                  onDragLeave={handleChatDragLeave}
-                  onDrop={handleChatDrop}
-                >
-                  {isDraggingPhoto && (
-                    <div className="chat-drop-hint">📷 Bırak, gönderilsin</div>
-                  )}
-                  {chatTimeline.length === 0 && (
-                    <p className="chat-empty-hint">Henüz mesaj yok, ilk mesajı sen at.</p>
-                  )}
-                  {messages.length > 0 && hasMoreHistory && (
-                    <button
-                      type="button"
-                      className="chat-load-older"
-                      onClick={handleLoadOlderMessages}
-                      disabled={isLoadingOlder}
-                    >
-                      {isLoadingOlder ? 'Yükleniyor…' : 'Daha eski mesajları göster'}
-                    </button>
-                  )}
-                  {chatTimeline.map((item, i) =>
-                    item.kind === 'photo' ? (
-                      <div key={`photo-${i}`} className="chat-message chat-message--photo">
-                        <span className="chat-message-author">{item.username}</span>
-                        <img
-                          src={item.imageData}
-                          alt="Paylaşılan fotoğraf"
-                          className="chat-photo"
-                          onClick={() => setPhotoLightbox(item.imageData)}
-                        />
-                        <span className="chat-photo-hint">📷 tek seferlik — kaydedilmiyor</span>
-                      </div>
-                    ) : (
-                      <div
-                        key={item.id || `text-${i}`}
-                        className={
-                          'chat-message chat-message--text-wrap' +
-                          (item.system ? ' chat-message--system' : '')
-                        }
-                        onContextMenu={(e) => item.id && handleMessageContextMenu(e, item.id)}
-                      >
-                        {editingMessageId === item.id ? (
-                          // YENİ: düzenleme modu — metni doğrudan burada değiştir.
-                          <div className="chat-message-edit-row" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="text"
-                              value={editingText}
-                              onChange={(e) => setEditingText(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSubmitEdit(item.id)
-                                if (e.key === 'Escape') handleCancelEdit()
-                              }}
-                              autoFocus
-                              maxLength={2000}
-                            />
-                            <button type="button" onClick={() => handleSubmitEdit(item.id)}>
-                              ✓
-                            </button>
-                            <button type="button" onClick={handleCancelEdit}>
-                              ✕
-                            </button>
-                          </div>
-                        ) : (
-                          <>
-                            <span className="chat-message-author">{item.username}</span>
-                            <span className="chat-message-time">
-                              {formatMessageTime(item.createdAt)}
-                              {item.editedAt && ' (düzenlendi)'}
-                            </span>
-                            <button
-                              type="button"
-                              className="chat-message-copy"
-                              title="Metni kopyala"
-                              onClick={() => navigator.clipboard?.writeText(item.text)}
-                            >
-                              📋
-                            </button>
-                            <span className="chat-message-text">
-                              {renderMessageTextWithMentions(item.text, displayName)}
-                            </span>
-                          </>
-                        )}
-                        {item.id &&
-                          (item.reactions?.length > 0 ||
-                            reactionPickerForMessageId === item.id) && (
-                          <div className="chat-reactions" onClick={(e) => e.stopPropagation()}>
-                            {Object.entries(
-                              (item.reactions || []).reduce((acc, r) => {
-                                acc[r.emoji] = acc[r.emoji] || []
-                                acc[r.emoji].push(r.username)
-                                return acc
-                              }, {})
-                            ).map(([emoji, usernames]) => (
-                              <button
-                                key={emoji}
-                                type="button"
-                                className={
-                                  'reaction-pill' +
-                                  (usernames.includes(displayName) ? ' reaction-pill--mine' : '')
-                                }
-                                onClick={() => handleToggleReaction(item.id, emoji)}
-                                title={usernames.join(', ')}
-                              >
-                                {emoji} {usernames.length}
-                              </button>
-                            ))}
-                            {reactionPickerForMessageId === item.id && (
-                              <div
-                                className={
-                                  'reaction-picker reaction-picker--open' +
-                                  (reactionPickerBelow ? ' reaction-picker--below' : '')
-                                }
-                              >
-                                {QUICK_REACTIONS.map((emoji) => (
-                                  <button
-                                    key={emoji}
-                                    type="button"
-                                    className="reaction-picker-option"
-                                    onClick={() => {
-                                      handleToggleReaction(item.id, emoji)
-                                      setReactionPickerForMessageId(null)
-                                    }}
-                                >
-                                  {emoji}
-                                </button>
-                              ))}
-                              {/* Silme kendi mesajınla sınırlı değil: platform
-                                  yöneticisi ve sunucunun sahibi BAŞKASININ mesajını
-                                  da tek tıkla silebiliyor (moderasyon). Düzenleme
-                                  hâlâ sadece kendi mesajın için. */}
-                              {(item.username === displayName || canModerateActiveServer) && (
-                                <span className="reaction-picker-divider" />
-                              )}
-                              {item.username === displayName && (
-                                <button
-                                  type="button"
-                                  className="reaction-picker-option"
-                                  title="Düzenle"
-                                  onClick={() => handleStartEdit(item)}
-                                >
-                                  ✏️
-                                </button>
-                              )}
-                              {(item.username === displayName || canModerateActiveServer) && (
-                                <button
-                                  type="button"
-                                  className="reaction-picker-option"
-                                  title="Sil"
-                                  onClick={() => handleDeleteMessage(item.id)}
-                                >
-                                  🗑️
-                                </button>
-                              )}
-                            </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  )}
-                  {typingUsers.length > 0 && (
-                    <p className="chat-typing-indicator">
-                      {typingUsers.join(', ')} yazıyor…
-                    </p>
-                  )}
-                </div>
-                <form className="chat-input-form" onSubmit={handleSendMessage}>
-                  <input
-                    ref={photoFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={handlePhotoFileSelected}
-                  />
-                  <button
-                    type="button"
-                    className="chat-photo-button"
-                    onClick={handlePhotoButtonClick}
-                    disabled={isSendingPhoto}
-                    title="Fotoğraf paylaş (kaydedilmez, sadece anlık)"
-                  >
-                    {isSendingPhoto ? '…' : '📷'}
-                  </button>
-                  <div className="chat-input-wrapper">
-                    {/* YENİ: @ yazarken üye önerisi — mesajın sonuna
-                        birini ya da @all'ı kolayca etiketleyebilesin diye. */}
-                    {mentionCandidates.length > 0 && (
-                      <div className="mention-suggestions">
-                        {mentionCandidates.map((c) => (
-                          <button
-                            key={c.username}
-                            type="button"
-                            className="mention-suggestion-option"
-                            onMouseDown={(e) => {
-                              e.preventDefault() // input'un focus'unu kaybetmesin
-                              insertMention(c.username)
-                            }}
-                          >
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <input
-                      ref={chatInputRef}
-                      type="text"
-                      value={chatInput}
-                      onChange={handleChatInputChange}
-                      onPaste={handleChatInputPaste}
-                      placeholder="Mesaj yaz… (fotoğraf yapıştırabilirsin, @ ile etiketleyebilirsin)"
-                      maxLength={2000}
-                    />
-                  </div>
-                  <button type="submit">Gönder</button>
-                </form>
-              </div>
-            </div>
-
-            {/* YENİ: Discord tarzı üye listesi — online (seste olanlar
-                işaretli) + offline (daha önce burada olmuş ama şu an
-                bağlı olmayanlar). */}
-            <aside
-              className={
-                'member-list-panel' + (mobileMembersOpen ? ' member-list-panel--open' : '')
-              }
-            >
-              <button
-                type="button"
-                className="mobile-drawer-close"
-                onClick={() => setMobileMembersOpen(false)}
-                aria-label="Kapat"
-              >
-                ✕
-              </button>
-              <div className="member-list-section">
-                <h3>Çevrimiçi — {onlineMembers.length}</h3>
-                <ul>
-                  {onlineMembers.map((m) => (
-                    <li
-                      key={m.username}
-                      className="member-item member-item--online"
-                      onContextMenu={(e) => m.username !== displayName && openVolumePopup(m.username, e)}
-                      title={m.username !== displayName ? 'Ses seviyesini ayarlamak için sağ tıkla' : undefined}
-                    >
-                      <span className="member-status-dot member-status-dot--online" />
-                      {m.avatarData ? (
-                        <img src={m.avatarData} alt="" className="member-item-avatar" />
-                      ) : (
-                        <span className="member-item-avatar member-item-avatar--empty">
-                          {m.username.charAt(0).toUpperCase()}
-                        </span>
-                      )}
-                      {m.username}{' '}
-                      {m.inVoice && (
-                        <span
-                          title={`Seste: #${channels.find((c) => c.id === m.voiceChannelId)?.name ?? '…'}`}
-                        >
-                          🎙️
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              {offlineMembers.length > 0 && (
-                <div className="member-list-section">
-                  <h3>Çevrimdışı — {offlineMembers.length}</h3>
-                  <ul>
-                    {offlineMembers.map((m) => (
-                      <li
-                        key={m.username}
-                        className="member-item member-item--offline"
-                        onContextMenu={(e) => openVolumePopup(m.username, e)}
-                        title="Ses seviyesini ayarlamak için sağ tıkla"
-                      >
-                        <span className="member-status-dot member-status-dot--offline" />
-                        {m.avatarData ? (
-                          <img src={m.avatarData} alt="" className="member-item-avatar" />
-                        ) : (
-                          <span className="member-item-avatar member-item-avatar--empty">
-                            {m.username.charAt(0).toUpperCase()}
-                          </span>
-                        )}
-                        {m.username}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </aside>
-          </div>
-        )}
+        {mainContent}
       </main>
 
+      {showAppSettings && (
+        <SettingsScreen
+          initialPage={settingsInitialPage}
+          onClose={() => setShowAppSettings(false)}
+          onLogout={handleLogout}
+          account={{
+            displayName,
+            avatarUrl: myAvatar,
+            onAvatarFile: uploadAvatar,
+            isUploadingAvatar,
+            avatarError: avatarUploadError,
+          }}
+          audio={{
+            inputs: audioInputs,
+            outputs: audioOutputs,
+            selectedInput: selectedAudioInput,
+            selectedOutput: selectedAudioOutput,
+            onSelectInput: setSelectedAudioInput,
+            onSelectOutput: setSelectedAudioOutput,
+            isTestingMic,
+            micLevel: micTestLevel,
+            onTestMic: testMicrophone,
+            onTestTone: playTestTone,
+            outputError: outputDeviceError,
+          }}
+          ptt={{ enabled: pttEnabled, key: pttKey, isCapturing: isCapturingPttKey, onToggle: handleTogglePtt }}
+          appearance={{
+            theme,
+            onThemeChange: setTheme,
+            zoomLevel,
+            onZoomIn: zoomIn,
+            onZoomOut: zoomOut,
+            onZoomReset: zoomReset,
+            isFullscreen,
+            onToggleFullscreen: toggleFullscreen,
+          }}
+          update={{
+            appVersion,
+            ready: updateReady,
+            version: updateInfo?.version,
+            message: updateCheckMessage,
+            onInstall: () => window.electronAPI?.installUpdate(),
+            onCheck: () => {
+              setUpdateCheckMessage('Kontrol ediliyor…')
+              window.electronAPI?.checkForUpdates()
+            },
+          }}
+          server={
+            activeServerIsOwner
+              ? {
+                  name: activeServerName,
+                  members: serverMembers,
+                  onRemoveMember: removeServerMember,
+                  onShowInvite: openServerInvitePopover,
+                  onDelete: () => setConfirmDeleteServer(true),
+                }
+              : null
+          }
+          admin={
+            isAdmin
+              ? {
+                  users: allUsers,
+                  isLoadingUsers,
+                  usersError: userManagementError,
+                  roleInputs: roleInputByUser,
+                  onRoleInputChange: (targetUsername, value) =>
+                    setRoleInputByUser((prev) => ({ ...prev, [targetUsername]: value })),
+                  onAddRole: addRoleToUser,
+                  onRemoveRole: removeRoleFromUser,
+                  onUnlock: unlockUserLogin,
+                  bans: bannedIps,
+                  isLoadingBans: isLoadingBannedIps,
+                  onUnban: unbanIp,
+                }
+              : null
+          }
+        />
+      )}
+
       {screenSourceOptions && (
-        <div className="screen-picker-overlay">
-          <div className="screen-picker-modal">
-            <h2>Neyi paylaşmak istersin?</h2>
-            <div className="screen-picker-grid">
-              {screenSourceOptions.map((source) => (
-                <button
-                  key={source.id}
-                  className="screen-picker-item"
-                  onClick={() => handleSelectScreenSource(source.id)}
-                >
-                  <img src={source.thumbnailDataUrl} alt={source.name} />
-                  <span>{source.name}</span>
-                </button>
-              ))}
-            </div>
-            <button className="screen-picker-cancel" onClick={handleCancelScreenSource}>
-              İptal
-            </button>
-          </div>
-        </div>
+        <ScreenPicker sources={screenSourceOptions} onSelect={handleSelectScreenSource} onCancel={handleCancelScreenSource} />
       )}
 
       {volumePopup && (
-        <div
-          className="volume-popup volume-popup--floating"
-          style={{ left: volumePopup.x, top: volumePopup.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="volume-popup-header">
-            <span>{volumePopup.username} — ses seviyesi</span>
-            <button className="volume-popup-close" onClick={() => setVolumePopup(null)}>
-              ✕
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="200"
-            value={peerVolumes[volumePopup.username] ?? 100}
-            onChange={(e) => setPeerVolume(volumePopup.username, Number(e.target.value))}
-          />
-          <div className="volume-popup-value">{peerVolumes[volumePopup.username] ?? 100}%</div>
-        </div>
+        <VolumePopover
+          username={volumePopup.username}
+          x={volumePopup.x}
+          y={volumePopup.y}
+          volume={peerVolumes[volumePopup.username] ?? 100}
+          onChange={(value) => setPeerVolume(volumePopup.username, value)}
+          onClose={() => setVolumePopup(null)}
+        />
       )}
 
-      {/* YENİ: genel/kalıcı ayarlar penceresi — şimdilik sadece
-          kişiselleştirme (renk teması), ileride büyüyecek bir yer. */}
-      {photoLightbox && (
-        <div
-          className="photo-lightbox"
-          role="dialog"
-          aria-label="Fotoğraf"
-          onClick={() => setPhotoLightbox(null)}
-        >
-          <img src={photoLightbox} alt="Paylaşılan fotoğraf" />
-        </div>
-      )}
+      {photoLightbox && <PhotoLightbox src={photoLightbox} onClose={() => setPhotoLightbox(null)} />}
 
-      {showAppSettings && (
-        <div
-          className="app-settings-backdrop"
-          onClick={() => setShowAppSettings(false)}
-        >
-          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="app-settings-modal-header">
-              <h3>Ayarlar</h3>
-              <button
-                type="button"
-                className="app-settings-close"
-                onClick={() => setShowAppSettings(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <section className="app-settings-section">
-              <h4>Profil</h4>
-              <div className="avatar-picker-row">
-                {myAvatar ? (
-                  <img src={myAvatar} alt="" className="avatar-picker-preview" />
-                ) : (
-                  <div className="avatar-picker-preview avatar-picker-preview--empty">
-                    {displayName.charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div>
-                  <input
-                    ref={avatarFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={handleAvatarFileSelected}
-                  />
-                  <button
-                    type="button"
-                    className="device-settings-test-button"
-                    onClick={() => avatarFileInputRef.current?.click()}
-                    disabled={isUploadingAvatar}
-                  >
-                    {isUploadingAvatar ? 'Yükleniyor…' : '🖼️ Profil fotoğrafı seç'}
-                  </button>
-                  {avatarUploadError && (
-                    <p className="device-settings-error">{avatarUploadError}</p>
-                  )}
-                </div>
-              </div>
-              <p className="app-settings-hint">{displayName} olarak bağlısın.</p>
-              <button type="button" className="device-settings-test-button" onClick={handleLogout}>
-                🚪 Çıkış Yap
-              </button>
-            </section>
-            <section className="app-settings-section">
-              <h4>Ses Cihazları</h4>
-              <label>
-                🎤 Mikrofon
-                <select
-                  value={selectedAudioInput}
-                  onChange={(e) => setSelectedAudioInput(e.target.value)}
-                >
-                  <option value="">Varsayılan</option>
-                  {audioInputs.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || 'Mikrofon'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {/* YENİ: mikrofon testi — konuşunca çubuğun hareket etmesi
-                  lazım, mikrofonun gerçekten ses aldığını (ve doğru cihazın
-                  seçili olduğunu) hoparlöre hiç bağlanmadan (yankı olmasın
-                  diye) doğrulamak için. */}
-              <div className="mic-test-row">
-                <button type="button" className="device-settings-test-button" onClick={testMicrophone}>
-                  {isTestingMic ? '⏹️ Testi durdur' : '🎤 Mikrofonu test et'}
-                </button>
-                {isTestingMic && (
-                  <div className="mic-test-meter">
-                    <div className="mic-test-meter-fill" style={{ width: `${micTestLevel}%` }} />
-                  </div>
-                )}
-              </div>
-              <label>
-                🔊 Hoparlör
-                <select
-                  value={selectedAudioOutput}
-                  onChange={(e) => setSelectedAudioOutput(e.target.value)}
-                >
-                  <option value="">Varsayılan</option>
-                  {audioOutputs.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || 'Hoparlör'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {selectedAudioInput && (
-                <p className="device-settings-hint">
-                  Mikrofon değişikliği bir sonraki mikrofon açışında uygulanır.
-                </p>
-              )}
-              {outputDeviceError && <p className="device-settings-error">{outputDeviceError}</p>}
-              {/* YENİ: karşı taraf olmadan, sesli sohbetle AYNI çıkış yolunu
-                  test etmek için — duyuyorsan sorun yönlendirmede değil,
-                  duymuyorsan seçili cihaz/işletim sistemi tarafında. */}
-              <button type="button" className="device-settings-test-button" onClick={playTestTone}>
-                🔊 Test sesi çal
-              </button>
-            </section>
-
-            <section className="app-settings-section">
-              <h4>Bas Konuş</h4>
-              <p className="app-settings-hint">
-                Etkinleştirirsen mikrofonun sürekli açık olmaz — sadece
-                atadığın tuşa bastığın sürece sesin gider.
-              </p>
-              <button type="button" className="device-settings-test-button" onClick={handleTogglePtt}>
-                {pttEnabled ? `🎯 Bas-konuş: ${formatKeyCode(pttKey)} — kapat` : '🎯 Bas-konuşu etkinleştir'}
-              </button>
-              {isCapturingPttKey && (
-                <p className="app-settings-hint">Bas-konuş için bir tuşa bas…</p>
-              )}
-            </section>
-
-            <section className="app-settings-section">
-              <h4>Kişiselleştirme</h4>
-              <p className="app-settings-hint">Vurgu rengini seç — tüm arayüz buna göre boyanır.</p>
-              <div className="theme-swatch-row">
-                {THEMES.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={'theme-swatch' + (theme === t.id ? ' theme-swatch--active' : '')}
-                    style={{ '--swatch-color': t.color }}
-                    onClick={() => setTheme(t.id)}
-                    title={t.label}
-                  >
-                    <span className="theme-swatch-dot" />
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-              {IS_DESKTOP_APP && (
-                <>
-                  <p className="app-settings-hint">Yakınlaştırma (Ctrl + ve Ctrl − ile de olur):</p>
-                  <ZoomControl
-                    zoomLevel={zoomLevel}
-                    onZoomOut={zoomOut}
-                    onZoomIn={zoomIn}
-                    onReset={zoomReset}
-                    isFullscreen={isFullscreen}
-                    onToggleFullscreen={toggleFullscreen}
-                  />
-                </>
-              )}
-            </section>
-
-            {/* YENİ: aktif sunucunun sahibiyse (platform-geneli "Üye
-                Yönetimi"nden AYRI) sadece BU sunucunun üyelerini gösterip
-                çıkarabilme (kick) imkânı. */}
-            {activeServerIsOwner && (
-              <section className="app-settings-section">
-                <h4>Sunucu Üyeleri — {activeServerName}</h4>
-                <p className="app-settings-hint">
-                  Bu sunucudaki üyeler. Sunucu sahibi çıkarılamaz.
-                </p>
-                <div className="user-management-list">
-                  {serverMembers.map((m) => (
-                    <div key={m.username} className="user-management-row">
-                      <span>
-                        {m.username}
-                        {m.isOwner && ' 👑'}
-                      </span>
-                      {!m.isOwner && (
-                        <button
-                          type="button"
-                          className="device-settings-test-button"
-                          onClick={() => removeServerMember(m.username)}
-                        >
-                          Çıkar
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="device-settings-test-button"
-                  onClick={handleDeleteServer}
-                >
-                  🗑️ Sunucuyu Sil
-                </button>
-              </section>
-            )}
-
-            {/* YENİ: Discord tarzı otomatik güncelleme durumu + manuel
-                kontrol düğmesi. Kenar çubuğundaki bildirim otomatik
-                çıkıyor zaten — bu sadece "şu an hangi sürümdeyim, elle
-                kontrol edeyim" için. */}
-            <section className="app-settings-section">
-              <h4>Güncelleme</h4>
-              <p className="app-settings-hint">
-                Şu anki sürüm: {appVersion || '…'}
-                {updateReady && updateInfo?.version && ` — ${updateInfo.version} hazır`}
-              </p>
-              {updateReady ? (
-                <button
-                  type="button"
-                  className="device-settings-test-button"
-                  onClick={() => window.electronAPI?.installUpdate()}
-                >
-                  🆕 Yeniden başlat ve güncelle
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="device-settings-test-button"
-                  onClick={() => {
-                    setUpdateCheckMessage('Kontrol ediliyor…')
-                    window.electronAPI?.checkForUpdates()
-                  }}
-                >
-                  🔄 Güncellemeleri kontrol et
-                </button>
-              )}
-              {updateCheckMessage && <p className="app-settings-hint">{updateCheckMessage}</p>}
-            </section>
-
-            {/* YENİ: Alganis rolü için üye/rol yönetimi — sadece admin
-                görüyor. Kayıtlı TÜM kullanıcılar (hiç çevrimiçi olmasalar
-                bile) listelenip rol eklenip/çıkarılabiliyor. */}
-            {isAdmin && (
-              <section className="app-settings-section">
-                <h4>Üye Yönetimi</h4>
-                <p className="app-settings-hint">
-                  Kayıtlı kullanıcılara rol ekle/çıkar (ör. bir kanala erişim vermek için).
-                </p>
-                {isLoadingUsers && <p className="app-settings-hint">Yükleniyor…</p>}
-                {userManagementError && (
-                  <p className="device-settings-error">{userManagementError}</p>
-                )}
-                <div className="user-management-list">
-                  {allUsers.map((u) => (
-                    <div key={u.username} className="user-management-row">
-                      <span className="user-management-name">
-                        {u.username}
-                        {/* YENİ: 5 yanlış şifreden sonra otomatik kilitlenen
-                            hesapları burada görüp erken açabilesin diye. */}
-                        {u.isLoginLocked && (
-                          <button
-                            type="button"
-                            className="lock-badge"
-                            onClick={() => unlockUserLogin(u.username)}
-                            title="Hesap kilitli (çok fazla yanlış şifre) — açmak için tıkla"
-                          >
-                            🔒 Kilidi aç
-                          </button>
-                        )}
-                      </span>
-                      <div className="user-management-roles">
-                        {u.roles.map((role) => (
-                          <span key={role} className="role-chip">
-                            {role}
-                            <button
-                              type="button"
-                              onClick={() => removeRoleFromUser(u.username, role)}
-                              title="Rolü kaldır"
-                            >
-                              ✕
-                            </button>
-                          </span>
-                        ))}
-                        <input
-                          type="text"
-                          className="role-input"
-                          placeholder="+ rol"
-                          value={roleInputByUser[u.username] || ''}
-                          onChange={(e) =>
-                            setRoleInputByUser((prev) => ({
-                              ...prev,
-                              [u.username]: e.target.value,
-                            }))
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              addRoleToUser(u.username)
-                            }
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* YENİ: kayıt ekranına saldırı niteliğinde deneme yapıp
-                kalıcı banlanan IP'ler burada — yanlışlıkla banlanan biri
-                (ör. bir arkadaş) varsa buradan banı kaldırabilirsin. */}
-            {isAdmin && (
-              <section className="app-settings-section">
-                <h4>Güvenlik</h4>
-                <p className="app-settings-hint">
-                  Kayıt ekranında çok fazla yanlış davet kodu deneyen, kalıcı banlanmış IP'ler.
-                </p>
-                {isLoadingBannedIps && <p className="app-settings-hint">Yükleniyor…</p>}
-                {bannedIps.length === 0 && !isLoadingBannedIps && (
-                  <p className="app-settings-hint">Banlı IP yok.</p>
-                )}
-                <div className="user-management-list">
-                  {bannedIps.map((b) => (
-                    <div key={b.ip} className="user-management-row">
-                      <span className="user-management-name">{b.ip}</span>
-                      <p className="app-settings-hint">
-                        {b.reason} — {b.attemptCount} deneme
-                      </p>
-                      <button
-                        type="button"
-                        className="device-settings-test-button"
-                        onClick={() => unbanIp(b.ip)}
-                      >
-                        Banı kaldır
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* YENİ: sunucu oluştur/katıl modalı — sunucu şeridindeki "+" ile
-          açılıyor. */}
       {showServerModal && (
-        <div className="app-settings-backdrop" onClick={() => setShowServerModal(false)}>
-          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="app-settings-modal-header">
-              <h3>Sunucu Oluştur / Katıl</h3>
-              <button className="app-settings-close" onClick={() => setShowServerModal(false)}>
-                ✕
-              </button>
-            </div>
-            <div className="server-modal-tabs">
-              <button
-                type="button"
-                className={
-                  'server-modal-tab' + (serverModalTab === 'create' ? ' server-modal-tab--active' : '')
-                }
-                onClick={() => {
-                  setServerModalTab('create')
-                  setServerModalError(null)
-                }}
-              >
-                Oluştur
-              </button>
-              <button
-                type="button"
-                className={
-                  'server-modal-tab' + (serverModalTab === 'join' ? ' server-modal-tab--active' : '')
-                }
-                onClick={() => {
-                  setServerModalTab('join')
-                  setServerModalError(null)
-                }}
-              >
-                Katıl
-              </button>
-            </div>
-            {serverModalTab === 'create' ? (
-              <section className="app-settings-section">
-                {myServers.some((s) => s.isOwner) ? (
-                  <p className="app-settings-hint">
-                    Zaten bir sunucun var — kişi başı yalnızca 1 sunucu açılabilir.
-                  </p>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      className="app-settings-input"
-                      value={newServerName}
-                      onChange={(e) => setNewServerName(e.target.value)}
-                      placeholder="Sunucu adı"
-                      maxLength={50}
-                    />
-                    <button
-                      type="button"
-                      className="device-settings-test-button"
-                      onClick={handleCreateServer}
-                      disabled={serverModalBusy}
-                    >
-                      Sunucu Oluştur
-                    </button>
-                  </>
-                )}
-              </section>
-            ) : (
-              <section className="app-settings-section">
-                <input
-                  type="text"
-                  className="app-settings-input"
-                  value={joinInviteCode}
-                  onChange={(e) => setJoinInviteCode(e.target.value)}
-                  placeholder="Davet kodu"
-                />
-                <button
-                  type="button"
-                  className="device-settings-test-button"
-                  onClick={handleJoinServer}
-                  disabled={serverModalBusy}
-                >
-                  Sunucuya Katıl
-                </button>
-              </section>
-            )}
-            {serverModalError && <p className="device-settings-error">{serverModalError}</p>}
-          </div>
-        </div>
+        <ServerDialog
+          initialTab={serverModalTab}
+          hasOwnServer={myServers.some((s) => s.isOwner)}
+          busy={serverModalBusy}
+          error={serverModalError}
+          onCreate={handleCreateServer}
+          onJoin={handleJoinServer}
+          onClose={() => setShowServerModal(false)}
+        />
       )}
 
-      {/* YENİ: sunucu davet kodu popover'ı — sadece sahibiyken (🔗
-          düğmesiyle) açılabiliyor. */}
       {serverInvitePopover && (
-        <div className="app-settings-backdrop" onClick={() => setServerInvitePopover(null)}>
-          <div className="app-settings-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="app-settings-modal-header">
-              <h3>Sunucu Daveti</h3>
-              <button
-                className="app-settings-close"
-                onClick={() => setServerInvitePopover(null)}
-              >
-                ✕
-              </button>
-            </div>
-            <section className="app-settings-section">
-              <p className="app-settings-hint">
-                Bu kodu paylaş — hesabı olan biri "Sunucu Oluştur / Katıl" &gt; "Katıl" ile bu
-                sunucuya katılabilir.
-              </p>
-              <input
-                type="text"
-                className="app-settings-input"
-                value={serverInvitePopover.code}
-                readOnly
-                onClick={(e) => e.target.select()}
-              />
-              <button
-                type="button"
-                className="device-settings-test-button"
-                onClick={() => navigator.clipboard?.writeText(serverInvitePopover.code)}
-              >
-                📋 Kopyala
-              </button>
-            </section>
-          </div>
-        </div>
+        <InviteDialog serverName={activeServerName} code={serverInvitePopover.code} onClose={() => setServerInvitePopover(null)} />
       )}
 
-      {/* YENİ: bir IP kalıcı banlandığında (Alganis şu an bağlıysa) çıkan
-          anlık uyarı — "kim banlandı" bilgisi net görünsün diye. */}
-      {securityAlert && (
-        <div className="security-alert-backdrop" onClick={() => setSecurityAlert(null)}>
-          <div className="security-alert-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>🚨 Güvenlik uyarısı</h3>
-            <p>
-              <strong>{securityAlert.ip}</strong> adresi kalıcı olarak banlandı.
-            </p>
-            <p className="app-settings-hint">
-              Sebep: {securityAlert.reason} ({securityAlert.attemptCount} deneme)
-            </p>
-            <p className="app-settings-hint">
-              Bu bir arkadaşın yanlışlıkla tetiklediği bir şeyse, Ayarlar &gt; Güvenlik'ten banı
-              kaldırabilirsin.
-            </p>
-            <button
-              type="button"
-              className="device-settings-test-button"
-              onClick={() => setSecurityAlert(null)}
-            >
-              Tamam
-            </button>
-          </div>
-        </div>
+      {createChannelDialog && (
+        <CreateChannelDialog
+          busy={createChannelDialog.busy}
+          error={createChannelDialog.error}
+          onCreate={handleCreateChannel}
+          onClose={() => setCreateChannelDialog(null)}
+        />
       )}
+
+      {confirmDeleteServer && (
+        <ConfirmDialog
+          title={`${activeServerName} silinsin mi?`}
+          message="Sunucunun bütün kanalları ve mesajları da silinecek. Bu geri alınamaz."
+          confirmLabel="Sunucuyu sil"
+          onConfirm={handleDeleteServer}
+          onClose={() => setConfirmDeleteServer(false)}
+        />
+      )}
+
+      {securityAlert && <SecurityAlertDialog alert={securityAlert} onClose={() => setSecurityAlert(null)} />}
     </div>
   )
 }

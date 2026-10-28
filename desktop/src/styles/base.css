@@ -1,0 +1,532 @@
+/* ------------------------------------------------------------
+   TEMA: "Gece kulübü" — çok koyu bir mor gece zemin, seçilebilir tek
+   vurgu rengi (varsayılan Mercan) ve sadece "konuşuyor / canlı" için
+   kullanılan Spot ışığı. Bütün metin renkleri zeminlerde en az 4,5:1
+   kontrast veriyor.
+------------------------------------------------------------ */
+
+:root {
+  color-scheme: dark;
+
+  /* Zeminler: en koyudan en açığa */
+  --gece: #120e18; /* sunucu şeridi, ses sahnesi */
+  --loca: #16111d; /* kenar çubukları */
+  --sahne: #1a1522; /* sohbet alanı */
+  --kabin: #241d2e; /* yazma alanı, seçili öğe */
+  --kabin-hover: #2d2539;
+  --cizgi: #342b40;
+
+  /* Metin */
+  --metin: #f1ecf6;
+  --metin-mesaj: #e4deec;
+  --ikincil: #b3a9c2;
+  --soluk: #958aa6;
+
+  /* Vurgu (Ayarlar > Görünüm'den değişiyor) ve sabit anlamlı renkler */
+  --accent: #f2726c;
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, white);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --on-accent: #120e18;
+  --spot: #66e0c2;
+  --spot-glow: rgb(102 224 194 / 45%);
+  --tehlike: #e5484d;
+  --tehlike-hover: #ef6064;
+  --tehlike-soft: rgb(229 72 77 / 16%);
+  --cevrimici: #3fb97c;
+  --uyari: #e6b84a;
+
+  --font-display: 'Unbounded Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Onest Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-pop: 0 12px 30px rgb(0 0 0 / 45%);
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --header-height: 54px;
+}
+
+/* Renk temaları: sadece vurgu değişiyor. Zemin ve metin şeması ile
+   "tehlike", "çevrimiçi" ve "konuşuyor" renkleri BİLEREK sabit —
+   anlamları temaya göre kaymamalı. Yeni tema: buraya bir blok,
+   lib/config.js'teki THEMES'e bir satır. */
+:root[data-theme='mor'] {
+  --accent: #a98af7;
+}
+:root[data-theme='mavi'] {
+  --accent: #6ea8f7;
+}
+:root[data-theme='yesil'] {
+  --accent: #5cc08a;
+}
+:root[data-theme='amber'] {
+  --accent: #e6b04a;
+}
+:root[data-theme='pembe'] {
+  --accent: #f47fb0;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Telefonda 100vh adres çubuğunun altında kalıyordu (H27). */
+html {
+  height: 100dvh;
+}
+
+body {
+  background: var(--gece);
+  color: var(--metin);
+  font: 400 15px/1.45 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+img {
+  display: block;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--kabin) transparent;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  stroke-width: 2;
+}
+
+/* ---------------- Düğmeler ---------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s, transform 0.1s;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+}
+
+.btn--secondary {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: var(--kabin-hover);
+}
+
+.btn--danger {
+  background: var(--tehlike);
+  color: #fff;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--tehlike-hover);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--ikincil);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.btn--small {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ikincil);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.icon-btn:hover:not(:disabled),
+.icon-btn[aria-expanded='true'],
+.icon-btn[aria-pressed='true'] {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+}
+
+.icon-btn--off,
+.icon-btn--off:hover:not(:disabled) {
+  color: var(--tehlike);
+}
+
+.icon-btn--danger:hover:not(:disabled) {
+  background: var(--tehlike-soft);
+  color: var(--tehlike);
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---------------- Form alanları ---------------- */
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ikincil);
+}
+
+.input,
+.select {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--gece);
+  color: var(--metin);
+  transition: border-color 0.15s;
+}
+
+.input::placeholder {
+  color: var(--soluk);
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--cizgi);
+}
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--soluk);
+}
+
+.form-error {
+  margin: 0;
+  font-size: 13px;
+  color: #ff8e8a;
+}
+
+.form-success {
+  margin: 0;
+  font-size: 13px;
+  color: var(--spot);
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--ikincil);
+  cursor: pointer;
+}
+
+.checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* ---------------- Avatar ---------------- */
+
+.avatar {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--size, 36px);
+  height: var(--size, 36px);
+  border-radius: 50%;
+  background: var(--c, var(--soluk));
+  color: var(--gece);
+  font: 600 calc(var(--size, 36px) * 0.4) / 1 var(--font-display);
+  user-select: none;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatar--xs {
+  --size: 22px;
+}
+.avatar--sm {
+  --size: 32px;
+}
+.avatar--md {
+  --size: 40px;
+}
+.avatar--lg {
+  --size: 72px;
+}
+.avatar--xl {
+  --size: 96px;
+}
+
+.status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 38%;
+  height: 38%;
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 50%;
+  background: var(--cevrimici);
+  box-shadow: 0 0 0 3px var(--ring-bg, var(--loca));
+}
+
+.status-dot--offline {
+  background: var(--soluk);
+}
+
+/* İmza ("dans pisti"): konuşan kişinin avatarı Spot ışığıyla nabız gibi
+   atıyor. Hareket azaltma açıksa sabit bir halka kalıyor. */
+.avatar.is-speaking {
+  box-shadow: 0 0 0 2px var(--ring-bg, var(--loca)), 0 0 0 4px var(--spot);
+  animation: speaking-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes speaking-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--ring-bg, var(--loca)), 0 0 0 4px var(--spot);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--ring-bg, var(--loca)), 0 0 0 4px var(--spot-glow);
+  }
+}
+
+/* ---------------- Açılır kutular ---------------- */
+
+.popover {
+  z-index: 40;
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-lg);
+  background: var(--loca);
+  box-shadow: var(--shadow-pop);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ikincil);
+  font-size: 14px;
+  text-align: left;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.menu-item--danger,
+.menu-item--danger:hover {
+  color: #ff8e8a;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--cizgi);
+}
+
+/* ---------------- Pencereler (dialog) ---------------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(8 6 12 / 72%);
+  animation: fade-in 0.15s ease-out;
+}
+
+.dialog {
+  width: min(440px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  padding: 24px;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-xl);
+  background: var(--sahne);
+  box-shadow: var(--shadow-pop);
+  animation: rise-in 0.2s var(--ease-out);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.dialog-title {
+  margin: 0;
+  font: 600 18px/1.3 var(--font-display);
+}
+
+.dialog-body {
+  display: grid;
+  gap: 14px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,396 @@
+/* Ses sahnesi ve imza: "dans pisti". Konuşan kişinin avatarının etrafında
+   disko topundan yansıyan ışık gibi dönen bir halka, kutucukta süzülen
+   ışık benekleri. Hareket azaltma açıksa halka sabit kalıyor. */
+
+.voice-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--gece);
+}
+
+.stage-area {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 16px 100px;
+}
+
+/* Kutucukların boyu VoiceStage.jsx'te sahnenin boyutuna göre hesaplanıyor. */
+.stage-grid {
+  height: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* ---------------- Kutucuk ---------------- */
+
+.tile {
+  position: relative;
+  width: var(--tile-width);
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--sahne);
+  cursor: zoom-in;
+  transition: box-shadow 0.2s;
+}
+
+.tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px transparent;
+  pointer-events: none;
+  transition: box-shadow 0.2s;
+}
+
+.tile.is-speaking {
+  box-shadow: 0 0 40px -12px var(--spot);
+}
+
+.tile.is-speaking::after {
+  box-shadow: inset 0 0 0 2px var(--spot);
+}
+
+.tile video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tile--local video.local-video:not(.local-video--screen) {
+  transform: scaleX(-1);
+}
+
+.tile--screen {
+  background: #000;
+}
+
+.tile--screen video {
+  object-fit: contain;
+}
+
+.tile-avatar {
+  position: relative;
+  z-index: 1;
+}
+
+.tile-avatar .avatar {
+  --ring-bg: var(--sahne);
+}
+
+.speaking-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.speaking-ring::before,
+.speaking-ring::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+/* Disko topunun aynaları: halkaya dizilmiş ışık parçaları. */
+.speaking-ring::before {
+  inset: -14px;
+  background: repeating-conic-gradient(var(--spot) 0 6deg, transparent 6deg 14deg);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+}
+
+.speaking-ring::after {
+  inset: -5px;
+  box-shadow:
+    0 0 0 2px var(--spot),
+    0 0 28px 2px var(--spot-glow);
+}
+
+.speaking-ring.is-on::before {
+  opacity: 1;
+  animation: ring-spin 9s linear infinite;
+}
+
+.speaking-ring.is-on::after {
+  opacity: 1;
+  animation: ring-glow 1.4s ease-in-out infinite;
+}
+
+.tile-specks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgb(102 224 194 / 55%) 0 1.6px, transparent 2.4px),
+    radial-gradient(circle, rgb(255 255 255 / 35%) 0 1.2px, transparent 2px);
+  background-size: 74px 62px, 52px 88px;
+  background-position: 0 0, 26px 30px;
+  opacity: 0.55;
+  animation:
+    specks-drift 14s linear infinite,
+    fade-in 0.4s ease-out;
+}
+
+@keyframes ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes specks-drift {
+  to {
+    background-position: 74px 62px, -26px 118px;
+  }
+}
+
+.tile-tag {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 5px 9px;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: rgb(18 14 24 / 75%);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tile-muted {
+  width: 15px;
+  height: 15px;
+  color: var(--tehlike);
+}
+
+.tile-ping,
+.tile-live {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  padding: 5px 7px;
+  border-radius: var(--radius-sm);
+}
+
+.tile-ping {
+  background: rgb(18 14 24 / 75%);
+  color: var(--spot);
+  font: 500 11px/1 var(--font-mono);
+}
+
+.tile-ping--ok {
+  color: var(--uyari);
+}
+
+.tile-ping--bad {
+  color: #ff8e8a;
+}
+
+.tile-live {
+  background: var(--tehlike);
+  color: #fff;
+  font: 700 11px/1 var(--font-body);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tile-actions {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tile:hover .tile-actions,
+.tile:focus-within .tile-actions {
+  opacity: 1;
+}
+
+.tile-action {
+  background: rgb(18 14 24 / 75%);
+  color: var(--metin);
+}
+
+@media (hover: none) {
+  .tile-actions {
+    opacity: 1;
+  }
+}
+
+.video-tile--enlarged {
+  position: fixed;
+  inset: 24px;
+  width: auto;
+  aspect-ratio: auto;
+  z-index: 50;
+  cursor: zoom-out;
+}
+
+.enlarged-tile-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgb(8 6 12 / 82%);
+  animation: fade-in 0.15s ease-out;
+}
+
+/* ---------------- Kontroller ---------------- */
+
+.voice-controls {
+  position: absolute;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 4;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 18px;
+  background: var(--loca);
+  box-shadow: var(--shadow-pop);
+  translate: -50% 0;
+}
+
+.voice-control {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--kabin);
+  color: var(--metin);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.voice-control .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.voice-control:hover:not(:disabled) {
+  background: var(--kabin-hover);
+}
+
+.voice-control:disabled {
+  opacity: 0.5;
+}
+
+.voice-control--off,
+.voice-control--off:hover:not(:disabled) {
+  background: var(--tehlike-soft);
+  color: #ff8e8a;
+}
+
+.voice-control--live,
+.voice-control--live:hover:not(:disabled) {
+  background: var(--spot);
+  color: var(--gece);
+}
+
+.voice-control--leave,
+.voice-control--leave:hover:not(:disabled) {
+  width: 64px;
+  background: var(--tehlike);
+  color: #fff;
+}
+
+.voice-control--leave:hover:not(:disabled) {
+  background: var(--tehlike-hover);
+}
+
+.stage-error {
+  position: absolute;
+  right: 16px;
+  bottom: 100px;
+  left: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid rgb(229 72 77 / 40%);
+  border-radius: var(--radius-lg);
+  background: #2a1820;
+  color: #ffc2bf;
+  font-size: 14px;
+}
+
+.stage-error span {
+  flex: 1;
+}
+
+@media (max-width: 760px) {
+  .channel-body--voice .voice-stage {
+    flex: none;
+    height: 58%;
+  }
+
+  .channel-body--chat-hidden .voice-stage {
+    flex: 1;
+    height: auto;
+  }
+
+  .stage-area {
+    padding: 10px 10px 84px;
+  }
+
+  .tile-avatar .avatar--xl {
+    --size: 64px;
+  }
+
+  .voice-controls {
+    gap: 6px;
+    padding: 8px;
+    bottom: 12px;
+  }
+
+  .voice-control {
+    width: 44px;
+    height: 44px;
+  }
+
+  .voice-control--leave {
+    width: 56px;
+  }
+
+  .video-tile--enlarged {
+    inset: calc(8px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom));
+  }
+}

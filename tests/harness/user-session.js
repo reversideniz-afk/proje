@@ -18,31 +18,44 @@ export class UserSession {
 
   async login({ rememberMe = false } = {}) {
     const { page } = this
-    await page.getByPlaceholder('Kullanıcı adı').fill(this.name)
-    await page.getByPlaceholder('Şifre', { exact: true }).fill(PASSWORD)
+    await page.getByLabel('Kullanıcı adı').fill(this.name)
+    await page.getByLabel('Şifre', { exact: true }).fill(PASSWORD)
     if (rememberMe) await page.getByLabel('Beni hatırla').check()
-    await page.getByRole('button', { name: 'Giriş Yap' }).click()
+    await page.getByRole('button', { name: 'Giriş yap', exact: true }).click()
     await expect(page.locator('.whoami')).toContainText(this.name)
   }
 
   channelButton(channelName) {
-    return this.page.locator('.channel-button', { hasText: new RegExp(`^#\\s${channelName}`) })
+    return this.page.locator('.channel-list .channel-button', {
+      has: this.page.locator('.channel-name', { hasText: new RegExp(`^${channelName}$`) }),
+    })
+  }
+
+  // Ana alanın başlığındaki kanal adı.
+  channelTitle() {
+    return this.page.locator('.channel-header-title')
+  }
+
+  // Sol alttaki "Ses bağlı" paneli: seste olduğun sürece hangi kanala
+  // bakarsan bak görünüyor.
+  voicePanel() {
+    return this.page.getByRole('region', { name: 'Ses bağlantısı' })
   }
 
   async openChannel(channelName) {
     await this.channelButton(channelName).click()
-    await expect(this.page.locator('.channel-header h2')).toHaveText(`# ${channelName}`)
+    await expect(this.channelTitle()).toHaveText(channelName)
     // Sunucu kanala katıldığımızı onaylayınca kendimizi çevrimiçi listesinde görürüz.
     await expect(this.page.locator('.member-item--online', { hasText: this.name })).toBeVisible()
   }
 
   async joinVoice() {
-    await this.page.getByRole('button', { name: /Sese Katıl/ }).click()
+    await this.page.getByRole('button', { name: 'Sese katıl', exact: true }).click()
     await expect(this.leaveVoiceButton()).toBeVisible()
   }
 
   leaveVoiceButton() {
-    return this.page.locator('.leave-voice-button')
+    return this.voicePanel().getByRole('button', { name: 'Sesten çık' })
   }
 
   mediaButton(title) {
@@ -60,13 +73,13 @@ export class UserSession {
   }
 
   async send(text) {
-    await this.page.getByPlaceholder(/^Mesaj yaz/).fill(text)
+    await this.page.getByLabel('Mesaj yaz').fill(text)
     await this.page.getByRole('button', { name: 'Gönder' }).click()
   }
 
   peerTile(peerName) {
     return this.page.locator('.remote-video-wrapper', {
-      has: this.page.locator('.remote-video-label', { hasText: peerName }),
+      has: this.page.locator('.remote-video-label', { hasText: new RegExp(`^${peerName}$`) }),
     })
   }
 

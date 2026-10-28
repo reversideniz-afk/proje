@@ -84,7 +84,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     const observer = await disco.observer('genel')
     const { mert } = await mertVeEceSeste(disco)
     await mert.openChannel('oyun')
-    await expect(mert.page.locator('.voice-elsewhere-banner')).toBeVisible()
+    await expect(mert.voicePanel()).toContainText('#genel')
 
     const mark = observer.mark()
     disco.dropConnections()
@@ -95,7 +95,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
       .poll(() => voiceNames(observer.latestMembersSince(mark)), { timeout: 20_000 })
       .toEqual(['Ece', 'Mert'])
     // Ekranda hâlâ #oyun açık.
-    await expect(mert.page.locator('.channel-header h2')).toHaveText('# oyun')
+    await expect(mert.channelTitle()).toHaveText('oyun')
   })
 
   test('H2: sunucu yeniden başlayınca oturum ve kanal korunuyor', async ({ disco }) => {
@@ -206,7 +206,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     await mert.openChannel('genel')
     await mert.joinVoice()
     await mert.openChannel('oyun')
-    await expect(mert.page.locator('.voice-elsewhere-banner')).toBeVisible()
+    await expect(mert.voicePanel()).toContainText('#genel')
 
     await mert.context.close()
     await expect
@@ -226,7 +226,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     await expect.poll(async () => voiceNames(await genel.refreshMembers())).toEqual(['Mert'])
 
     await mert.channelButton('genel').click()
-    await expect(mert.page.locator('.channel-header h2')).toHaveText('# genel')
+    await expect(mert.channelTitle()).toHaveText('genel')
     await expect.poll(async () => names(await oyun.refreshMembers())).not.toContain('Mert')
     await expect.poll(async () => voiceNames(await genel.refreshMembers())).toEqual(['Mert'])
   })
@@ -286,20 +286,22 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     expect(openContexts).toBeLessThanOrEqual(2)
   })
 
-  test('H12: sayfa dili Türkçe, büyük harfler doğru ("PROFİL")', async ({ disco }) => {
+  test('H12: sayfa dili Türkçe, büyük harfler doğru ("GİRİŞ CİHAZI", "KULLANICI")', async ({ disco }) => {
     const mert = await disco.user('Mert')
     expect(await mert.page.getAttribute('html', 'lang')).toBe('tr')
     await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
     // Başlıklar CSS ile büyük harfe çevriliyor; innerText dönüşmüş hâli verir.
-    const headings = await mert.page.locator('.app-settings-section h4').allInnerTexts()
-    expect(headings).toEqual(expect.arrayContaining(['PROFİL', 'SES CİHAZLARI', 'KİŞİSELLEŞTİRME']))
+    const titles = () => mert.page.locator('.settings-nav-title, .field-label').allInnerTexts()
+    expect(await titles()).toEqual(expect.arrayContaining(['KULLANICI AYARLARI', 'UYGULAMA AYARLARI']))
+    await mert.page.getByRole('button', { name: 'Ses ve görüntü' }).click()
+    expect(await titles()).toEqual(expect.arrayContaining(['GİRİŞ CİHAZI', 'ÇIKIŞ CİHAZI']))
   })
 
   test('H13: telefonda hiçbir şey "Gönder" düğmesini kapatmıyor', async ({ disco }) => {
     const mert = await disco.user('Mert', { viewport: { width: 390, height: 844 } })
     await mert.page.getByRole('button', { name: 'Kanalları göster' }).click()
     await mert.channelButton('genel').click()
-    await expect(mert.page.locator('.channel-header h2')).toHaveText('# genel')
+    await expect(mert.channelTitle()).toHaveText('genel')
 
     // Web sürümünde yakınlaştırma kutusu yok (tarayıcının kendi yakınlaştırması var).
     await expect(mert.page.locator('.zoom-control')).toHaveCount(0)
@@ -307,7 +309,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     const send = mert.page.getByRole('button', { name: 'Gönder' })
     const box = await send.boundingBox()
     const hit = await mert.page.evaluate(
-      ({ x, y }) => document.elementFromPoint(x, y)?.closest('button')?.textContent,
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label'),
       { x: box.x + box.width / 2, y: box.y + box.height / 2 }
     )
     expect(hit).toBe('Gönder')
@@ -321,8 +323,9 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     await mert.page.keyboard.press('Control+Equal')
     await expect.poll(() => mert.probe(() => window.__disco.zoomFactors.at(-1))).toBe(1.1)
 
-    await mert.page.getByRole('button', { name: /Ayarlar/ }).click()
-    const zoom = mert.page.locator('.app-settings-section .zoom-control')
+    await mert.page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+    await mert.page.getByRole('button', { name: 'Görünüm' }).click()
+    const zoom = mert.page.locator('.settings-screen .zoom-control')
     await expect(zoom).toContainText('110%')
     await zoom.getByTitle('Küçült (Ctrl -)').click()
     await expect(zoom).toContainText('100%')

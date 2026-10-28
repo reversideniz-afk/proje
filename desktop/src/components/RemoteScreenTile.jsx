@@ -1,5 +1,6 @@
 // Seste karşı tarafın ekran paylaşımı kutucuğu.
 import { useRef, useEffect } from 'react'
+import { StageTile } from './StageTile.jsx'
 
 // Karşı tarafın EKRAN paylaşımı — kameradan ayrı, kendi kutucuğu.
 // NOT: bu kutucuğun sesi (varsa) mikrofon sesi gibi Web Audio üzerinden
@@ -26,24 +27,14 @@ export function RemoteScreenTile({ stream, label, isEnlarged, onToggleEnlarge, o
   }, [outputDeviceId, stream])
 
   return (
-    <div
-      className={'video-tile remote-video-wrapper' + (isEnlarged ? ' video-tile--enlarged' : '')}
-      onClick={onToggleEnlarge}
-    >
-      <video ref={videoRef} autoPlay playsInline className="remote-video remote-video--screen" />
-      <span className="remote-video-label">{label} 🖥️ ekranı</span>
-      {isEnlarged && (
-        <button
-          className="enlarged-tile-close"
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleEnlarge()
-          }}
-          title="Küçült"
-        >
-          ✕
-        </button>
-      )}
-    </div>
+    <StageTile
+      className="remote-video-wrapper tile--screen"
+      name={label}
+      label={`${label} · ekran`}
+      live
+      isEnlarged={isEnlarged}
+      onToggleEnlarge={onToggleEnlarge}
+      media={<video ref={videoRef} autoPlay playsInline className="remote-video remote-video--screen" />}
+    />
   )
 }

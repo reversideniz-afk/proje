@@ -1,0 +1,416 @@
+/* Tam ekran ayarlar: solda kategoriler (Loca), sağda içerik (Sahne). */
+
+.settings-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  background: var(--sahne);
+  animation: fade-in 0.15s ease-out;
+}
+
+.settings-nav {
+  flex: 1 0 220px;
+  display: flex;
+  justify-content: flex-end;
+  overflow-y: auto;
+  background: var(--loca);
+}
+
+.settings-nav-inner {
+  width: 232px;
+  padding: calc(48px + env(safe-area-inset-top)) 10px 24px;
+}
+
+.settings-nav-group + .settings-nav-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cizgi);
+}
+
+.settings-nav-title {
+  margin: 0 10px 6px;
+  overflow: hidden;
+  color: var(--soluk);
+  font: 600 11px/1.4 var(--font-body);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ikincil);
+  font-size: 15px;
+  text-align: left;
+}
+
+.settings-nav-item .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.settings-nav-item:hover {
+  background: rgb(255 255 255 / 4%);
+  color: var(--metin);
+}
+
+.settings-nav-item--active,
+.settings-nav-item--active:hover {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.settings-nav-item--danger,
+.settings-nav-item--danger:hover {
+  color: #ff8e8a;
+}
+
+.settings-content {
+  position: relative;
+  flex: 2 1 640px;
+  display: flex;
+  overflow-y: auto;
+}
+
+.settings-content-inner {
+  width: min(680px, 100%);
+  padding: calc(48px + env(safe-area-inset-top)) 40px 64px;
+}
+
+.settings-page-title {
+  margin: 0 0 24px;
+  font: 600 22px/1.2 var(--font-display);
+}
+
+.settings-section {
+  display: grid;
+  gap: 12px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.settings-section:first-of-type {
+  padding-top: 0;
+}
+
+.settings-section:last-child {
+  border-bottom: 0;
+}
+
+.settings-section-title {
+  margin: 0;
+  color: var(--metin);
+  font: 600 16px/1.3 var(--font-body);
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-profile {
+  --ring-bg: var(--sahne);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--gece);
+}
+
+.settings-profile-text {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-profile-name {
+  font: 600 18px/1.3 var(--font-display);
+}
+
+.settings-mono {
+  font-family: var(--font-mono);
+}
+
+.settings-version {
+  margin: 0;
+  color: var(--ikincil);
+}
+
+.settings-key kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 40px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--cizgi);
+  border-bottom-width: 3px;
+  border-radius: var(--radius);
+  background: var(--gece);
+  color: var(--metin);
+  font: 600 14px/1 var(--font-mono);
+}
+
+.mic-meter {
+  flex: 1 1 160px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--gece);
+}
+
+.mic-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--spot);
+  transition: width 0.06s linear;
+}
+
+.theme-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 18px;
+  background: var(--gece);
+  color: var(--ikincil);
+  font-size: 14px;
+}
+
+.theme-swatch:hover {
+  color: var(--metin);
+}
+
+.theme-swatch--active {
+  border-color: var(--swatch-color);
+  color: var(--metin);
+}
+
+.theme-swatch-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--swatch-color);
+}
+
+.zoom-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.zoom-control-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--gece);
+}
+
+.zoom-control-value {
+  min-width: 60px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--metin);
+  font: 500 13px/1 var(--font-mono);
+}
+
+.zoom-control-value:hover {
+  background: var(--kabin);
+}
+
+.settings-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-list-row {
+  --ring-bg: var(--sahne);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+}
+
+.settings-list-row:hover {
+  background: rgb(255 255 255 / 3%);
+}
+
+.settings-list-row--wrap {
+  flex-wrap: wrap;
+}
+
+.settings-list-row .btn {
+  margin-left: auto;
+}
+
+.settings-list-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.settings-owner {
+  width: 15px;
+  height: 15px;
+  color: var(--uyari);
+}
+
+.settings-roles {
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border-radius: 13px;
+  background: var(--kabin);
+  font-size: 13px;
+}
+
+.role-chip button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--soluk);
+}
+
+.role-chip button:hover {
+  background: var(--tehlike-soft);
+  color: #ff8e8a;
+}
+
+.role-chip .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.role-input.input {
+  width: 110px;
+  height: 30px;
+  font-size: 13px;
+}
+
+.settings-close {
+  position: sticky;
+  top: calc(48px + env(safe-area-inset-top));
+  flex: none;
+  align-self: flex-start;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  color: var(--soluk);
+  font: 600 11px/1 var(--font-body);
+}
+
+.settings-close-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 2px solid var(--cizgi);
+  border-radius: 50%;
+  background: none;
+  color: var(--ikincil);
+}
+
+.settings-close-button:hover {
+  border-color: var(--ikincil);
+  color: var(--metin);
+}
+
+@media (max-width: 760px) {
+  .settings-screen {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    flex: none;
+    justify-content: stretch;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--cizgi);
+  }
+
+  .settings-nav-inner {
+    display: flex;
+    gap: 4px;
+    width: auto;
+    padding: calc(8px + env(safe-area-inset-top)) 56px 8px 8px;
+  }
+
+  .settings-nav-group,
+  .settings-nav-group + .settings-nav-group {
+    display: flex;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .settings-nav-title {
+    display: none;
+  }
+
+  .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .settings-content-inner {
+    padding: 20px 16px calc(40px + env(safe-area-inset-bottom));
+  }
+
+  .settings-close {
+    position: fixed;
+    top: calc(8px + env(safe-area-inset-top));
+    right: 8px;
+    z-index: 2;
+  }
+
+  .settings-close span {
+    display: none;
+  }
+}
