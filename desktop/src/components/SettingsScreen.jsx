@@ -2,6 +2,7 @@
 // Esc ya da sağ üstteki düğme kapatıyor.
 import { useEffect, useRef, useState } from 'react'
 import {
+  Bell,
   Crown,
   Download,
   ImagePlus,
@@ -231,6 +232,54 @@ function Toggle({ label, hint, checked, disabled, onChange }) {
   )
 }
 
+function NotificationsPage({ notifications }) {
+  const blocked = 'Notification' in window && Notification.permission === 'denied'
+  return (
+    <>
+      <Section title="Masaüstü bildirimleri">
+        <Toggle
+          label="Masaüstü bildirimi göster"
+          hint={
+            blocked
+              ? 'Bildirim izni bu tarayıcıda kapalı. Tarayıcının site ayarlarından açabilirsin.'
+              : 'Disco öne gelmediğinde ya da başka bir kanala bakarken.'
+          }
+          checked={notifications.desktop}
+          onChange={(desktop) => notifications.onChange({ desktop })}
+        />
+        <div className="settings-choice" role="radiogroup" aria-label="Hangi mesajlarda">
+          {[
+            { id: 'mentions', label: 'Sadece bahsedilince', hint: 'Adın ya da @all geçince.' },
+            { id: 'all', label: 'Bütün mesajlarda', hint: 'Erişebildiğin her kanaldaki her yeni mesaj.' },
+          ].map((option) => (
+            <label key={option.id} className="settings-choice-option">
+              <input
+                type="radio"
+                name="notify-mode"
+                checked={notifications.mode === option.id}
+                disabled={!notifications.desktop}
+                onChange={() => notifications.onChange({ mode: option.id })}
+              />
+              <span>
+                <strong>{option.label}</strong>
+                <span className="field-hint">{option.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Section>
+      <Section title="Sesler">
+        <Toggle
+          label="Mesaj seslerini çal"
+          hint="Yeni mesaj ve bahsedilme sesi. Sese katılma ve ayrılma sesleri bundan etkilenmiyor."
+          checked={notifications.sounds}
+          onChange={(sounds) => notifications.onChange({ sounds })}
+        />
+      </Section>
+    </>
+  )
+}
+
 function DesktopPage({ desktop }) {
   return (
     <Section title="Pencere">
@@ -406,6 +455,7 @@ export function SettingsScreen({
   audio,
   ptt,
   appearance,
+  notifications,
   desktop,
   update,
   server,
@@ -437,6 +487,7 @@ export function SettingsScreen({
       title: 'Uygulama ayarları',
       items: [
         { id: 'audio', label: 'Ses ve görüntü', icon: Volume2 },
+        { id: 'notifications', label: 'Bildirimler', icon: Bell },
         { id: 'keybinds', label: 'Tuş atamaları', icon: KeyRound },
         { id: 'appearance', label: 'Görünüm', icon: Palette },
         ...(desktop ? [{ id: 'desktop', label: 'Masaüstü', icon: Monitor }] : []),
@@ -498,6 +549,7 @@ export function SettingsScreen({
           {current.id === 'audio' && <AudioPage audio={audio} />}
           {current.id === 'keybinds' && <KeybindsPage ptt={ptt} />}
           {current.id === 'appearance' && <AppearancePage appearance={appearance} />}
+          {current.id === 'notifications' && <NotificationsPage notifications={notifications} />}
           {current.id === 'desktop' && desktop && <DesktopPage desktop={desktop} />}
           {current.id === 'update' && <UpdatePage update={update} />}
           {current.id === 'server' && server && <ServerPage server={server} />}

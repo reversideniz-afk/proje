@@ -15,7 +15,8 @@ server/
   server.js        giriş noktası (Render "node server.js" ile başlatıyor)
   db.js            MongoDB şemaları
   lib/             paylaşılan parçalar: realtime (Express + Socket.IO), state (bellekteki
-                   odalar), sessions, access, users, limits, validate, rooms, ice
+                   odalar), sessions, access, users, limits, validate, rooms, ice,
+                   avatars (avatar adresleri), unread (okunmamışlar ve bahsedilmeler)
   http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin
@@ -28,7 +29,8 @@ desktop/
                    ChatPanel (MessageList, Composer), MemberList, VoiceStage
                    (StageTile, Remote*Tile), SettingsScreen, Dialog(s), Avatar
   src/lib/         config, debug, format, sounds, mentions, webrtc, speaking (kim
-                   konuşuyor), userColor (kişiye özel renk), useDismiss
+                   konuşuyor), userColor (kişiye özel renk), notify (masaüstü bildirimi,
+                   görev çubuğu sayısı), useDismiss
 ```
 
 Tasarım "gece kulübü": koyu mor gece zemin, Ayarlar > Görünüm'den seçilen tek vurgu rengi ve
@@ -39,8 +41,15 @@ dönen halka var; hareket azaltma açıksa sabit duruyor.
 
 Uygulama tek bir Socket.IO bağlantısı kullanıyor: açılışta kuruluyor, oturum anahtarı el
 sıkışmada gidiyor. Seste her kişiyle tek bir WebRTC bağlantısı ve sabit dört kanal var
-(mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor. Mikrofon sese girerken kapalı hazırlanıyor;
-açmak ya da bas-konuş tuşuna basmak sadece izi açıyor.
+(mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor.
+Mikrofon sese girerken kapalı hazırlanıyor; açmak ya da bas-konuş tuşuna basmak sadece izi
+açıyor.
+
+Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
+(`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
+yapan bağlantı erişebildiği bütün kanalların bildirim odalarına giriyor; başka kanaldaki
+yeni mesaj kanalda okunmamış işareti, bahsedilince sayı, Ayarlar > Bildirimler'e göre
+masaüstü bildirimi ve görev çubuğunda sayı olarak görünüyor.
 
 Masaüstü uygulamasında bas-konuş tuşu işletim sistemi seviyesinde dinleniyor
 (`uiohook-napi`): oyundayken ve Disco tepsideyken de çalışıyor. Klavye kancası sadece seste ve
@@ -103,7 +112,8 @@ Dosyalar:
 - `specs/faz4-tasarim.spec.js` — Faz 4'te düzeltilen hataların (H15, H21–H24, H26, H27) ve yeni
   arayüz davranışlarının (kim konuşuyor, gruplama, emoji, kanal oluşturma, ayarlar) testleri.
 - `specs/faz5-ozellikler.spec.js` — Faz 5: mikrofonun sese girerken hazırlanması (H28), seste
-  mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı.
+  mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı, kalıcı okunmamışlar ve
+  bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33).
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.

@@ -1,8 +1,8 @@
 // Bağlantı (socket) başına durum ve yardımcılar: hangi kanal/ses açık,
 // bağlantı kime ait, hız sınırı, erişimin yeniden kontrolü. Olay işleyicileri
 // bu nesneyi (ctx) paylaşıyor.
-const { User, ChannelMember } = require("../db");
-const { getAccessibleServers, checkChannelAccess } = require("../lib/access");
+const { User, Channel, ChannelMember } = require("../db");
+const { getAccessibleServers, checkChannelAccess, userCanAccessChannelDoc } = require("../lib/access");
 const { createRateLimiter } = require("../lib/limits");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
@@ -23,26 +23,37 @@ function createConnectionContext(socket) {
     username: null,
   };
 
-  // Erişebildiği sunucuların odalarına (server:<id>) katılır, artık
-  // erişemediklerinden çıkar. Kanal ve üye değişiklikleri bu odalara
-  // yayınlanıyor (H16).
+  // Erişebildiği sunucuların odalarına (server:<id>) ve o sunucularda
+  // erişebildiği kanalların bildirim odalarına (member-notify:<kanal>)
+  // katılır, artık erişemediklerinden çıkar. Kanal ve üye değişiklikleri
+  // sunucu odalarına (H16), başka kanallardaki yeni mesajlar bildirim
+  // odalarına gidiyor. Eskiden bildirim odalarına sadece bir kanal açınca
+  // giriliyordu: hiçbir kanala girmeyen kişi hiçbir şeyden haberdar olmuyordu.
   ctx.refreshServerRooms = async () => {
-    const wanted = new Set();
+    const wantedServers = new Set();
+    const wantedNotify = new Set();
     if (ctx.username) {
       try {
         const user = await User.findOne({ username: ctx.username }).select("roles").lean();
-        const servers = await getAccessibleServers(ctx.username, user?.roles || []);
-        servers.forEach((s) => wanted.add(serverRoomName(s._id.toString())));
+        const roles = user?.roles || [];
+        const servers = await getAccessibleServers(ctx.username, roles);
+        servers.forEach((s) => wantedServers.add(serverRoomName(s._id.toString())));
+        const channels = await Channel.find({ serverId: { $in: servers.map((s) => s._id) } }).lean();
+        channels
+          .filter((c) => userCanAccessChannelDoc(roles, c))
+          .forEach((c) => wantedNotify.add(`member-notify:${c._id}`));
       } catch (err) {
         console.error("Sunucu odaları alınırken hata:", err.message);
         return;
       }
     }
     for (const room of [...socket.rooms]) {
-      if (room.startsWith("server:") && !wanted.has(room)) socket.leave(room);
+      if (room.startsWith("server:") && !wantedServers.has(room)) socket.leave(room);
+      if (room.startsWith("member-notify:") && !wantedNotify.has(room)) socket.leave(room);
     }
-    wanted.forEach((room) => socket.join(room));
-    socket.data.serverIds = [...wanted].map((room) => room.slice("server:".length));
+    wantedServers.forEach((room) => socket.join(room));
+    wantedNotify.forEach((room) => socket.join(room));
+    socket.data.serverIds = [...wantedServers].map((room) => room.slice("server:".length));
   };
 
   socket.data.refreshServerRooms = ctx.refreshServerRooms;

@@ -17,6 +17,7 @@ export function ChatPanel({
   channelName,
   items,
   avatars,
+  newSince,
   members,
   displayName,
   canModerate,
@@ -71,6 +72,7 @@ export function ChatPanel({
         <MessageList
           items={items}
           avatars={avatars}
+          newSince={newSince}
           displayName={displayName}
           canModerate={canModerate}
           onReact={onReact}

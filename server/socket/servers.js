@@ -6,6 +6,7 @@ const { getAccessibleServers, canAccessServer, isServerOwner, userCanAccessChann
 const { io } = require("../lib/realtime");
 const { refreshUserServerRooms, recheckUserAccess, buildServerPresence } = require("../lib/rooms");
 const { serverRoomName } = require("../lib/state");
+const { unreadByChannel, unreadByServer } = require("../lib/unread");
 
 module.exports = function registerServerHandlers(socket, ctx) {
   // ---- YENİ: Sunucu oluşturma — hesabı olan herkes kişi başı 1 tane
@@ -130,12 +131,14 @@ module.exports = function registerServerHandlers(socket, ctx) {
       const requester = await User.findOne({ username }).lean();
       const userRoles = requester?.roles || [];
       const servers = await getAccessibleServers(username, userRoles);
+      const unread = await unreadByServer(username, userRoles, servers);
       callback({
         success: true,
         servers: servers.map((s) => ({
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === username,
+          ...unread.get(s._id.toString()),
         })),
       });
     } catch (err) {
@@ -182,9 +185,14 @@ module.exports = function registerServerHandlers(socket, ctx) {
       }
       const channels = await Channel.find({ serverId }).sort({ createdAt: 1 }).lean();
       const accessible = channels.filter((c) => userCanAccessChannelDoc(userRoles, c));
+      const unread = await unreadByChannel(username, accessible.map((c) => c._id));
       callback({
         success: true,
-        channels: accessible.map((c) => ({ id: c._id.toString(), name: c.name })),
+        channels: accessible.map((c) => ({
+          id: c._id.toString(),
+          name: c.name,
+          ...(unread.get(c._id.toString()) || { unread: false, mentions: 0 }),
+        })),
       });
     } catch (err) {
       console.error("Sunucu kanalları alınırken hata:", err.message);
@@ -235,6 +243,10 @@ module.exports = function registerServerHandlers(socket, ctx) {
       }
       const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [] });
       // Yeni kanal sunucudaki herkesin listesine anında düşsün (H16).
+      // Sunucudakiler yeni kanalın bildirim odasına da girsin.
+      for (const id of io.sockets.adapter.rooms.get(serverRoomName(serverId)) || []) {
+        await io.sockets.sockets.get(id)?.data.refreshServerRooms?.();
+      }
       io.to(serverRoomName(serverId)).emit("channels-changed", { serverId });
       callback({ success: true, channel: { id: channel._id.toString(), name: channel.name } });
     } catch (err) {

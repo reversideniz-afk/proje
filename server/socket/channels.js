@@ -1,7 +1,7 @@
 // Metin kanalları: girme/çıkma, mesajlar, tepkiler, düzenleme ve silme,
 // !sil komutları, yazıyor göstergesi, eski mesajlar, bağlantının kopması.
-const { User, Message, ChannelMember, Channel } = require("../db");
-const { canModerateServer, userCanAccessChannelDoc, checkChannelAccess } = require("../lib/access");
+const { User, Message, ChannelMember } = require("../db");
+const { canModerateServer, checkChannelAccess } = require("../lib/access");
 const { io } = require("../lib/realtime");
 const { relayPhoto, announcePresence, buildMemberList } = require("../lib/rooms");
 const { socketsByUsername, textRooms, textRoomName } = require("../lib/state");
@@ -38,8 +38,6 @@ module.exports = function registerChannelHandlers(socket, ctx) {
       fail(access.error);
       return;
     }
-    const userRoles = access.roles;
-
     // roomId artık kanalın ObjectId'sinin metin hali — hem Socket.io oda
     // adı hem de Message/ChannelMember sorgu anahtarı olarak kullanılıyor.
     const roomId = channelId;
@@ -69,31 +67,20 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (!textRooms[roomId]) textRooms[roomId] = {};
     textRooms[roomId][socket.id] = { username };
 
-    // Kalıcı üyelik kaydı — artık ERİŞİM için değil, sadece "çevrimdışı
-    // üyeler" listesinde görünebilmek için (kim bu kanalı hiç açmış).
+    // Kalıcı üyelik kaydı: "çevrimdışı üyeler" listesi ve okunmamışlar için.
+    // Önceki kayıttaki son okuma anı istemciye gidiyor ("Yeni" çizgisi).
+    // Bildirim odalarına bağlantı giriş yapınca giriyor (bkz.
+    // ctx.refreshServerRooms).
+    let lastReadAt = null;
     try {
-      await ChannelMember.findOneAndUpdate(
+      const previous = await ChannelMember.findOneAndUpdate(
         { channelId: roomId, username },
         { lastSeenAt: new Date() },
         { upsert: true }
-      );
+      ).lean();
+      lastReadAt = previous ? previous.lastReadAt || previous.lastSeenAt || null : null;
     } catch (err) {
       console.error("Kanal üyeliği kaydedilirken hata:", err.message);
-    }
-
-    // YENİ: Bu kişiyi, ROLÜNE GÖRE ERİŞİMİ OLAN, AYNI SUNUCUDAKİ TÜM
-    // kanalların "bildirim" odalarına katıyoruz — böylece o an başka bir
-    // kanaldayken bile, erişimi olan diğer kanallarda yeni mesaj gelirse
-    // haberdar olabiliyor.
-    try {
-      const serverChannels = await Channel.find({ serverId }).lean();
-      serverChannels.forEach((c) => {
-        if (userCanAccessChannelDoc(userRoles, c)) {
-          socket.join(`member-notify:${c._id}`);
-        }
-      });
-    } catch (err) {
-      console.error("Bildirim odalarına katılırken hata:", err.message);
     }
 
     // Diğer metin-kanalı üyelerine bildir.
@@ -120,7 +107,22 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     } catch (err) {
       console.error("Mesaj geçmişi alınırken hata:", err.message);
     }
-    reply({ success: true });
+    reply({ success: true, lastReadAt });
+  });
+
+  // Kanal okundu: istemci kanal açık ve pencere öndeyken bildiriyor.
+  socket.on("mark-read", async ({ channelId } = {}) => {
+    if (!ctx.username || typeof channelId !== "string") return;
+    if ((await checkChannelAccess(ctx.username, channelId)).error) return;
+    try {
+      await ChannelMember.findOneAndUpdate(
+        { channelId, username: ctx.username },
+        { lastReadAt: new Date() },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error("Okundu bilgisi kaydedilirken hata:", err.message);
+    }
   });
 
   // Kanaldan çıkma (metin + ses), uygulama açık kalırken: yeni istemciler
@@ -158,8 +160,12 @@ module.exports = function registerChannelHandlers(socket, ctx) {
       // kişilere hafif bir "burada bir şey oldu" işareti gönder —
       // okunmamış kanal işareti için. Kendisi zaten mesajı gördüğü
       // için göndereni hariç tutuyoruz.
+      // Bildirim için kim yazdı ve ne yazdı (kısaltılmış) da gidiyor.
       socket.to(`member-notify:${ctx.textRoom}`).emit("channel-activity", {
         channelId: ctx.textRoom,
+        serverId: ctx.serverId,
+        username,
+        text: trimmedText.slice(0, 200),
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);

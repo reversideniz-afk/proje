@@ -75,7 +75,7 @@ function ServerHeader({ name, isOwner, onInvite, onCreateChannel, onOpenServerSe
   )
 }
 
-function ChannelRow({ channel, active, unread, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice }) {
+function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice }) {
   return (
     <li className="channel-row">
       <button
@@ -91,7 +91,13 @@ function ChannelRow({ channel, active, unread, isMyVoice, voicers, canJoinVoice,
         <Hash className="icon channel-hash" />
         <span className="channel-name">{channel.name}</span>
         {isMyVoice && <Volume2 className="icon channel-voice-indicator" aria-label="Bu kanalın sesindesin" />}
-        {unread && <span className="channel-unread-dot" aria-label="Okunmamış mesaj var" />}
+        {mentions > 0 ? (
+          <span className="mention-badge" aria-label={`${mentions} kez bahsedildin`}>
+            {mentions > 99 ? '99+' : mentions}
+          </span>
+        ) : (
+          unread && <span className="channel-unread-dot" aria-label="Okunmamış mesaj var" />
+        )}
       </button>
       {canJoinVoice && (
         <button
@@ -208,6 +214,7 @@ export function ChannelSidebar({
   channels,
   activeChannel,
   unreadChannels,
+  mentionCounts,
   voiceChannel,
   inVoice,
   voicersByChannel,
@@ -267,6 +274,7 @@ export function ChannelSidebar({
               channel={channel}
               active={activeChannel === channel.id}
               unread={unreadChannels.includes(channel.id)}
+              mentions={mentionCounts[channel.id] || 0}
               isMyVoice={inVoice && voiceChannel === channel.id}
               voicers={voicersByChannel.get(channel.id) || []}
               canJoinVoice={!inVoice}

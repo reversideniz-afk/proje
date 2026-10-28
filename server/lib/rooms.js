@@ -32,7 +32,9 @@ function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
     mimeType,
     createdAt: new Date(),
   });
-  io.to(`member-notify:${channelId}`).except(senderSocketIds).emit("channel-activity", { channelId });
+  io.to(`member-notify:${channelId}`)
+    .except(senderSocketIds)
+    .emit("channel-activity", { channelId, username, text: "📷 Fotoğraf paylaştı" });
   const others = Object.values(textRooms[channelId] || {}).filter((u) => u.username !== username);
   if (others.length === 0) {
     io.to(senderSocketIds).emit("new-message", {

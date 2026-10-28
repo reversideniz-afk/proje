@@ -69,6 +69,8 @@ const messageSchema = new mongoose.Schema({
     default: [],
   },
 });
+// Kanalın son mesajları ve "şu andan sonraki mesajlar" sorguları için.
+messageSchema.index({ channelId: 1, createdAt: -1 });
 const Message = mongoose.models.Message || mongoose.model("Message", messageSchema);
 
 // YENİ: Bir kişi bir kanala (metin olarak) katıldığında buraya kaydı
@@ -81,6 +83,9 @@ const channelMemberSchema = new mongoose.Schema({
   channelId: { type: mongoose.Schema.Types.ObjectId, ref: "Channel" },
   username: { type: String, required: true },
   lastSeenAt: { type: Date, default: Date.now },
+  // Kanalı en son ne zaman okuduğu (kanal açık ve pencere öndeyken istemci
+  // bildiriyor). Okunmamışlar ve "Yeni" çizgisi buna göre (bkz. lib/unread.js).
+  lastReadAt: { type: Date, default: null },
 });
 channelMemberSchema.index({ channelId: 1, username: 1 }, { unique: true, sparse: true });
 const ChannelMember =

@@ -23,6 +23,8 @@ import { VoiceStage } from './components/VoiceStage.jsx'
 import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
 import { describeMediaError, formatKeyCode } from './lib/format.js'
+import { mentionsUser } from './lib/mentions.jsx'
+import { ensureNotificationPermission, requestAttention, setAttentionBadge, showNotification } from './lib/notify.js'
 import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
@@ -335,6 +337,40 @@ function App() {
   // YENİ: hangi kanallarda (SADECE üye olunanlarda — sunucu zaten
   // sadece üyelere bildirim gönderiyor) okunmamış aktivite var.
   const [unreadChannels, setUnreadChannels] = useState([])
+  // Aktif sunucunun kanallarında kaç kez bahsedildiğin (kanal kimliği -> sayı).
+  // İkisi de girişte sunucudan geliyor, uygulama kapalıyken birikenler dahil.
+  const [mentionCounts, setMentionCounts] = useState({})
+  const unreadChannelsRef = useRef(unreadChannels)
+  const mentionCountsRef = useRef(mentionCounts)
+  useEffect(() => {
+    unreadChannelsRef.current = unreadChannels
+    mentionCountsRef.current = mentionCounts
+  }, [unreadChannels, mentionCounts])
+  // Açık kanalı en son ne zaman okuduğun: "Yeni" çizgisi bunun üstüne çiziliyor.
+  const [newMessagesSince, setNewMessagesSince] = useState(null)
+
+  // Bildirim ayarları (bu cihazda kalıcı): masaüstü bildirimi, hangi
+  // mesajlarda (sadece bahsedilince ya da hepsi), mesaj sesleri.
+  const [notifySettings, setNotifySettings] = useState(() => {
+    const defaults = { desktop: true, mode: 'mentions', sounds: true }
+    try {
+      return { ...defaults, ...JSON.parse(window.localStorage?.getItem('notifySettings') || '{}') }
+    } catch {
+      return defaults
+    }
+  })
+  const notifySettingsRef = useRef(notifySettings)
+  useEffect(() => {
+    notifySettingsRef.current = notifySettings
+    try {
+      window.localStorage?.setItem('notifySettings', JSON.stringify(notifySettings))
+    } catch {
+      /* kalıcılık olmasa da çalışıyor */
+    }
+  }, [notifySettings])
+  // Başka kanaldan gelen mesaj için bildirim (aşağıda, her çizimde güncel
+  // kanal ve sunucu adlarıyla kuruluyor).
+  const notifyActivityRef = useRef(null)
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
@@ -1303,6 +1339,13 @@ function App() {
     setMessages([])
     setEphemeralPhotos([])
     setTypingUsers([])
+    setNewMessagesSince(null)
+    setMentionCounts((prev) => {
+      if (!prev[channelId]) return prev
+      const next = { ...prev }
+      delete next[channelId]
+      return next
+    })
     typingExpiryRef.current.forEach(clearTimeout)
     typingExpiryRef.current.clear()
     setUnreadChannels((prev) => prev.filter((c) => c !== channelId))
@@ -1311,11 +1354,15 @@ function App() {
     setEnlargedTile(null)
     setActiveChannel(channelId)
     activeChannelRef.current = channelId
-    socketRef.current?.emit('join-channel', {
-      serverId: activeServerIdRef.current,
-      channelId,
-      token: sessionTokenRef.current,
-    })
+    socketRef.current?.emit(
+      'join-channel',
+      { serverId: activeServerIdRef.current, channelId, token: sessionTokenRef.current },
+      (response) => {
+        if (response?.success && channelId === activeChannelRef.current) {
+          setNewMessagesSince(response.lastReadAt || null)
+        }
+      }
+    )
   }, [])
 
   // Tek bağlantının olay dinleyicileri. Bağlantı uygulama boyunca açık
@@ -1411,10 +1458,8 @@ function App() {
       // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
       // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
       // kişiye değil.
-      const isMention =
-        (myName && message.text?.toLowerCase().includes(`@${myName.toLowerCase()}`)) ||
-        message.text?.toLowerCase().includes('@all')
-      if (!isOwnMessage) {
+      const isMention = mentionsUser(message.text, myName)
+      if (!isOwnMessage && notifySettingsRef.current.sounds) {
         if (isMention && document.hidden) {
           playMentionSound()
         } else {
@@ -1465,11 +1510,28 @@ function App() {
     // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
     // aktivite olursa, okunmamış işareti koy. activeChannelRef ile
     // "zaten o kanaldaysam görmezden gel" kontrolü yapıyoruz.
-    socket.on('channel-activity', ({ channelId: activityChannelId }) => {
-      if (activityChannelId === activeChannelRef.current) return
-      setUnreadChannels((prev) =>
-        prev.includes(activityChannelId) ? prev : [...prev, activityChannelId]
-      )
+    // Erişebildiğin bir kanalda yeni mesaj (sunucu, giriş yapınca bütün
+    // kanallarının bildirim odalarına seni koyuyor). Açık kanal değilse
+    // okunmamış ve bahsedilme işaretleri; görmüyorsan masaüstü bildirimi.
+    socket.on('channel-activity', ({ channelId, serverId, username: from, text }) => {
+      if (from && from === displayNameRef.current) return
+      const mention = mentionsUser(text, displayNameRef.current)
+      const isActive = channelId === activeChannelRef.current
+      if (!isActive) {
+        if (!serverId || serverId === activeServerIdRef.current) {
+          setUnreadChannels((prev) => (prev.includes(channelId) ? prev : [...prev, channelId]))
+          if (mention) setMentionCounts((prev) => ({ ...prev, [channelId]: (prev[channelId] || 0) + 1 }))
+        } else {
+          setMyServers((prev) =>
+            prev.map((s) =>
+              s.id === serverId ? { ...s, unread: true, mentions: (s.mentions || 0) + (mention ? 1 : 0) } : s
+            )
+          )
+        }
+      }
+      if (from && !(isActive && document.hasFocus())) {
+        notifyActivityRef.current?.({ channelId, serverId, from, text, mention, isActive })
+      }
     })
 
     // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
@@ -1994,7 +2056,12 @@ function App() {
         token: sessionTokenRef.current,
         serverId,
       })
-      setChannels(response?.success ? response.channels || [] : [])
+      const list = response?.success ? response.channels || [] : []
+      setChannels(list)
+      // Okunmamışlar ve bahsedilmeler sunucudan (uygulama kapalıyken gelenler dahil).
+      const others = list.filter((c) => c.id !== activeChannelRef.current)
+      setUnreadChannels(others.filter((c) => c.unread).map((c) => c.id))
+      setMentionCounts(Object.fromEntries(others.filter((c) => c.mentions > 0).map((c) => [c.id, c.mentions])))
     },
     [emitRequest]
   )
@@ -2046,6 +2113,20 @@ function App() {
   // getir.
   const selectServer = useCallback(
     (serverId) => {
+      // Açık sunucuya tekrar tıklamak hiçbir şeyi değiştirmiyor. Eskiden
+      // kanaldan ve sesten çıkarıyor, üye listesini boşaltıyordu (H33).
+      if (serverId === activeServerIdRef.current) {
+        setMobileSidebarOpen(false)
+        return
+      }
+      // Ayrılınan sunucunun şeritteki işareti, o anki kanal işaretlerinden.
+      const previous = activeServerIdRef.current
+      if (previous && previous !== serverId) {
+        const mentions = Object.values(mentionCountsRef.current).reduce((sum, n) => sum + n, 0)
+        const unread = unreadChannelsRef.current.length > 0
+        setMyServers((prev) => prev.map((s) => (s.id === previous ? { ...s, unread, mentions } : s)))
+      }
+      activeServerIdRef.current = serverId
       setActiveServerId(serverId)
       window.localStorage?.setItem('activeServerId', serverId)
       leaveChannel()
@@ -2055,6 +2136,63 @@ function App() {
     },
     [leaveChannel, fetchServerChannels]
   )
+
+  // Kanal açık ve pencere öndeyken "okudum" bildiriliyor: açılınca, yeni
+  // mesaj gelince (biraz bekleyerek) ve pencere öne gelince.
+  useEffect(() => {
+    if (!loggedIn || !activeChannel) return
+    const markRead = () => {
+      if (document.hasFocus()) socketRef.current?.emit('mark-read', { channelId: activeChannel })
+    }
+    const timer = setTimeout(markRead, 800)
+    window.addEventListener('focus', markRead)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('focus', markRead)
+    }
+  }, [loggedIn, activeChannel, messages.length])
+
+  // Masaüstü bildirimi için izin (tarayıcıda bir kez soruluyor).
+  useEffect(() => {
+    if (loggedIn && notifySettings.desktop) ensureNotificationPermission()
+  }, [loggedIn, notifySettings.desktop])
+
+  // Görev çubuğundaki sayı: bütün sunuculardaki bahsedilmeler.
+  const totalMentions =
+    Object.values(mentionCounts).reduce((sum, n) => sum + n, 0) +
+    myServers.filter((s) => s.id !== activeServerId).reduce((sum, s) => sum + (s.mentions || 0), 0)
+  useEffect(() => {
+    setAttentionBadge(loggedIn ? totalMentions : 0)
+  }, [loggedIn, totalMentions])
+
+  // Bildirime tıklayınca o kanal açılıyor (gerekirse sunucu da değişiyor).
+  const openChannelFrom = useCallback(
+    (serverId, channelId) => {
+      if (serverId && serverId !== activeServerIdRef.current) selectServer(serverId)
+      joinChannel(channelId)
+    },
+    [selectServer, joinChannel]
+  )
+
+  useEffect(() => {
+    notifyActivityRef.current = ({ channelId, serverId, from, text, mention, isActive }) => {
+      const settings = notifySettingsRef.current
+      if (mention) {
+        // Açık kanaldaki mesajın sesini mesajın kendisi çalıyor.
+        if (settings.sounds && !isActive) playMentionSound()
+        requestAttention()
+      }
+      if (!settings.desktop || (!mention && settings.mode !== 'all')) return
+      const channelName = channels.find((c) => c.id === channelId)?.name
+      const serverName = myServers.find((s) => s.id === serverId)?.name
+      showNotification({
+        title: channelName ? `${from} · #${channelName}` : serverName ? `${from} · ${serverName}` : from,
+        body: text,
+        tag: channelId,
+        onClick: () => openChannelFrom(serverId, channelId),
+      })
+    }
+  })
 
   const refreshMyServers = useCallback(async () => {
     const response = await emitRequest('list-my-servers', {
@@ -2689,6 +2827,15 @@ function App() {
     ...offlineMembers.map((m) => ({ ...m, online: false })),
   ]
   const isNarrow = () => window.matchMedia('(max-width: 760px)').matches
+  // Sunucu şeridi: aktif sunucu kanal işaretlerinden, diğerleri listeden.
+  const serverActivity = Object.fromEntries(
+    myServers.map((s) => [
+      s.id,
+      s.id === activeServerId
+        ? { unread: unreadChannels.length > 0, mentions: Object.values(mentionCounts).reduce((sum, n) => sum + n, 0) }
+        : { unread: !!s.unread, mentions: s.mentions || 0 },
+    ])
+  )
   const membersVisible = !isVoiceView && (membersPanelOpen || mobileMembersOpen)
 
   const chatPanel = activeChannel && (
@@ -2697,6 +2844,7 @@ function App() {
       channelName={activeChannelName}
       items={chatTimeline}
       avatars={avatarByName}
+      newSince={newMessagesSince}
       members={membersForMentions}
       displayName={displayName}
       canModerate={canModerateActiveServer}
@@ -2821,6 +2969,7 @@ function App() {
         <ServerRail
           servers={myServers}
           activeServerId={activeServerId}
+          activity={serverActivity}
           onSelect={selectServer}
           onAdd={() => openServerModal()}
         />
@@ -2829,6 +2978,7 @@ function App() {
           channels={channels}
           activeChannel={activeChannel}
           unreadChannels={unreadChannels}
+          mentionCounts={mentionCounts}
           voiceChannel={voiceChannel}
           inVoice={inVoice}
           voicersByChannel={voicersByChannel}
@@ -2954,6 +3104,13 @@ function App() {
             isCapturing: isCapturingPttKey,
             isGlobal: hasGlobalPtt,
             onToggle: handleTogglePtt,
+          }}
+          notifications={{
+            ...notifySettings,
+            onChange: (patch) => {
+              setNotifySettings((prev) => ({ ...prev, ...patch }))
+              if (patch.desktop) ensureNotificationPermission()
+            },
           }}
           desktop={
             window.electronAPI?.setCloseToTray

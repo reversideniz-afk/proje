@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const { User, BannedIp } = require("../db");
 const { getAccessibleServers } = require("../lib/access");
 const { AVATAR_TYPES, avatarUrl } = require("../lib/avatars");
+const { unreadByServer } = require("../lib/unread");
 const { buildIceServers } = require("../lib/ice");
 const { MAX_LOGIN_ATTEMPTS, LOGIN_LOCK_MS, MAX_REGISTER_ATTEMPTS_PER_WINDOW, REGISTER_ATTEMPT_WINDOW_MS, registerAttemptsByIp, bannedIpSet, getClientIp, isLoginBlockedForIp, recordLoginFailure } = require("../lib/limits");
 const { io } = require("../lib/realtime");
@@ -78,6 +79,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
       // listesini ayrıca isteyecek.
       const userRoles = user.roles || [];
       const myServers = await getAccessibleServers(user.username, userRoles);
+      const unread = await unreadByServer(user.username, userRoles, myServers);
 
       callback({
         success: true,
@@ -88,6 +90,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === user.username,
+          ...unread.get(s._id.toString()),
         })),
         avatarData: user.avatarData || null,
         avatarUrl: user.avatarData ? avatarUrl(user.username, user.avatarUpdatedAt) : null,
@@ -135,6 +138,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
 
       const userRoles = user.roles || [];
       const myServers = await getAccessibleServers(user.username, userRoles);
+      const unread = await unreadByServer(user.username, userRoles, myServers);
 
       callback({
         success: true,
@@ -145,6 +149,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === user.username,
+          ...unread.get(s._id.toString()),
         })),
         avatarData: user.avatarData || null,
         avatarUrl: user.avatarData ? avatarUrl(user.username, user.avatarUpdatedAt) : null,

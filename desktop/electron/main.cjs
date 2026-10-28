@@ -131,6 +131,8 @@ function createWindow() {
 
   mainWindow = win;
 
+  win.on("focus", () => win.flashFrame(false));
+
   win.on("close", (event) => {
     if (isQuitting || !closeToTray) return;
     event.preventDefault();
@@ -196,6 +198,9 @@ app.whenReady().then(() => {
   // İkinci kopya: yukarıda kapanması istendi, pencere açmasın.
   if (!hasSingleInstanceLock) return;
 
+  // Windows bildirimleri uygulama kimliğiyle gösteriliyor (kurulumdaki ile aynı).
+  if (process.platform === "win32") app.setAppUserModelId("com.alganis.seslisohbet");
+
   // YENİ: "File Edit View Window" gibi geliştirici görünümlü üst menü
   // çubuğunu tamamen kaldırıyoruz — gerçek bir uygulama gibi hissettirsin
   // diye. DevTools'u manuel açmak (Ctrl+Shift+I) için gereken kısayol,
@@ -212,6 +217,24 @@ app.whenReady().then(() => {
   });
   // YENİ: Ayarlar panelinde hangi sürümün çalıştığını gösterebilmek için.
   ipcMain.handle("get-app-version", () => app.getVersion());
+
+  // Bahsedilince: pencere öne gelene kadar görev çubuğunda yanıp sön;
+  // bahsedilme sayısı görev çubuğu simgesinin köşesinde.
+  ipcMain.on("flash-frame", () => {
+    if (mainWindow && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+  });
+  ipcMain.on("set-badge", (_event, { count, image } = {}) => {
+    if (!mainWindow) return;
+    if (process.platform === "win32") {
+      mainWindow.setOverlayIcon(
+        count > 0 && image ? nativeImage.createFromDataURL(image) : null,
+        count > 0 ? `${count} bahsedilme` : ""
+      );
+    } else {
+      app.setBadgeCount(count > 0 ? count : 0);
+    }
+  });
+  ipcMain.on("show-window", () => showMainWindow());
 
   // Bas-konuş tuşu (null: kanca kapalı). Tanınmayan tuşta false döner.
   ipcMain.handle("set-push-to-talk-key", (_event, code) => pushToTalk.setKey(code || null));
@@ -234,7 +257,8 @@ app.whenReady().then(() => {
   // başka izinler artık otomatik reddedilecek.
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback) => {
-      const allowedPermissions = ["media"];
+      // Bildirimler: bahsedilince masaüstü bildirimi (Ayarlar > Bildirimler).
+      const allowedPermissions = ["media", "notifications"];
       callback(allowedPermissions.includes(permission));
     }
   );

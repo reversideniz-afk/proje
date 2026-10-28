@@ -223,6 +223,35 @@
   opacity: 0.5;
 }
 
+.settings-choice {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-choice-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.settings-choice-option input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.settings-choice-option > span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-choice-option strong {
+  font-weight: 500;
+}
+
 .mic-meter {
   flex: 1 1 160px;
   height: 8px;

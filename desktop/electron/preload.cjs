@@ -55,6 +55,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   // Kapat düğmesi tepsiye küçültsün mü; bilgisayar açılınca başlasın mı.
   setCloseToTray: (value) => ipcRenderer.send("set-close-to-tray", value),
+  // Bahsedilince görev çubuğunda yanıp sönme ve sayı; bildirime tıklayınca
+  // pencereyi (tepsideyse de) öne getirme.
+  flashFrame: () => ipcRenderer.send("flash-frame"),
+  setBadge: (count, image) => ipcRenderer.send("set-badge", { count, image }),
+  showWindow: () => ipcRenderer.send("show-window"),
   getOpenAtLogin: () => ipcRenderer.invoke("get-open-at-login"),
   setOpenAtLogin: (value) => ipcRenderer.invoke("set-open-at-login", value),
   checkForUpdates: () => ipcRenderer.send("check-for-updates"),

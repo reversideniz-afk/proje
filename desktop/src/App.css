@@ -94,6 +94,17 @@
   height: 36px;
 }
 
+.server-rail-icon--unread::before {
+  height: 8px;
+}
+
+.server-rail-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  box-shadow: 0 0 0 3px var(--gece);
+}
+
 .server-rail-icon--add {
   background: transparent;
   border: 1.5px dashed var(--cizgi);
@@ -291,6 +302,18 @@
   flex: none;
   border-radius: 50%;
   background: var(--accent);
+}
+
+.mention-badge {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--tehlike);
+  color: #fff;
+  font: 700 11px/18px var(--font-body);
+  text-align: center;
 }
 
 .channel-join-voice {

@@ -8,18 +8,12 @@ import { Check, Copy, Info, Pencil, SmilePlus, Trash2, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { QUICK_REACTIONS } from '../lib/config.js'
 import { formatDayLabel, formatFullDate, formatMessageTime, isSameDay } from '../lib/format.js'
-import { renderMessageTextWithMentions } from '../lib/mentions.jsx'
+import { mentionsUser, renderMessageTextWithMentions } from '../lib/mentions.jsx'
 import { userColor } from '../lib/userColor.js'
 import { useDismiss } from '../lib/useDismiss.js'
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000
 const LONG_PRESS_MS = 450
-
-function mentionsMe(text, myName) {
-  if (!text) return false
-  const lower = text.toLocaleLowerCase('tr')
-  return lower.includes('@all') || (!!myName && lower.includes(`@${myName.toLocaleLowerCase('tr')}`))
-}
 
 function groupReactions(reactions = []) {
   const byEmoji = new Map()
@@ -135,7 +129,7 @@ function MessageItem({
         'chat-message' +
         (grouped ? ' chat-message--grouped' : '') +
         (isActive || pickerOpen ? ' is-active' : '') +
-        (mentionsMe(item.text, displayName) && !isOwn ? ' chat-message--mention' : '')
+        (mentionsUser(item.text, displayName) && !isOwn ? ' chat-message--mention' : '')
       }
       onContextMenu={(e) => {
         if (isEditing || isPhoto) return
@@ -272,6 +266,7 @@ function MessageItem({
 export function MessageList({
   items,
   avatars,
+  newSince,
   displayName,
   canModerate,
   onReact,
@@ -307,11 +302,22 @@ export function MessageList({
 
   const keyOf = (item, i) => item.id || `${item.kind}-${item.createdAt}-${i}`
 
+  // "Yeni" çizgisi: kanalı en son okuduğundan sonra başkasının yazdığı ilk
+  // mesajın üstünde.
+  const firstNewIndex = newSince
+    ? items.findIndex(
+        (item) =>
+          !item.system && item.username !== displayName && new Date(item.createdAt) > new Date(newSince)
+      )
+    : -1
+
   return items.map((item, i) => {
     const prev = items[i - 1]
     const newDay = !prev || !isSameDay(prev.createdAt, item.createdAt)
+    const isFirstNew = i === firstNewIndex
     const grouped =
       !newDay &&
+      !isFirstNew &&
       !item.system &&
       !prev.system &&
       prev.username === item.username &&
@@ -322,6 +328,11 @@ export function MessageList({
         {newDay && (
           <div className="chat-day-divider" role="separator">
             <span>{formatDayLabel(item.createdAt)}</span>
+          </div>
+        )}
+        {isFirstNew && (
+          <div className="chat-new-divider" role="separator" aria-label="Yeni mesajlar">
+            <span>Yeni</span>
           </div>
         )}
         <MessageItem
