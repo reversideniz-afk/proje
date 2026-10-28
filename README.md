@@ -8,6 +8,28 @@ Arkadaş grubu için sesli, görüntülü ve yazılı sohbet uygulaması.
 | `server/`  | Sinyalleşme sunucusu: Express + Socket.IO + MongoDB (Render'da çalışıyor). |
 | `tests/`   | Uçtan uca test düzeneği (aşağıda).                                     |
 
+### Kod düzeni
+
+```
+server/
+  server.js        giriş noktası (Render "node server.js" ile başlatıyor)
+  db.js            MongoDB şemaları
+  lib/             paylaşılan parçalar: realtime (Express + Socket.IO), state (bellekteki
+                   odalar), sessions, access, users, limits, validate, rooms, ice
+  http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si
+  socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
+                   grupları: account, servers, channels, voice, admin
+desktop/
+  electron/        ana süreç (main.cjs) ve preload köprüsü
+  src/App.jsx      uygulamanın kendisi
+  src/lib/         config, debug, format, sounds, mentions, webrtc
+  src/components/  RemoteCameraTile, RemoteScreenTile, EyeIcon, ZoomControl
+```
+
+Uygulama tek bir Socket.IO bağlantısı kullanıyor: açılışta kuruluyor, oturum anahtarı el
+sıkışmada gidiyor. Seste her kişiyle tek bir WebRTC bağlantısı ve sabit dört kanal var
+(mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor.
+
 ## Geliştirme
 
 ```sh
@@ -58,6 +80,9 @@ Dosyalar:
   testleri. Hepsi her zaman geçmeli.
 - `specs/faz2-guvenlik.spec.js` — Faz 2'de düzeltilen güvenlik ve yetki hatalarının (H6–H8,
   H11, H17–H20) kalıcı testleri.
+- `specs/faz3-mimari.spec.js` — tek bağlantı, sunucu odaları ve anında güncellemeler (H16), sunucu
+  genelinde çevrimiçi bilgisi, her eşle tek WebRTC bağlantısı.
+- `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
   yeni pencere engeli, tek kopya. `desktop/node_modules` içindeki Electron kullanılıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).
