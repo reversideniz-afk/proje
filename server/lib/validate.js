@@ -1,0 +1,43 @@
+// İstemciden gelen verinin doğrulanması ve istemciye gidecek verinin şekli.
+
+// Ses odasındaki bir kişinin istemciden kabul edilen durumu: sadece bu üç
+// alan ve sadece true/false.
+function pickVoiceState(state) {
+  const picked = {};
+  for (const key of ["muted", "cameraOn", "sharingScreen"]) {
+    if (typeof state?.[key] === "boolean") picked[key] = state[key];
+  }
+  return picked;
+}
+
+// YENİ (güvenlik): "imageData" alanının GERÇEKTEN bir base64 data URI
+// olduğunu ve beyan edilen mimeType ile eşleştiğini doğruluyoruz. Bu
+// kontrol olmadan biri imageData alanına dışarıdan bir URL (ör.
+// "http://saldirgan.com/piksel.png") koyabilir — bunu gören HERKESİN
+// istemcisi (<img src=...>) o adrese sessizce bir istek atar, bu da
+// görüntüleyen kullanıcıların IP adresini/varlık bilgisini saldırgana
+// sızdırır ("takip pikseli"). set-avatar VE send-photo aynı deseni
+// kullandığı için ortak fonksiyon.
+function isValidImageDataUri(imageData, mimeType) {
+  if (typeof imageData !== "string" || typeof mimeType !== "string") return false;
+  if (!mimeType.startsWith("image/")) return false;
+  const match = imageData.match(
+    /^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/]+=*)$/
+  );
+  return !!match && match[1] === mimeType;
+}
+
+// YENİ: .lean() sorgu sonuçlarını istemciye göndereceğimiz tutarlı
+// şekle çeviriyor (_id -> id, string olarak).
+function serializeMessage(msg) {
+  return {
+    id: msg._id.toString(),
+    username: msg.username,
+    text: msg.text,
+    createdAt: msg.createdAt,
+    editedAt: msg.editedAt || null,
+    reactions: msg.reactions || [],
+  };
+}
+
+module.exports = { pickVoiceState, isValidImageDataUri, serializeMessage };
