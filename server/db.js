@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema({
   // Boyutu server.js'teki 'set-avatar' işleyicisinde sınırlıyoruz ki
   // veritabanı büyük resimlerle şişmesin.
   avatarData: { type: String, default: null },
+  // Avatarın değiştiği an: resmin adresindeki sürüm buradan geliyor (bkz.
+  // lib/avatars.js). Bu alan eklenmeden önce yüklenmiş fotoğraflarda boş.
+  avatarUpdatedAt: { type: Date, default: null },
   // YENİ: Giriş denemesi sınırlama (rate limiting) — 5 yanlış şifreden
   // sonra hesap geçici kilitleniyor (bkz. server.js login işleyicisi).
   // loginLockedUntil geçmişte/null ise hesap kilitli DEĞİL. Alganis

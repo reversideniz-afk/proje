@@ -78,6 +78,13 @@ function createConnectionContext(socket) {
     }
     ctx.voiceRoom = null;
     if (ctx.textRoom) {
+      // Yazarken çıkan ya da bağlantısı kopan kişinin "yazıyor…" göstergesi
+      // diğerlerinde takılı kalıyordu (H21).
+      if (ctx.username) {
+        io.to(textRoomName(ctx.textRoom))
+          .except(socket.id)
+          .emit("user-stopped-typing", { username: ctx.username });
+      }
       socket.leave(textRoomName(ctx.textRoom));
       if (textRooms[ctx.textRoom]?.[socket.id]) {
         delete textRooms[ctx.textRoom][socket.id];

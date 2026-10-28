@@ -2,6 +2,7 @@
 // seste), ses odasından çıkarma, fotoğraf iletme, erişim yeniden kontrolü.
 const { User, ChannelMember, ServerMember } = require("../db");
 const { ADMIN_ROLE } = require("./access");
+const { avatarUrlsFor } = require("./avatars");
 const { io } = require("./realtime");
 const { socketsByUsername, textRooms, voiceRooms, textRoomName, voiceRoomName, serverRoomName } = require("./state");
 
@@ -74,13 +75,12 @@ async function buildServerPresence(serverId) {
   const members = await ServerMember.find({ serverId }).select("username").lean();
   // Üye olmadan erişen platform yöneticisi seste olabilir; o da görünsün.
   const usernames = [...new Set([...members.map((m) => m.username), ...voiceChannelByUser.keys()])];
-  const users = await User.find({ username: { $in: usernames } }).select("username avatarData").lean();
-  const avatarByUsername = new Map(users.map((u) => [u.username, u.avatarData || null]));
+  const avatarUrls = await avatarUrlsFor(usernames);
   return usernames.map((username) => ({
     username,
     online: socketsByUsername.has(username),
     voiceChannelId: voiceChannelByUser.get(username) || null,
-    avatarData: avatarByUsername.get(username) || null,
+    avatarUrl: avatarUrls.get(username) || null,
   }));
 }
 
@@ -133,23 +133,10 @@ async function buildMemberList(channelId) {
     console.error("Üye listesi alınırken hata:", err.message);
   }
 
-  // YENİ: profil fotoğraflarını TEK sorguda çekip her iki listeye de
-  // ekliyoruz — online üyeler için textRooms (bellek içi) hiç avatar
-  // tutmuyor, o yüzden veritabanından tamamlıyoruz.
+  // Profil fotoğraflarının adresleri tek sorguda (resimlerin kendisi değil).
   try {
-    const allUsernames = [...onlineUsernames, ...offline.map((m) => m.username)];
-    if (allUsernames.length > 0) {
-      const users = await User.find({ username: { $in: allUsernames } })
-        .select("username avatarData")
-        .lean();
-      const avatarByUsername = new Map(users.map((u) => [u.username, u.avatarData || null]));
-      online.forEach((m) => {
-        m.avatarData = avatarByUsername.get(m.username) || null;
-      });
-      offline.forEach((m) => {
-        m.avatarData = avatarByUsername.get(m.username) || null;
-      });
-    }
+    const avatarUrls = await avatarUrlsFor([...onlineUsernames, ...offline.map((m) => m.username)]);
+    for (const m of [...online, ...offline]) m.avatarUrl = avatarUrls.get(m.username) || null;
   } catch (err) {
     console.error("Profil fotoğrafları alınırken hata:", err.message);
   }

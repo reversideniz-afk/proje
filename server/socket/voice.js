@@ -1,6 +1,6 @@
 // Ses: sese katılma/çıkma, WebRTC sinyalleri ve mikrofon/kamera/ekran durumu.
-const { User } = require("../db");
 const { checkChannelAccess } = require("../lib/access");
+const { avatarUrlOf } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
 const { voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
@@ -31,13 +31,11 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
       voiceServerId = access.channel.serverId.toString();
     }
 
-    // YENİ: profil fotoğrafını da eş bağlantı (peer) bilgisine ekliyoruz
-    // ki karşı taraf kamerası kapalıyken avatar-yerine-baş-harf yerine
-    // gerçek fotoğrafı görebilsin.
-    let avatarData = null;
+    // Profil fotoğrafının adresi de eş bilgisine ekleniyor: karşı taraf
+    // kamerası kapalıyken baş harf yerine fotoğrafı görsün.
+    let avatarUrl = null;
     try {
-      const user = await User.findOne({ username }).select("avatarData").lean();
-      avatarData = user?.avatarData || null;
+      avatarUrl = await avatarUrlOf(username);
     } catch (err) {
       console.error("Avatar alınırken hata:", err.message);
     }
@@ -71,7 +69,7 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
       cameraOn: false,
       sharingScreen: false,
       ...pickVoiceState(state),
-      avatarData,
+      avatarUrl,
       serverId: voiceServerId,
     };
     if (voiceServerId) announcePresence([voiceServerId]);

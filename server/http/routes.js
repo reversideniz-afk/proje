@@ -2,6 +2,8 @@
 // fotoğraf paylaşımı API'si.
 const express = require("express");
 const path = require("path");
+const { User } = require("../db");
+const { AVATAR_TYPES, avatarVersion } = require("../lib/avatars");
 const { createRateLimiter } = require("../lib/limits");
 const { app } = require("../lib/realtime");
 const { relayPhoto } = require("../lib/rooms");
@@ -32,7 +34,7 @@ app.get("/status", (req, res) => {
 app.use("/api", (req, res, next) => {
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -97,6 +99,31 @@ app.post(
     res.json({ success: true });
   }
 );
+
+// ---- Profil fotoğrafları (H26). Sürümü (v) güncel olan adres bir yıl
+// önbellekte kalabiliyor; resim değişince istemciler yeni sürümlü adresi
+// alıyor. Avatarlar sohbette herkese görünen bilgiler, giriş istemiyor
+// (<img> etiketi başlıkta anahtar gönderemiyor).
+app.get("/api/avatars/:username", async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username })
+      .select("avatarData avatarUpdatedAt")
+      .lean();
+    const match = /^data:([a-z/+.-]+);base64,(.+)$/.exec(user?.avatarData || "");
+    if (!match || !AVATAR_TYPES.includes(match[1])) return res.status(404).end();
+    res.set("Content-Type", match[1]);
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.set(
+      "Cache-Control",
+      req.query.v === avatarVersion(user.avatarUpdatedAt) ? "public, max-age=31536000, immutable" : "no-cache"
+    );
+    res.send(Buffer.from(match[2], "base64"));
+  } catch (err) {
+    console.error("Avatar okunurken hata:", err.message);
+    res.status(500).end();
+  }
+});
 
 // SPA yedek yönlendirme: bilinen bir statik dosyaya karşılık gelmeyen
 // her GET isteği index.html'e düşsün (Socket.io kendi /socket.io/
