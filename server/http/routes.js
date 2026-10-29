@@ -2,7 +2,7 @@
 // fotoğraf paylaşımı API'si.
 const express = require("express");
 const path = require("path");
-const { User } = require("../db");
+const { Channel, User } = require("../db");
 const { AVATAR_TYPES, avatarVersion } = require("../lib/avatars");
 const { createRateLimiter } = require("../lib/limits");
 const { app } = require("../lib/realtime");
@@ -75,7 +75,7 @@ app.post(
   "/api/photos",
   requireAuth,
   express.json({ limit: "15mb" }),
-  (req, res) => {
+  async (req, res) => {
     const { channelId, imageData, mimeType } = req.body || {};
     // GÜVENLİK: gerçek bir data URI mi, beyan edilen mimeType ile
     // eşleşiyor mu (bkz. isValidImageDataUri — "takip pikseli" koruması).
@@ -95,8 +95,15 @@ app.post(
     if (!allowPhoto(req.username)) {
       return res.status(429).json({ success: false, message: "Çok hızlı fotoğraf gönderiyorsun, biraz bekle." });
     }
-    relayPhoto(channelId, req.username, imageData, mimeType, senderSocketIds);
-    res.json({ success: true });
+    try {
+      // Bildirime tıklayınca doğru sunucu açılsın diye kanalın sunucusu.
+      const channel = await Channel.findById(channelId).select("serverId").lean();
+      relayPhoto(channelId, channel?.serverId?.toString() || null, req.username, imageData, mimeType, senderSocketIds);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Fotoğraf iletilirken hata:", err.message);
+      res.status(500).json({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
   }
 );
 

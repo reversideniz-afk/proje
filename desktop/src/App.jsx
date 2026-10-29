@@ -1616,11 +1616,12 @@ function App() {
     // Erişebildiğin bir kanalda yeni mesaj (sunucu, giriş yapınca bütün
     // kanallarının bildirim odalarına seni koyuyor). Açık kanal değilse
     // okunmamış ve bahsedilme işaretleri; görmüyorsan masaüstü bildirimi.
-    socket.on('channel-activity', ({ channelId, serverId, username: from, text, replyToUsername }) => {
+    // ephemeral: tek seferlik fotoğraf; kanalda kalmadığı için sadece bildirim.
+    socket.on('channel-activity', ({ channelId, serverId, username: from, text, replyToUsername, ephemeral }) => {
       if (from && from === displayNameRef.current) return
       const mention = mentionsUser(text, displayNameRef.current) || replyToUsername === displayNameRef.current
       const isActive = channelId === activeChannelRef.current
-      if (!isActive) {
+      if (!isActive && !ephemeral) {
         if (!serverId || serverId === activeServerIdRef.current) {
           setUnreadChannels((prev) => (prev.includes(channelId) ? prev : [...prev, channelId]))
           if (mention) setMentionCounts((prev) => ({ ...prev, [channelId]: (prev[channelId] || 0) + 1 }))

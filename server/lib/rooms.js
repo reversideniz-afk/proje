@@ -23,9 +23,12 @@ async function notifyAdmins(event, payload) {
   }
 }
 
-// Fotoğrafı kanaldakilere iletir (hiçbir yere kaydetmeden). Kanalda
-// gönderenden başka kimse yoksa gönderene haber verir.
-function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
+// Fotoğrafı kanaldakilere iletir (hiçbir yere kaydetmeden). Kanalın diğer
+// üyelerine sadece bildirim gidiyor (ephemeral: kanalda okunacak bir şey
+// kalmıyor, okunmamış sayılmıyor). Kanalda gönderenden başka kimse yoksa
+// gönderene haber verir.
+const PHOTO_ACTIVITY_TEXT = "📷 Tek seferlik fotoğraf paylaştı (sadece o an kanalda olanlar görür)";
+function relayPhoto(channelId, serverId, username, imageData, mimeType, senderSocketIds) {
   io.to(textRoomName(channelId)).emit("new-photo", {
     username,
     imageData,
@@ -34,7 +37,7 @@ function relayPhoto(channelId, username, imageData, mimeType, senderSocketIds) {
   });
   io.to(`member-notify:${channelId}`)
     .except(senderSocketIds)
-    .emit("channel-activity", { channelId, username, text: "📷 Fotoğraf paylaştı" });
+    .emit("channel-activity", { channelId, serverId, username, text: PHOTO_ACTIVITY_TEXT, ephemeral: true });
   const others = Object.values(textRooms[channelId] || {}).filter((u) => u.username !== username);
   if (others.length === 0) {
     io.to(senderSocketIds).emit("new-message", {

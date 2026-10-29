@@ -55,6 +55,26 @@ async function joinVoiceTogether(...users) {
   }
 }
 
+// Masaüstü bildirimleri window.__notes'a kayda geçsin (gerçek bildirim
+// gösterilmesin); son bildirim window.__lastNote.
+function recordNotifications(user) {
+  return user.page.evaluate(() => {
+    window.__notes = []
+    window.Notification = class {
+      static permission = 'granted'
+      static requestPermission = async () => 'granted'
+      constructor(title, options) {
+        window.__notes.push({ title, body: options.body })
+        window.__lastNote = this
+      }
+      close() {}
+    }
+  })
+}
+
+const TINY_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
 async function sendAs(client, text) {
   const delivered = client.nextEvent('new-message', (m) => m.text === text)
   client.socket.emit('send-message', { token: client.token, text })
@@ -96,19 +116,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
 
   test('başka kanalda bahsedilince sayı ve bildirim çıkıyor, bildirime tıklayınca kanal "Yeni" çizgisiyle açılıyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
-    // Masaüstü bildirimleri kayda geçsin (gerçek bildirim gösterilmesin).
-    await mert.page.evaluate(() => {
-      window.__notes = []
-      window.Notification = class {
-        static permission = 'granted'
-        static requestPermission = async () => 'granted'
-        constructor(title, options) {
-          window.__notes.push({ title, body: options.body })
-          window.__lastNote = this
-        }
-        close() {}
-      }
-    })
+    await recordNotifications(mert)
     await mert.openChannel('genel')
     await mert.page.waitForTimeout(1500) // okundu bilgisi gitsin
     await mert.openChannel('oyun')
@@ -453,6 +461,32 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await assign.click()
     await mert.page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 4 })))
     await expect(mert.page.locator('.settings-key')).toHaveText('Fare 5')
+  })
+
+  test('tek seferlik fotoğraf: kanalda olmayana okunmamış değil, ne olduğunu söyleyen bildirim gidiyor', async ({ disco }) => {
+    const mert = await disco.user('Mert', { storage: { notifySettings: JSON.stringify({ mode: 'all' }) } })
+    await recordNotifications(mert)
+    await mert.openChannel('oyun')
+    const ece = await disco.user('Ece')
+    await ece.openChannel('genel')
+    const bora = await disco.client('Bora')
+    const activity = bora.nextEvent('channel-activity')
+
+    const alganis = await disco.client('Alganis')
+    await alganis.joinChannel(disco.serverId, disco.channels.genel)
+    const response = await fetch(`${disco.socketUrl}/api/photos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alganis.token}` },
+      body: JSON.stringify({ channelId: disco.channels.genel, imageData: TINY_PNG, mimeType: 'image/png' }),
+    })
+    expect(response.status).toBe(200)
+
+    // Kanaldaki fotoğrafı görüyor; kanalda olmayana sadece bildirim gidiyor.
+    await expect(ece.page.locator('img.chat-photo')).toBeVisible()
+    const text = '📷 Tek seferlik fotoğraf paylaştı (sadece o an kanalda olanlar görür)'
+    expect(await activity).toMatchObject({ channelId: disco.channels.genel, serverId: disco.serverId, text, ephemeral: true })
+    await expect.poll(() => mert.probe(() => window.__notes)).toEqual([{ title: 'Alganis · #genel', body: text }])
+    await expect(mert.channelButton('genel')).not.toHaveClass(/channel-button--unread/)
   })
 
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {

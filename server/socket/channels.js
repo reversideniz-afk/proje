@@ -452,7 +452,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     const username = await ctx.authenticate(token);
     if (!username || !ctx.textRoom) return;
     if (!isValidImageDataUri(imageData, mimeType)) return;
-    relayPhoto(ctx.textRoom, username, imageData, mimeType, [socket.id]);
+    relayPhoto(ctx.textRoom, ctx.serverId, username, imageData, mimeType, [socket.id]);
   });
 
   // ---- Daha eski mesajları getirme (geçmiş SINIRSIZ, parça parça) ----
