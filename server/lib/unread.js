@@ -32,9 +32,13 @@ async function unreadByChannel(username, channelIds) {
       const filter = { channelId, username: { $ne: username } };
       if (readAt) filter.createdAt = { $gt: readAt };
       const unread = !!(await Message.exists(filter));
+      // Bahsedilme: adı ya da @all geçiyor veya onun mesajına yanıt verilmiş.
       const mentions =
         unread && readAt
-          ? await Message.countDocuments({ ...filter, text: { $regex: mentionPattern(username), $options: "i" } })
+          ? await Message.countDocuments({
+              ...filter,
+              $or: [{ text: { $regex: mentionPattern(username), $options: "i" } }, { "replyTo.username": username }],
+            })
           : 0;
       result.set(key, { unread, mentions });
     })

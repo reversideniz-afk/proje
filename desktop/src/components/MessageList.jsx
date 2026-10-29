@@ -4,11 +4,12 @@
 // üstüne gelince, klavyeyle odaklanınca, sağ tıklayınca ve dokunmatikte
 // uzun basınca görünüyor (H15; eskiden sadece sağ tıkla açılıyordu).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, Info, Pencil, SmilePlus, Trash2, X } from 'lucide-react'
+import { Check, Copy, CornerUpLeft, Info, Pencil, Reply, SmilePlus, Trash2, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { QUICK_REACTIONS } from '../lib/config.js'
 import { formatDayLabel, formatFullDate, formatMessageTime, isSameDay } from '../lib/format.js'
-import { mentionsUser, renderMessageTextWithMentions } from '../lib/mentions.jsx'
+import { renderMarkdown } from '../lib/markdown.jsx'
+import { mentionsUser } from '../lib/mentions.jsx'
 import { userColor } from '../lib/userColor.js'
 import { useDismiss } from '../lib/useDismiss.js'
 
@@ -100,12 +101,16 @@ function MessageItem({
   onCancelEdit,
   onDelete,
   onOpenPhoto,
+  onReply,
+  onJumpTo,
 }) {
   const pressTimer = useRef(null)
   const isOwn = item.username === displayName
   const isPhoto = item.kind === 'photo'
   const reactions = groupReactions(item.reactions)
   const canDelete = !isPhoto && !!item.id && (isOwn || canModerate)
+  // Yanıt verilen kişi de bahsedilmiş sayılıyor.
+  const mentionsMe = !isOwn && (mentionsUser(item.text, displayName) || item.replyTo?.username === displayName)
 
   if (item.system) {
     return (
@@ -129,8 +134,10 @@ function MessageItem({
         'chat-message' +
         (grouped ? ' chat-message--grouped' : '') +
         (isActive || pickerOpen ? ' is-active' : '') +
-        (mentionsUser(item.text, displayName) && !isOwn ? ' chat-message--mention' : '')
+        (item.replyTo ? ' chat-message--reply' : '') +
+        (mentionsMe ? ' chat-message--mention' : '')
       }
+      id={item.id ? `mesaj-${item.id}` : undefined}
       onContextMenu={(e) => {
         if (isEditing || isPhoto) return
         e.preventDefault()
@@ -141,6 +148,19 @@ function MessageItem({
       onPointerLeave={cancelLongPress}
       onPointerCancel={cancelLongPress}
     >
+      {item.replyTo && (
+        <button
+          type="button"
+          className="chat-message-reply-preview"
+          onClick={() => onJumpTo(item.replyTo.id)}
+          title="Yanıt verilen mesaja git"
+        >
+          <CornerUpLeft className="icon" aria-hidden="true" />
+          <Avatar name={item.replyTo.username} size="xxs" />
+          <strong style={{ color: userColor(item.replyTo.username) }}>{item.replyTo.username}</strong>
+          <span className="chat-message-reply-text">{item.replyTo.text}</span>
+        </button>
+      )}
       {grouped ? (
         <time className="chat-message-gutter-time" dateTime={item.createdAt} title={formatFullDate(item.createdAt)}>
           {formatMessageTime(item.createdAt)}
@@ -174,15 +194,15 @@ function MessageItem({
             <span className="chat-photo-hint">Tek seferlik fotoğraf · kaydedilmiyor</span>
           </div>
         ) : (
-          <p className="chat-message-text">
-            {renderMessageTextWithMentions(item.text, displayName)}
+          <div className="chat-message-text">
+            {renderMarkdown(item.text, displayName)}
             {item.editedAt && (
               <span className="chat-message-edited" title={formatFullDate(item.editedAt)}>
                 {' '}
                 (düzenlendi)
               </span>
             )}
-          </p>
+          </div>
         )}
 
         {reactions.length > 0 && (
@@ -221,6 +241,9 @@ function MessageItem({
             onClick={(e) => onOpenPicker(e.currentTarget)}
           >
             <SmilePlus className="icon" />
+          </button>
+          <button type="button" className="icon-btn" title="Yanıtla" aria-label="Yanıtla" onClick={() => onReply(item)}>
+            <Reply className="icon" />
           </button>
           {isOwn && (
             <button type="button" className="icon-btn" title="Düzenle" aria-label="Düzenle" onClick={onStartEdit}>
@@ -273,6 +296,7 @@ export function MessageList({
   onEdit,
   onDelete,
   onOpenPhoto,
+  onReply,
   containerRef,
 }) {
   const [activeId, setActiveId] = useState(null)
@@ -302,6 +326,17 @@ export function MessageList({
 
   const keyOf = (item, i) => item.id || `${item.kind}-${item.createdAt}-${i}`
 
+  // Yanıt önizlemesine tıklayınca asıl mesaja kaydır ve kısa süre vurgula
+  // (yüklenmiş eski mesajlar arasındaysa).
+  const jumpTo = (id) => {
+    const target = id && document.getElementById(`mesaj-${id}`)
+    if (!target) return
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    target.classList.remove('is-highlighted')
+    void target.offsetWidth
+    target.classList.add('is-highlighted')
+  }
+
   // "Yeni" çizgisi: kanalı en son okuduğundan sonra başkasının yazdığı ilk
   // mesajın üstünde.
   const firstNewIndex = newSince
@@ -318,6 +353,7 @@ export function MessageList({
     const grouped =
       !newDay &&
       !isFirstNew &&
+      !item.replyTo &&
       !item.system &&
       !prev.system &&
       prev.username === item.username &&
@@ -363,6 +399,8 @@ export function MessageList({
             onDelete(id)
           }}
           onOpenPhoto={onOpenPhoto}
+          onReply={onReply}
+          onJumpTo={jumpTo}
         />
       </Fragment>
     )

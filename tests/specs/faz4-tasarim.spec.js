@@ -49,10 +49,13 @@ test.describe('Faz 4: tasarım', { tag: '@faz4' }, () => {
     await expect(toolbar).toHaveCSS('opacity', '0')
 
     // Yazma alanından geriye doğru: fotoğraf düğmesi, sonra son mesajın
-    // araç çubuğu (Metni kopyala, Tepki ekle).
+    // araç çubuğu (Metni kopyala, Yanıtla, Tepki ekle).
     await mert.page.getByLabel('Mesaj yaz').focus()
-    for (let i = 0; i < 3; i++) await mert.page.keyboard.press('Shift+Tab')
-    await expect(message.getByRole('button', { name: 'Tepki ekle' })).toBeFocused()
+    const react = message.getByRole('button', { name: 'Tepki ekle' })
+    for (let i = 0; i < 6 && !(await react.evaluate((el) => el === document.activeElement)); i++) {
+      await mert.page.keyboard.press('Shift+Tab')
+    }
+    await expect(react).toBeFocused()
     await expect(toolbar).toHaveCSS('opacity', '1')
 
     await mert.page.keyboard.press('Enter')

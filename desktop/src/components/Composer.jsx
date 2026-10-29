@@ -3,7 +3,7 @@
 // harfli isimlerde de çalışıyor ve imlecin olduğu yerdeki kelimeye bakıyor
 // (H22; eskiden sadece metnin sonunda ve İngilizce harflerle çalışıyordu).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ImagePlus, LoaderCircle, SendHorizontal, Smile } from 'lucide-react'
+import { ImagePlus, LoaderCircle, SendHorizontal, Smile, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { COMPOSER_EMOJIS } from '../lib/config.js'
 import { useDismiss } from '../lib/useDismiss.js'
@@ -32,7 +32,18 @@ function EmojiPicker({ onPick, onClose }) {
   )
 }
 
-export function Composer({ channelName, members, displayName, onSend, onTyping, onPhotoFile, isSendingPhoto }) {
+// replyingTo: yanıt verilen mesaj (varsa üstte çubuk çıkıyor, Esc vazgeçiyor).
+export function Composer({
+  channelName,
+  members,
+  displayName,
+  onSend,
+  onTyping,
+  onPhotoFile,
+  isSendingPhoto,
+  replyingTo,
+  onCancelReply,
+}) {
   const [text, setText] = useState('')
   const [caret, setCaret] = useState(0)
   const [highlight, setHighlight] = useState(0)
@@ -68,10 +79,10 @@ export function Composer({ channelName, members, displayName, onSend, onTyping, 
     el.style.height = `${Math.min(el.scrollHeight, window.innerHeight / 3)}px`
   }, [text])
 
-  // Kanal değişince yazı alanına odaklan.
+  // Kanal değişince ve yanıt başlayınca yazı alanına odaklan.
   useEffect(() => {
     textareaRef.current?.focus({ preventScroll: true })
-  }, [channelName])
+  }, [channelName, replyingTo?.id])
 
   const updateCaret = () => setCaret(textareaRef.current?.selectionStart ?? text.length)
 
@@ -135,6 +146,10 @@ export function Composer({ channelName, members, displayName, onSend, onTyping, 
       e.preventDefault()
       submit()
     }
+    if (e.key === 'Escape' && replyingTo) {
+      e.preventDefault()
+      onCancelReply()
+    }
   }
 
   const handlePaste = (e) => {
@@ -150,12 +165,28 @@ export function Composer({ channelName, members, displayName, onSend, onTyping, 
 
   return (
     <form
-      className="composer"
+      className={'composer' + (replyingTo ? ' composer--replying' : '')}
       onSubmit={(e) => {
         e.preventDefault()
         submit()
       }}
     >
+      {replyingTo && (
+        <div className="composer-reply">
+          <span>
+            Yanıt veriyorsun: <strong>{replyingTo.username}</strong>
+          </span>
+          <button
+            type="button"
+            className="icon-btn icon-btn--small"
+            onClick={onCancelReply}
+            aria-label="Yanıtı iptal et"
+            title="Yanıtı iptal et (Esc)"
+          >
+            <X className="icon" />
+          </button>
+        </div>
+      )}
       {open && (
         <ul id={listId} className="popover mention-suggestions" role="listbox" aria-label="Etiketlenecek kişi">
           {suggestions.map((s, i) => (

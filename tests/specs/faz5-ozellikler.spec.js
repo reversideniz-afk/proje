@@ -129,6 +129,102 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect(icon).toHaveAttribute('aria-label', 'Mert Sunucusu, 1 bahsedilme')
   })
 
+  test('yanıt: asıl mesajın kopyası saklanıyor, sadece aynı kanaldan, yanıt alan bahsedilmiş sayılıyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    await mert.emitAck('join-channel', { serverId: disco.serverId, channelId: disco.channels.genel })
+    const original = await sendAs(mert, ('akşam 9 gibi giriyorum ' + 'uzun '.repeat(40)).trim())
+    await mert.emitAck('join-channel', { serverId: disco.serverId, channelId: disco.channels.oyun })
+    const elsewhere = await sendAs(mert, 'oyun kanalındaki mesaj')
+    mert.close()
+
+    const ece = await disco.client('Ece')
+    await ece.joinChannel(disco.serverId, disco.channels.genel)
+    const reply = ece.nextEvent('new-message', (m) => m.text === 'tamam geliyorum')
+    ece.socket.emit('send-message', { token: ece.token, text: 'tamam geliyorum', replyToId: original.id })
+    expect((await reply).replyTo).toEqual({ id: original.id, username: 'Mert', text: original.text.slice(0, 120) })
+
+    // Başka kanaldaki mesaja buradan yanıt verilemiyor; geçersiz kimlik yok sayılıyor.
+    const foreign = ece.nextEvent('new-message', (m) => m.text === 'çapraz')
+    ece.socket.emit('send-message', { token: ece.token, text: 'çapraz', replyToId: elsewhere.id })
+    expect((await foreign).replyTo).toBeNull()
+    const junk = ece.nextEvent('new-message', (m) => m.text === 'bozuk')
+    ece.socket.emit('send-message', { token: ece.token, text: 'bozuk', replyToId: { $ne: null } })
+    expect((await junk).replyTo).toBeNull()
+
+    // Mert'e yanıt, uygulaması kapalıyken bahsedilme olarak sayılıyor ve geçmişte de görünüyor.
+    const again = await disco.client('Mert')
+    const channels = (await again.emitAck('server-channels', { serverId: disco.serverId })).channels
+    expect(channels.find((c) => c.name === 'genel')).toMatchObject({ unread: true, mentions: 1 })
+    const history = again.nextEvent('message-history')
+    await again.emitAck('join-channel', { serverId: disco.serverId, channelId: disco.channels.genel })
+    expect((await history).find((m) => m.text === 'tamam geliyorum').replyTo.username).toBe('Mert')
+  })
+
+  test('yanıt arayüzü: araç çubuğundan yanıtla, karşıda önizleme ve vurgu, Esc vazgeçiyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    await ece.send('kim geliyor bu akşam')
+    const asked = mert.chat.locator('.chat-message', { hasText: 'kim geliyor bu akşam' })
+    await asked.hover()
+    await asked.getByRole('button', { name: 'Yanıtla' }).click()
+    await expect(mert.page.locator('.composer-reply')).toContainText('Yanıt veriyorsun: Ece')
+    await expect(mert.page.getByLabel('Mesaj yaz')).toBeFocused()
+    await mert.page.keyboard.press('Escape')
+    await expect(mert.page.locator('.composer-reply')).toHaveCount(0)
+
+    await asked.hover()
+    await asked.getByRole('button', { name: 'Yanıtla' }).click()
+    await mert.page.keyboard.type('ben geliyorum')
+    await mert.page.keyboard.press('Enter')
+    await expect(mert.page.locator('.composer-reply')).toHaveCount(0)
+
+    const answer = ece.chat.locator('.chat-message', { hasText: 'ben geliyorum' })
+    await expect(answer.locator('.chat-message-reply-preview')).toContainText('Ece')
+    await expect(answer.locator('.chat-message-reply-preview')).toContainText('kim geliyor bu akşam')
+    await expect(answer).toHaveClass(/chat-message--mention/)
+    await answer.locator('.chat-message-reply-preview').click()
+    await expect(ece.chat.locator('.chat-message', { hasText: 'kim geliyor bu akşam' }).first()).toHaveClass(/is-highlighted/)
+  })
+
+  test('biçimlendirme: kalın, italik, kod, üstü çizili, spoiler, alıntı, link; HTML düz metin kalıyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await mert.openChannel('genel')
+    await ece.openChannel('genel')
+    const input = mert.page.getByLabel('Mesaj yaz')
+    await input.fill(
+      '**kalın** *italik* _de_ `kod` ~~çizik~~ ||sürpriz|| https://ornek.invalid/sayfa?a=1. @Ece snake_case_ad\n> alıntı satırı\n```\nconst x = 1 < 2\n```\n<img src=x onerror="window.__xss=1">'
+    )
+    await mert.page.keyboard.press('Enter')
+
+    const message = ece.chat.locator('.chat-message', { hasText: 'kalın' })
+    const text = message.locator('.chat-message-text')
+    await expect(text.locator('strong')).toHaveText('kalın')
+    await expect(text.locator('em')).toHaveText(['italik', 'de'])
+    await expect(text.locator('code.md-code')).toHaveText('kod')
+    await expect(text.locator('del')).toHaveText('çizik')
+    await expect(text.locator('blockquote')).toHaveText('alıntı satırı')
+    await expect(text.locator('pre.md-codeblock')).toHaveText('const x = 1 < 2')
+    const link = text.getByRole('link', { name: 'https://ornek.invalid/sayfa?a=1' })
+    await expect(link).toHaveAttribute('href', 'https://ornek.invalid/sayfa?a=1')
+    await expect(link).toHaveAttribute('target', '_blank')
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    await expect(text).toContainText('snake_case_ad')
+    await expect(text.locator('.mention--me')).toHaveText('@Ece')
+
+    const spoiler = text.getByRole('button', { name: 'Spoiler, göstermek için tıkla' })
+    await expect(spoiler).toHaveCSS('color', 'rgba(0, 0, 0, 0)')
+    await spoiler.click()
+    await expect(text.locator('.md-spoiler--shown')).toHaveText('sürpriz')
+
+    // HTML öğesi oluşmuyor, metin olarak görünüyor.
+    await expect(text.locator('img')).toHaveCount(0)
+    await expect(text).toContainText('<img src=x onerror="window.__xss=1">')
+    expect(await ece.probe(() => window.__xss)).toBeUndefined()
+  })
+
   test('H33: açık sunucunun simgesine tekrar tıklamak kanaldan ve sesten çıkarmıyor', async ({ disco }) => {
     const observer = await disco.observer('genel')
     const mert = await disco.user('Mert')
@@ -155,6 +251,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
       serverId: disco.serverId,
       username: 'Ece',
       text: '@Mert neredesin',
+      replyToUsername: null,
     })
   })
 

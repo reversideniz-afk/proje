@@ -188,6 +188,110 @@
   overflow-wrap: anywhere;
 }
 
+/* Yanıt: asıl mesajın kısa önizlemesi, avatarın hizasından başlayan
+   kıvrık bir çizgiyle. */
+.chat-message-reply-preview {
+  grid-column: 2;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--soluk);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-message-reply-preview .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-message-reply-preview strong {
+  flex: none;
+  font-weight: 600;
+}
+
+.chat-message-reply-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-message-reply-preview:hover .chat-message-reply-text {
+  color: var(--metin);
+}
+
+.chat-message.is-highlighted {
+  animation: message-highlight 1.6s ease-out;
+}
+
+@keyframes message-highlight {
+  0%,
+  40% {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+}
+
+/* Biçimlendirme */
+.md-code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--gece);
+  font: 0.88em/1.4 var(--font-mono);
+}
+
+.md-codeblock {
+  margin: 4px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius);
+  background: var(--gece);
+  font: 13px/1.5 var(--font-mono);
+  white-space: pre;
+}
+
+.md-quote {
+  margin: 2px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--cizgi);
+  color: var(--ikincil);
+}
+
+.md-link {
+  color: var(--link);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.md-link:hover {
+  text-decoration: underline;
+}
+
+.md-spoiler {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--metin-mesaj);
+  color: transparent;
+  cursor: pointer;
+}
+
+.md-spoiler > span {
+  visibility: hidden;
+}
+
+.md-spoiler--shown {
+  background: var(--kabin);
+  color: inherit;
+  cursor: auto;
+}
+
 .chat-message-edited {
   color: var(--soluk);
   font-size: 12px;
@@ -461,6 +565,30 @@
   padding: 6px;
   border-radius: var(--radius-lg);
   background: var(--kabin);
+}
+
+/* Yanıt veriyorsun çubuğu yazma alanının üst kenarına yapışık. */
+.composer--replying {
+  flex-wrap: wrap;
+  padding-top: 0;
+}
+
+.composer-reply {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 -6px 4px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--loca);
+  color: var(--ikincil);
+  font-size: 13px;
+}
+
+.composer-reply strong {
+  color: var(--metin);
 }
 
 .composer:focus-within {

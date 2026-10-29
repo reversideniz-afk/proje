@@ -13,7 +13,12 @@ async function shot(user, testInfo, name) {
 const CHAT = [
   { username: 'Mert', text: 'akşam kim var? 9 gibi bir şeyler açalım mı', minutesAgo: 26 * 60 },
   { username: 'Ece', text: 'ben varım ama 9.30 olur ancak', minutesAgo: 25 * 60 },
-  { username: 'Bora', text: 'ben de katılırım, kulaklığım şarj oluyor', minutesAgo: 40 },
+  {
+    username: 'Bora',
+    text: 'ben de katılırım, kulaklığım şarj oluyor',
+    minutesAgo: 40,
+    replyTo: { username: 'Mert', text: 'akşam kim var? 9 gibi bir şeyler açalım mı' },
+  },
   { username: 'Bora', text: 'Mert sen ekranı paylaşır mısın?', minutesAgo: 39 },
   {
     username: 'Mert',
@@ -25,7 +30,7 @@ const CHAT = [
       { emoji: '🎉', username: 'Ece' },
     ],
   },
-  { username: 'Ece', text: 'tamamdır, geliyorum', minutesAgo: 3 },
+  { username: 'Ece', text: 'tamamdır, **9.30** gibi oradayım. sunucu adresi `disco-lobi` değil mi?', minutesAgo: 3 },
 ]
 
 test.describe('Görünüm', { tag: '@gorunum' }, () => {
@@ -37,7 +42,7 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await mert.login()
     await shot(mert, testInfo, '02-kanal-secilmedi')
     await mert.openChannel('genel')
-    await expect(mert.chat).toContainText('tamamdır')
+    await expect(mert.chat).toContainText('oradayım')
     await shot(mert, testInfo, '03-sohbet')
 
     await mert.chat.locator('.chat-message', { hasText: 'toplanıyoruz' }).hover()
@@ -80,7 +85,7 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await mert.page.getByRole('button', { name: 'Kanalları göster' }).click()
     await shot(mert, testInfo, '12-telefon-cekmece')
     await mert.channelButton('genel').click()
-    await expect(mert.chat).toContainText('tamamdır')
+    await expect(mert.chat).toContainText('oradayım')
     await shot(mert, testInfo, '13-telefon-sohbet')
     await mert.page.getByRole('button', { name: 'Sese katıl', exact: true }).click()
     await expect(mert.page.locator('.voice-stage')).toBeVisible()

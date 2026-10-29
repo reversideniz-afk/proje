@@ -33,6 +33,7 @@
   --tehlike-hover: #ef6064;
   --tehlike-soft: rgb(229 72 77 / 16%);
   --cevrimici: #3fb97c;
+  --link: #8cb8ff;
   --uyari: #e6b84a;
 
   --font-display: 'Unbounded Variable', 'Segoe UI', system-ui, sans-serif;
@@ -365,6 +366,9 @@ img {
   object-fit: cover;
 }
 
+.avatar--xxs {
+  --size: 16px;
+}
 .avatar--xs {
   --size: 22px;
 }

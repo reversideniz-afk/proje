@@ -1,6 +1,6 @@
 // Kanalın sohbeti: mesajlar, "yazıyor…" göstergesi ve yazma alanı. Sohbet
 // alanına fotoğraf sürükleyip bırakınca kanala gönderiliyor.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ImagePlus, MessagesSquare } from 'lucide-react'
 import { Composer } from './Composer.jsx'
 import { MessageList } from './MessageList.jsx'
@@ -36,6 +36,11 @@ export function ChatPanel({
   messagesRef,
 }) {
   const [dragging, setDragging] = useState(false)
+  const [replyingTo, setReplyingTo] = useState(null)
+  // Başka kanala geçince yarım kalan yanıt düşüyor.
+  useEffect(() => {
+    setReplyingTo(null)
+  }, [channelName])
 
   return (
     <section
@@ -79,6 +84,7 @@ export function ChatPanel({
           onEdit={onEdit}
           onDelete={onDelete}
           onOpenPhoto={onOpenPhoto}
+          onReply={setReplyingTo}
           containerRef={messagesRef}
         />
       </div>
@@ -100,7 +106,12 @@ export function ChatPanel({
         channelName={channelName}
         members={members}
         displayName={displayName}
-        onSend={onSend}
+        onSend={(text) => {
+          onSend(text, replyingTo?.id)
+          setReplyingTo(null)
+        }}
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
         onTyping={onTyping}
         onPhotoFile={onPhotoFile}
         isSendingPhoto={isSendingPhoto}

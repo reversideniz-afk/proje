@@ -105,11 +105,12 @@ export function insertChat(mongoUri, channelId, messages) {
   const now = Date.now()
   return withDatabase(mongoUri, () =>
     Message.insertMany(
-      messages.map(({ username, text, minutesAgo, at, reactions = [] }) => ({
+      messages.map(({ username, text, minutesAgo, at, reactions = [], replyTo }) => ({
         channelId,
         username,
         text,
         reactions,
+        replyTo,
         createdAt: at || new Date(now - minutesAgo * 60_000),
       }))
     )

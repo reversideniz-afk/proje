@@ -1,5 +1,6 @@
 // Metin kanalları: girme/çıkma, mesajlar, tepkiler, düzenleme ve silme,
 // !sil komutları, yazıyor göstergesi, eski mesajlar, bağlantının kopması.
+const mongoose = require("mongoose");
 const { User, Message, ChannelMember } = require("../db");
 const { canModerateServer, checkChannelAccess } = require("../lib/access");
 const { io } = require("../lib/realtime");
@@ -133,7 +134,8 @@ module.exports = function registerChannelHandlers(socket, ctx) {
   });
 
   // ---- Sohbet mesajı gönderme (kalıcı) ----
-  socket.on("send-message", async ({ token, text }) => {
+  // replyToId: yanıt verilen mesaj (sadece aynı kanaldan).
+  socket.on("send-message", async ({ token, text, replyToId }) => {
     const username = await ctx.authenticate(token);
     // GÜVENLİK/SAĞLAMLIK: "text" beklenmedik bir tipte (ör. bir nesne)
     // gelirse .trim() çağrısı hata fırlatabilirdi — bunu try/catch'e
@@ -143,19 +145,20 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (!trimmedText || trimmedText.length > 2000) return;
 
     try {
+      let replyTo;
+      if (typeof replyToId === "string" && mongoose.isValidObjectId(replyToId)) {
+        const original = await Message.findOne({ _id: replyToId, channelId: ctx.textRoom }).lean();
+        if (original) {
+          replyTo = { messageId: original._id, username: original.username, text: original.text.slice(0, 120) };
+        }
+      }
       const message = await Message.create({
         channelId: ctx.textRoom,
         username,
         text: trimmedText,
+        replyTo,
       });
-      io.to(textRoomName(ctx.textRoom)).emit("new-message", {
-        id: message._id.toString(),
-        username: message.username,
-        text: message.text,
-        createdAt: message.createdAt,
-        editedAt: null,
-        reactions: [],
-      });
+      io.to(textRoomName(ctx.textRoom)).emit("new-message", serializeMessage(message.toObject()));
       // YENİ: bu kanalın ÜYESİ olan ama şu an BAŞKA bir kanalda olan
       // kişilere hafif bir "burada bir şey oldu" işareti gönder —
       // okunmamış kanal işareti için. Kendisi zaten mesajı gördüğü
@@ -166,6 +169,8 @@ module.exports = function registerChannelHandlers(socket, ctx) {
         serverId: ctx.serverId,
         username,
         text: trimmedText.slice(0, 200),
+        // Yanıt verilen kişi bahsedilmiş sayılıyor (Discord'daki gibi).
+        replyToUsername: replyTo?.username || null,
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);

@@ -1458,7 +1458,7 @@ function App() {
       // YENİ: "@all" da tıpkı kendi adının bahsedilmesi gibi bildirim
       // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
       // kişiye değil.
-      const isMention = mentionsUser(message.text, myName)
+      const isMention = mentionsUser(message.text, myName) || (!!myName && message.replyTo?.username === myName)
       if (!isOwnMessage && notifySettingsRef.current.sounds) {
         if (isMention && document.hidden) {
           playMentionSound()
@@ -1513,9 +1513,9 @@ function App() {
     // Erişebildiğin bir kanalda yeni mesaj (sunucu, giriş yapınca bütün
     // kanallarının bildirim odalarına seni koyuyor). Açık kanal değilse
     // okunmamış ve bahsedilme işaretleri; görmüyorsan masaüstü bildirimi.
-    socket.on('channel-activity', ({ channelId, serverId, username: from, text }) => {
+    socket.on('channel-activity', ({ channelId, serverId, username: from, text, replyToUsername }) => {
       if (from && from === displayNameRef.current) return
-      const mention = mentionsUser(text, displayNameRef.current)
+      const mention = mentionsUser(text, displayNameRef.current) || replyToUsername === displayNameRef.current
       const isActive = channelId === activeChannelRef.current
       if (!isActive) {
         if (!serverId || serverId === activeServerIdRef.current) {
@@ -2436,7 +2436,8 @@ function App() {
     })
   }
 
-  const handleSendMessage = (text) => {
+  // replyToId: yanıt verilen mesaj (komutlarda yok sayılıyor).
+  const handleSendMessage = (text, replyToId) => {
     if (!text || !socketRef.current) return
 
     // YENİ: "!sil n" komutu — kendi son N mesajını topluca siler.
@@ -2475,7 +2476,7 @@ function App() {
       return
     }
 
-    socketRef.current.emit('send-message', { token: sessionTokenRef.current, text })
+    socketRef.current.emit('send-message', { token: sessionTokenRef.current, text, replyToId })
     // Mesaj gönderilince "yazıyor" durumunu hemen bitir.
     if (typingStopTimeoutRef.current) {
       clearTimeout(typingStopTimeoutRef.current)

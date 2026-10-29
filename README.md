@@ -113,7 +113,8 @@ Dosyalar:
   arayüz davranışlarının (kim konuşuyor, gruplama, emoji, kanal oluşturma, ayarlar) testleri.
 - `specs/faz5-ozellikler.spec.js` — Faz 5: mikrofonun sese girerken hazırlanması (H28), seste
   mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı, kalıcı okunmamışlar ve
-  bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33).
+  bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33), mesaja
+  yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor).
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.

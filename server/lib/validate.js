@@ -37,6 +37,9 @@ function serializeMessage(msg) {
     createdAt: msg.createdAt,
     editedAt: msg.editedAt || null,
     reactions: msg.reactions || [],
+    replyTo: msg.replyTo
+      ? { id: msg.replyTo.messageId?.toString() || null, username: msg.replyTo.username, text: msg.replyTo.text }
+      : null,
   };
 }
 

@@ -62,6 +62,17 @@ const messageSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   // YENİ: mesaj düzenlenmişse ne zaman düzenlendiği (arayüzde "(düzenlendi)" göstermek için).
   editedAt: { type: Date, default: null },
+  // Yanıt verilen mesajın o anki kısa kopyası: asıl mesaj sonradan silinse
+  // ya da eski mesajlar yüklenmemiş olsa da önizleme gösterilebiliyor.
+  replyTo: {
+    type: {
+      messageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message" },
+      username: String,
+      text: String,
+    },
+    default: undefined,
+    _id: false,
+  },
   // YENİ: emoji tepkileri — [{ emoji: "👍", username: "Alganis" }, ...]
   // Aynı kişi aynı emojiyi tekrar tıklarsa, o kaydı siliyoruz (aç/kapa).
   reactions: {
