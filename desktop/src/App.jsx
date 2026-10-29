@@ -9,10 +9,12 @@ import { ChatPanel } from './components/ChatPanel.jsx'
 import {
   ConfirmDialog,
   CreateChannelDialog,
+  EditChannelDialog,
   InviteDialog,
   JoinInviteDialog,
   PhotoLightbox,
-  ScreenPicker,
+  RoleDialog,
+  ScreenShareDialog,
   SecurityAlertDialog,
   ServerDialog,
   VolumePopover,
@@ -26,7 +28,14 @@ import { DEBUG, debugLog } from './lib/debug.js'
 import { describeMediaError, formatKeyCode } from './lib/format.js'
 import { mentionsUser } from './lib/mentions.jsx'
 import { DEFAULT_VOICE_SETTINGS, createMicProcessor, gateSettings, micConstraints } from './lib/micProcessor.js'
+import {
+  DEFAULT_SCREEN_QUALITY,
+  applyScreenEncoding,
+  applyScreenQuality,
+  screenTrackConstraints,
+} from './lib/screenShare.js'
 import { ensureNotificationPermission, requestAttention, setAttentionBadge, showNotification } from './lib/notify.js'
+import { roleColorOf } from './lib/roles.js'
 import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
@@ -304,6 +313,12 @@ function App() {
   }, [])
   // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
   const [serverMembers, setServerMembers] = useState([])
+  // Aktif sunucuda kendi yetkilerin ve sunucunun rolleri (sırayla); ikisi
+  // de kanal listesiyle birlikte geliyor (bkz. fetchServerChannels).
+  const [serverPermissions, setServerPermissions] = useState({})
+  const [serverRoles, setServerRoles] = useState([])
+  const [editChannelDialog, setEditChannelDialog] = useState(null) // { channel, busy, error } | null
+  const [roleDialog, setRoleDialog] = useState(null) // { role (yeni rolde null), busy, error } | null
   // Kanal oluşturma penceresi ve sunucuyu silme onayı. (Kanal adı eskiden
   // window.prompt ile soruluyordu; masaüstü uygulamasında prompt hiç
   // açılmıyor, kanal eklenemiyordu.)
@@ -419,6 +434,18 @@ function App() {
   // Başka kanaldan gelen mesaj için bildirim (aşağıda, her çizimde güncel
   // kanal ve sunucu adlarıyla kuruluyor).
   const notifyActivityRef = useRef(null)
+
+  // Durumun (Çevrimiçi, Boşta, Rahatsız etmeyin, Görünmez) ve özel durumun
+  // sunucuda saklanıyor, girişte geliyor. Rahatsız etmeyin'de bildirim ve
+  // mesaj sesi yok. Kendiliğinden boşta olma ve oynanan oyun bağlantıya
+  // ait (livePresenceRef), yeniden bağlanınca tekrar gönderiliyor.
+  const [myStatus, setMyStatus] = useState('online')
+  const myStatusRef = useRef('online')
+  const [myCustomStatus, setMyCustomStatus] = useState(null) // { text, expiresAt } | null
+  const [customStatusDialog, setCustomStatusDialog] = useState(null) // { busy, error } | null
+  const livePresenceRef = useRef({ idle: false, activity: null })
+  // Masaüstünde oynanan oyun herkese görünsün mü (bu cihazda kalıcı).
+  const [shareActivity, setShareActivity] = useState(() => window.localStorage?.getItem('shareActivity') !== '0')
 
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
@@ -558,7 +585,19 @@ function App() {
   }, [pttKey])
   const [isCameraOn, setIsCameraOn] = useState(false)
 
-  // --- Ekran paylaşımı (tamamen ayrı akış/bağlantı) ---
+  // --- Ekran paylaşımı ---
+  // Kalite (bu cihazda kalıcı): çözünürlük, kare hızı, içerik türü.
+  const [screenQuality, setScreenQuality] = useState(() => {
+    try {
+      return { ...DEFAULT_SCREEN_QUALITY, ...JSON.parse(window.localStorage?.getItem('screenQuality') || '{}') }
+    } catch {
+      return DEFAULT_SCREEN_QUALITY
+    }
+  })
+  const screenQualityRef = useRef(screenQuality)
+  // Paylaşma penceresi: { sources } — masaüstünde paylaşılabilecek ekran ve
+  // pencereler, web'de null (tarayıcının kendi seçicisi açılıyor).
+  const [screenShareDialog, setScreenShareDialog] = useState(null)
   const [localScreenStream, setLocalScreenStream] = useState(null)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
 
@@ -577,7 +616,6 @@ function App() {
     prevPeersRef.current = peers
   }, [peers])
   const [mediaError, setMediaError] = useState(null)
-  const [screenSourceOptions, setScreenSourceOptions] = useState(null)
 
   // YENİ: büyütülmüş kutucuk — bir video/ekran kutucuğuna tıklayınca
   // o kutucuk büyür, diğerleri küçük bir şeride iner.
@@ -1024,22 +1062,11 @@ function App() {
     return () => clearInterval(interval)
   }, [inVoice])
 
+  // Masaüstünde ekran paylaşımı getDisplayMedia ile başlıyor; ana süreç
+  // paylaşılabilecek ekran ve pencereleri gönderince seçim penceresi açılıyor.
   useEffect(() => {
     if (!window.electronAPI?.onScreenSources) return
-    const unsubscribe = window.electronAPI.onScreenSources((sources) => {
-      setScreenSourceOptions(sources)
-    })
-    return unsubscribe
-  }, [])
-
-  const handleSelectScreenSource = useCallback((sourceId) => {
-    window.electronAPI?.selectScreenSource(sourceId)
-    setScreenSourceOptions(null)
-  }, [])
-
-  const handleCancelScreenSource = useCallback(() => {
-    window.electronAPI?.selectScreenSource(null)
-    setScreenSourceOptions(null)
+    return window.electronAPI.onScreenSources((sources) => setScreenShareDialog({ sources }))
   }, [])
 
   const cleanupPeerConnections = useCallback(() => {
@@ -1186,9 +1213,17 @@ function App() {
   // girince, zaten seste olanlar (bkz. 'voice-user-joined'). Karşı taraf
   // aynı kanalları teklifle birlikte alıyor ve kendi izlerini onlara
   // takıyor (bkz. attachLocalMedia, 'signal' içinde).
+  // Ekran görüntüsü kanalının bit hızı ve kare hızı sınırı; her yeni
+  // bağlantıda ve kalite değişince (bkz. lib/screenShare.js).
+  const applyScreenEncodingTo = useCallback((pc) => {
+    const transceiver = transceiverRoles(pc)?.screen
+    if (transceiver) applyScreenEncoding(transceiver.sender, screenQualityRef.current)
+  }, [])
+
   const attachLocalMedia = useCallback((pc) => {
     const roles = transceiverRoles(pc)
     if (!roles) return
+    applyScreenEncodingTo(pc)
     const main = localMainStreamRef.current
     const screen = localScreenStreamRef.current
     const tracks = {
@@ -1207,7 +1242,7 @@ function App() {
         })
       }
     }
-  }, [])
+  }, [applyScreenEncodingTo])
 
   const startMainConnection = useCallback(
     (peerSocketId) => {
@@ -1484,6 +1519,12 @@ function App() {
       const isReconnect = hasConnectedBeforeRef.current
       hasConnectedBeforeRef.current = true
       if (isReconnect) refreshPresenceRef.current?.()
+      // Boşta ve oynanan oyun bağlantıya bağlı: yeni bağlantıda tekrar söyle.
+      if (isReconnect && sessionTokenRef.current) {
+        const { idle, activity } = livePresenceRef.current
+        if (idle) socket.emit('set-idle', { idle })
+        if (activity) socket.emit('set-activity', { name: activity })
+      }
       const channelId = activeChannelRef.current
       if (!isReconnect || !channelId || !sessionTokenRef.current) return
       socket.emit(
@@ -1672,6 +1713,14 @@ function App() {
     })
     socket.on('members-changed', ({ serverId } = {}) => {
       if (serverId === activeServerIdRef.current) refreshServerMembersRef.current?.()
+    })
+    // Roller ya da birinin rolleri değişti: yetkiler, kanallar, renkler ve
+    // üye listesindeki başlıklar yenilensin.
+    socket.on('roles-changed', ({ serverId } = {}) => {
+      if (serverId !== activeServerIdRef.current) return
+      refreshServerDataRef.current?.()
+      refreshPresenceRef.current?.()
+      refreshServerMembersRef.current?.()
     })
 
     socket.on('voice-user-left', ({ socketId }) => {
@@ -2092,15 +2141,16 @@ function App() {
 
   const startScreenShare = useCallback(async () => {
     try {
-      // YENİ: video:true'nun yanına audio:true eklemek, Electron'a "sistem
-      // sesini de yakala" sinyali veriyor (asıl izin main.cjs'teki
-      // 'loopback' ayarından geliyor).
+      // audio:true, Electron'a "sistem sesini de yakala" sinyali veriyor
+      // (asıl izin main.cjs'teki 'loopback' ayarından geliyor).
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: screenTrackConstraints(screenQualityRef.current),
         audio: true,
       })
       const screenTrack = screenStream.getVideoTracks()[0]
       screenTrack.onended = () => stopScreenShare()
+      // Masaüstünde kalite, kaynak seçilirken de değişmiş olabilir.
+      await applyScreenQuality(screenTrack, screenQualityRef.current)
       // Ref'i hemen güncelliyoruz: bu andan sonra sese giren biri de
       // paylaşımı alsın (yeni bağlantılar izleri bu ref'ten alıyor).
       localScreenStreamRef.current = screenStream
@@ -2130,10 +2180,42 @@ function App() {
     }
   }, [setLocalTrackOnMainConnections, stopScreenShare])
 
+  // Paylaşmadan önce kalite penceresi. Masaüstünde getDisplayMedia hemen
+  // çağrılıyor, pencere kaynak listesi gelince açılıyor (bkz. onScreenSources);
+  // web'de önce pencere, "Ekranı seç ve paylaş" tarayıcının seçicisini açıyor.
   const toggleScreenShare = useCallback(() => {
     if (isScreenSharing) stopScreenShare()
-    else startScreenShare()
+    else if (window.electronAPI?.onScreenSources) startScreenShare()
+    else setScreenShareDialog({ sources: null })
   }, [isScreenSharing, startScreenShare, stopScreenShare])
+
+  const confirmScreenShare = useCallback(
+    (sourceId) => {
+      const fromDesktop = !!screenShareDialog?.sources
+      setScreenShareDialog(null)
+      if (fromDesktop) window.electronAPI?.selectScreenSource(sourceId)
+      else startScreenShare()
+    },
+    [screenShareDialog, startScreenShare]
+  )
+
+  const cancelScreenShare = useCallback(() => {
+    if (screenShareDialog?.sources) window.electronAPI?.selectScreenSource(null)
+    setScreenShareDialog(null)
+  }, [screenShareDialog])
+
+  // Kalite paylaşım sürerken değişirse hemen uygulanıyor.
+  useEffect(() => {
+    screenQualityRef.current = screenQuality
+    try {
+      window.localStorage?.setItem('screenQuality', JSON.stringify(screenQuality))
+    } catch {
+      /* kalıcılık olmasa da çalışıyor */
+    }
+    const track = localScreenStreamRef.current?.getVideoTracks()[0]
+    if (track) applyScreenQuality(track, screenQuality)
+    peerConnectionsRef.current.forEach(({ mainPc }) => mainPc && applyScreenEncodingTo(mainPc))
+  }, [screenQuality, applyScreenEncodingTo])
 
   // YENİ: hem normal giriş hem de "beni hatırla" ile otomatik oturum
   // devamında (resume-session) AYNI başarı yanıtını uygulamamız
@@ -2154,6 +2236,10 @@ function App() {
     setMyAvatar(response.avatarUrl || response.avatarData || null)
     debugLog('[giriş] sunucudan gelen roller:', response.roles)
     setMyRoles(Array.isArray(response.roles) ? response.roles : [])
+    const status = response.presence?.status || 'online'
+    setMyStatus(status)
+    myStatusRef.current = status
+    setMyCustomStatus(response.presence?.customStatus || null)
     setLoggedIn(true)
   }, [])
 
@@ -2171,12 +2257,15 @@ function App() {
 
   const fetchServerChannels = useCallback(
     async (serverId) => {
-      const response = await emitRequest('server-channels', {
-        token: sessionTokenRef.current,
-        serverId,
-      })
+      const [response, rolesResponse] = await Promise.all([
+        emitRequest('server-channels', { token: sessionTokenRef.current, serverId }),
+        emitRequest('server-roles', { serverId }),
+      ])
+      if (serverId !== activeServerIdRef.current) return
       const list = response?.success ? response.channels || [] : []
       setChannels(list)
+      setServerPermissions(response?.success ? response.permissions || {} : {})
+      setServerRoles(rolesResponse?.success ? rolesResponse.roles : [])
       // Okunmamışlar ve bahsedilmeler sunucudan (uygulama kapalıyken gelenler dahil).
       const others = list.filter((c) => c.id !== activeChannelRef.current)
       setUnreadChannels(others.filter((c) => c.unread).map((c) => c.id))
@@ -2296,6 +2385,8 @@ function App() {
   useEffect(() => {
     notifyActivityRef.current = ({ channelId, serverId, from, text, mention, isActive }) => {
       const settings = notifySettingsRef.current
+      // Rahatsız etmeyin: sayı ve işaretler yine çıkıyor, ses ve bildirim yok.
+      if (myStatusRef.current === 'dnd') return
       if (mention) {
         // Açık kanaldaki mesajın sesini mesajın kendisi çalıyor.
         if (settings.sounds && !isActive) playMentionSound()
@@ -2454,6 +2545,64 @@ function App() {
     if (response?.success) setServerInvitePopover({ code: response.inviteCode })
   }, [emitRequest])
 
+  // Kanal düzenleme (Kanalları yönet): ad, erişim, silme. Liste sunucunun
+  // channels-changed duyurusuyla herkeste yenileniyor.
+  const handleSaveChannel = useCallback(
+    async ({ name, allowedRoleIds }) => {
+      const channel = editChannelDialog?.channel
+      if (!channel) return
+      setEditChannelDialog((prev) => prev && { ...prev, busy: true, error: null })
+      const response = await emitRequest('update-channel', {
+        serverId: activeServerIdRef.current,
+        channelId: channel.id,
+        name,
+        allowedRoleIds,
+      })
+      if (response?.success) setEditChannelDialog(null)
+      else setEditChannelDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Kanal kaydedilemedi.' })
+    },
+    [editChannelDialog, emitRequest]
+  )
+
+  const handleDeleteChannel = useCallback(async () => {
+    const channel = editChannelDialog?.channel
+    if (!channel) return
+    setEditChannelDialog((prev) => prev && { ...prev, busy: true, error: null })
+    const response = await emitRequest('delete-channel', { serverId: activeServerIdRef.current, channelId: channel.id })
+    if (response?.success) setEditChannelDialog(null)
+    else setEditChannelDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Kanal silinemedi.' })
+  }, [editChannelDialog, emitRequest])
+
+  // Roller (sadece sunucu sahibi). Herkesin listesi roles-changed ile yenileniyor.
+  const handleSaveRole = useCallback(
+    async (data) => {
+      const role = roleDialog?.role
+      setRoleDialog((prev) => prev && { ...prev, busy: true, error: null })
+      const response = await emitRequest(role ? 'update-role' : 'create-role', {
+        serverId: activeServerIdRef.current,
+        ...(role ? { roleId: role.id } : {}),
+        ...data,
+      })
+      if (response?.success) setRoleDialog(null)
+      else setRoleDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Rol kaydedilemedi.' })
+    },
+    [roleDialog, emitRequest]
+  )
+
+  const handleDeleteRole = useCallback(async () => {
+    const role = roleDialog?.role
+    if (!role) return
+    setRoleDialog((prev) => prev && { ...prev, busy: true, error: null })
+    const response = await emitRequest('delete-role', { serverId: activeServerIdRef.current, roleId: role.id })
+    if (response?.success) setRoleDialog(null)
+    else setRoleDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Rol silinemedi.' })
+  }, [roleDialog, emitRequest])
+
+  const moveRole = useCallback(
+    (roleId, direction) => emitRequest('move-role', { serverId: activeServerIdRef.current, roleId, direction }),
+    [emitRequest]
+  )
+
   const handleCreateChannel = useCallback(
     async (name) => {
       setCreateChannelDialog({ busy: true, error: null })
@@ -2489,6 +2638,20 @@ function App() {
         targetUsername,
       })
       if (response?.success) fetchServerMembers()
+    },
+    [emitRequest, fetchServerMembers]
+  )
+
+  const setMemberRoles = useCallback(
+    async (targetUsername, roleIds) => {
+      // Hemen işaretlensin; sunucunun cevabı roles-changed ile geliyor.
+      setServerMembers((prev) => prev.map((m) => (m.username === targetUsername ? { ...m, roleIds } : m)))
+      const response = await emitRequest('set-member-roles', {
+        serverId: activeServerIdRef.current,
+        username: targetUsername,
+        roleIds,
+      })
+      if (!response?.success) fetchServerMembers()
     },
     [emitRequest, fetchServerMembers]
   )
@@ -2805,15 +2968,13 @@ function App() {
   // listesini getir — platform-geneli "Üye Yönetimi"nden AYRI, sadece
   // BU sunucuya özel bir üye/kick listesi.
   useEffect(() => {
-    const isOwnerOfActiveServer = myServers.find((s) => s.id === activeServerId)?.isOwner
-    const showsServerMembers = showAppSettings && isOwnerOfActiveServer
-    if (showsServerMembers) {
-      fetchServerMembers()
-      fetchServerInvites()
-    }
+    const { isOwner, kickMembers, createInvites } = serverPermissions
+    const showsServerMembers = showAppSettings && (isOwner || kickMembers)
+    if (showsServerMembers) fetchServerMembers()
+    if (showAppSettings && createInvites) fetchServerInvites()
     // Sunucuya biri katılınca/çıkarılınca liste açıksa yenilensin (H16).
     refreshServerMembersRef.current = showsServerMembers ? fetchServerMembers : null
-  }, [showAppSettings, myServers, activeServerId, fetchServerMembers, fetchServerInvites])
+  }, [showAppSettings, serverPermissions, activeServerId, fetchServerMembers, fetchServerInvites])
 
   const addRoleToUser = (targetUsername) => {
     const role = (roleInputByUser[targetUsername] || '').trim()
@@ -2963,7 +3124,14 @@ function App() {
   // Başkasının mesajını silebilir mi: platform yöneticisi ya da bu sunucunun
   // sahibi. Sunucu sahibine zaten izin veriyordu ama arayüz düğmeyi sadece
   // platform yöneticisine gösteriyordu (H17).
-  const canModerateActiveServer = isAdmin || activeServerIsOwner
+  const canModerateActiveServer = isAdmin || activeServerIsOwner || !!serverPermissions.manageMessages
+  // Adı rol rengiyle görünenler (sohbette; üye listesi rengi kendisi buluyor).
+  const nameColors = new Map(
+    [...onlineMembers, ...offlineMembers]
+      .map((m) => [m.username, roleColorOf(m.roleIds, serverRoles)])
+      .filter(([, color]) => color)
+  )
+  const showsServerSettings = !!(serverPermissions.isOwner || serverPermissions.createInvites || serverPermissions.kickMembers)
   const isVoiceView = inVoice && voiceChannel === activeChannel && !!activeChannel
   const reconnecting = connectionStatus === 'reconnecting'
 
@@ -3014,6 +3182,7 @@ function App() {
       channelName={activeChannelName}
       items={chatTimeline}
       avatars={avatarByName}
+      nameColors={nameColors}
       newSince={newMessagesSince}
       members={membersForMentions}
       displayName={displayName}
@@ -3121,6 +3290,7 @@ function App() {
             <MemberList
               online={onlineMembers}
               offline={offlineMembers}
+              roles={serverRoles}
               displayName={displayName}
               channelNameOf={channelNameOf}
               speakingUsernames={speakingUsernames}
@@ -3144,7 +3314,7 @@ function App() {
           onAdd={() => openServerModal()}
         />
         <ChannelSidebar
-          server={activeServer}
+          server={activeServer && { ...activeServer, permissions: serverPermissions }}
           channels={channels}
           activeChannel={activeChannel}
           unreadChannels={unreadChannels}
@@ -3163,6 +3333,7 @@ function App() {
           }}
           onInvite={openServerInvitePopover}
           onCreateChannel={() => setCreateChannelDialog({ busy: false, error: null })}
+          onEditChannel={(channel) => setEditChannelDialog({ channel, busy: false, error: null })}
           onOpenServerSettings={() => openSettings('server')}
           onAddServer={() => openServerModal()}
           onClose={() => setMobileSidebarOpen(false)}
@@ -3256,6 +3427,10 @@ function App() {
             avatarError: avatarUploadError,
           }}
           audio={{
+            screenQuality,
+            onScreenQualityChange: (patch) => setScreenQuality((prev) => ({ ...prev, ...patch })),
+            viewerCount: inVoice ? peers.length : 0,
+            isScreenSharing,
             inputs: audioInputs,
             outputs: audioOutputs,
             selectedInput: selectedAudioInput,
@@ -3319,11 +3494,17 @@ function App() {
             },
           }}
           server={
-            activeServerIsOwner
+            showsServerSettings
               ? {
                   name: activeServerName,
+                  permissions: serverPermissions,
+                  roles: serverRoles,
                   members: serverMembers,
                   onRemoveMember: removeServerMember,
+                  onSetMemberRoles: setMemberRoles,
+                  onCreateRole: () => setRoleDialog({ role: null, busy: false, error: null }),
+                  onEditRole: (role) => setRoleDialog({ role, busy: false, error: null }),
+                  onMoveRole: moveRole,
                   onShowInvite: openServerInvitePopover,
                   invites: serverInvites,
                   onRevokeInvite: revokeInvite,
@@ -3352,8 +3533,15 @@ function App() {
         />
       )}
 
-      {screenSourceOptions && (
-        <ScreenPicker sources={screenSourceOptions} onSelect={handleSelectScreenSource} onCancel={handleCancelScreenSource} />
+      {screenShareDialog && (
+        <ScreenShareDialog
+          sources={screenShareDialog.sources}
+          quality={screenQuality}
+          onQualityChange={(patch) => setScreenQuality((prev) => ({ ...prev, ...patch }))}
+          viewerCount={peers.length}
+          onStart={confirmScreenShare}
+          onCancel={cancelScreenShare}
+        />
       )}
 
       {volumePopup && (
@@ -3396,6 +3584,29 @@ function App() {
           error={createChannelDialog.error}
           onCreate={handleCreateChannel}
           onClose={() => setCreateChannelDialog(null)}
+        />
+      )}
+
+      {editChannelDialog && (
+        <EditChannelDialog
+          channel={editChannelDialog.channel}
+          roles={serverRoles}
+          busy={editChannelDialog.busy}
+          error={editChannelDialog.error}
+          onSave={handleSaveChannel}
+          onDelete={handleDeleteChannel}
+          onClose={() => setEditChannelDialog(null)}
+        />
+      )}
+
+      {roleDialog && (
+        <RoleDialog
+          role={roleDialog.role}
+          busy={roleDialog.busy}
+          error={roleDialog.error}
+          onSave={handleSaveRole}
+          onDelete={handleDeleteRole}
+          onClose={() => setRoleDialog(null)}
         />
       )}
 

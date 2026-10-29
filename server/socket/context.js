@@ -2,7 +2,7 @@
 // bağlantı kime ait, hız sınırı, erişimin yeniden kontrolü. Olay işleyicileri
 // bu nesneyi (ctx) paylaşıyor.
 const { User, Channel, ChannelMember } = require("../db");
-const { getAccessibleServers, checkChannelAccess, userCanAccessChannelDoc } = require("../lib/access");
+const { getAccessibleServers, checkChannelAccess, channelViewer, canViewChannel } = require("../lib/access");
 const { createRateLimiter } = require("../lib/limits");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
@@ -38,9 +38,11 @@ function createConnectionContext(socket) {
         const roles = user?.roles || [];
         const servers = await getAccessibleServers(ctx.username, roles);
         servers.forEach((s) => wantedServers.add(serverRoomName(s._id.toString())));
-        const channels = await Channel.find({ serverId: { $in: servers.map((s) => s._id) } }).lean();
+        const serverIds = servers.map((s) => s._id);
+        const channels = await Channel.find({ serverId: { $in: serverIds } }).lean();
+        const viewer = await channelViewer(ctx.username, roles, serverIds);
         channels
-          .filter((c) => userCanAccessChannelDoc(roles, c))
+          .filter((c) => canViewChannel(viewer, c))
           .forEach((c) => wantedNotify.add(`member-notify:${c._id}`));
       } catch (err) {
         console.error("Sunucu odaları alınırken hata:", err.message);

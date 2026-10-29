@@ -3,7 +3,7 @@
 // karşılaştırılıyor. Uygulama kapanıp açılsa da kalıyor; eskiden okunmamış
 // bilgisi sadece uygulama açıkken bellekte tutuluyordu.
 const { Channel, ChannelMember, Message } = require("../db");
-const { userCanAccessChannelDoc } = require("./access");
+const { channelViewer, canViewChannel } = require("./access");
 
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -50,8 +50,10 @@ async function unreadByChannel(username, channelIds) {
 async function unreadByServer(username, roles, servers) {
   const result = new Map();
   if (servers.length === 0) return result;
-  const channels = await Channel.find({ serverId: { $in: servers.map((s) => s._id) } }).lean();
-  const accessible = channels.filter((c) => userCanAccessChannelDoc(roles, c));
+  const serverIds = servers.map((s) => s._id);
+  const channels = await Channel.find({ serverId: { $in: serverIds } }).lean();
+  const viewer = await channelViewer(username, roles, serverIds);
+  const accessible = channels.filter((c) => canViewChannel(viewer, c));
   const byChannel = await unreadByChannel(username, accessible.map((c) => c._id));
   for (const s of servers) result.set(s._id.toString(), { unread: false, mentions: 0 });
   for (const c of accessible) {

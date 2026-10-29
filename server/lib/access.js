@@ -1,6 +1,7 @@
-// Kim neye erişebilir: platform yöneticisi, sunucu üyeliği, sunucu sahipliği ve
-// kanalların rol kısıtlamaları.
-const { User, Server: ServerModel, ServerMember, Channel } = require("../db");
+// Kim neye erişebilir: platform yöneticisi, sunucu üyeliği, sunucu sahipliği,
+// sunucuya özel rollerin yetkileri ve kanalların rol kısıtlamaları.
+const { User, Server: ServerModel, ServerMember, Channel, Role } = require("../db");
+const { PERMISSIONS } = require("./roles");
 
 // YENİ: "!sil @kullanıcı" komutuyla BAŞKASININ mesajlarını topluca silme
 // yetkisi, sadece rolleri arasında bu ismi taşıyan hesap(lar)a ait. Rol
@@ -45,23 +46,72 @@ async function isServerOwner(username, userRoles, server) {
   return !!server && server.ownerUsername === username;
 }
 
-// Bir kanalın bağlı olduğu sunucuyu yöneten kişi mi diye bakan, sadece
-// serverId'den yola çıkan kısayol (mesaj moderasyonu için — kanal
-// nesnesini elimizde tutmadan tek sorguyla kontrol edelim diye).
+// Bir kişinin bir sunucudaki yetkileri. Sahip ve platform yöneticisi her
+// şeyi yapabiliyor (isOwner: rolleri yönetme, sunucuyu silme); diğerleri
+// rollerinin yetkilerinin birleşimi kadar.
+async function serverPermissions(username, userRoles, server) {
+  if (server.ownerUsername === username || isPlatformAdmin(userRoles)) {
+    return { isOwner: true, ...Object.fromEntries(PERMISSIONS.map((p) => [p, true])) };
+  }
+  const member = await ServerMember.findOne({ serverId: server._id, username }).select("roleIds").lean();
+  const roles = member?.roleIds?.length
+    ? await Role.find({ _id: { $in: member.roleIds }, serverId: server._id }).select("permissions").lean()
+    : [];
+  return { isOwner: false, ...Object.fromEntries(PERMISSIONS.map((p) => [p, roles.some((r) => r.permissions?.[p])])) };
+}
+
+// Olay işleyicileri için: kişinin bu sunucuda bu yetkisi var mı?
+// permission "isOwner" de olabilir. { server, permissions } ya da { error }.
+async function requireServerPermission(username, serverId, permission) {
+  try {
+    const server = await ServerModel.findById(serverId).lean();
+    if (!server) return { error: "Sunucu bulunamadı." };
+    const user = await User.findOne({ username }).select("roles").lean();
+    const permissions = await serverPermissions(username, user?.roles || [], server);
+    if (!permissions[permission]) return { error: "Bu işlemi yapma yetkin yok." };
+    return { server, permissions };
+  } catch {
+    // Geçersiz bir kimlik (ObjectId) de buraya düşer.
+    return { error: "Sunucu bulunamadı." };
+  }
+}
+
+// Başkasının mesajını silebilir mi (Mesajları yönet).
 async function canModerateServer(username, userRoles, serverId) {
   if (isPlatformAdmin(userRoles)) return true;
   if (!serverId) return false;
   const server = await ServerModel.findById(serverId).select("ownerUsername").lean();
-  return server?.ownerUsername === username;
+  if (!server) return false;
+  return (await serverPermissions(username, userRoles, server)).manageMessages;
 }
 
-// Bir kullanıcının rollerinden en az biri, kanalın izinli rolleri
-// arasında mı diye bakan ortak yardımcı fonksiyon (env yerine artık
-// veritabanındaki Channel dokümanı üzerinden).
-function userCanAccessChannelDoc(userRoles, channelDoc) {
-  if (!channelDoc) return false;
-  if (!channelDoc.allowedRoles || channelDoc.allowedRoles.length === 0) return true; // kısıtlama yok = herkese açık
-  return channelDoc.allowedRoles.some((role) => userRoles.includes(role));
+// Kanalları görme bilgisi: platform rolleri (eski kısıtlama) ve her
+// sunucudaki rolleri ve sahipliği. Birçok kanal tek seferde süzülebilsin
+// diye önceden toplanıyor; serverIds verilirse sadece o sunucular.
+async function channelViewer(username, userRoles, serverIds) {
+  const filter = serverIds ? { username, serverId: { $in: serverIds } } : { username };
+  const memberships = await ServerMember.find(filter).select("serverId roleIds").lean();
+  const owned = await ServerModel.find({ ownerUsername: username }).select("_id").lean();
+  const ownedIds = new Set(owned.map((s) => s._id.toString()));
+  return {
+    userRoles,
+    ownedIds,
+    roleIdsByServer: new Map(memberships.map((m) => [m.serverId.toString(), (m.roleIds || []).map(String)])),
+  };
+}
+
+// Kısıtlama yoksa herkese açık. Sahip kendi sunucusunun kanallarını her
+// zaman görüyor. Eski kısıtlamada platform rolü, yenisinde sunucu rolü.
+function canViewChannel(viewer, channel) {
+  if (!channel) return false;
+  const legacy = channel.allowedRoles || [];
+  const roleIds = (channel.allowedRoleIds || []).map(String);
+  if (legacy.length === 0 && roleIds.length === 0) return true;
+  const serverId = channel.serverId.toString();
+  if (viewer.ownedIds.has(serverId)) return true;
+  if (legacy.some((role) => viewer.userRoles.includes(role))) return true;
+  const memberRoleIds = viewer.roleIdsByServer.get(serverId) || [];
+  return roleIds.some((id) => memberRoleIds.includes(id));
 }
 
 // Bir kullanıcının bir kanala (metin ya da ses) girme yetkisi var mı?
@@ -78,7 +128,8 @@ async function checkChannelAccess(username, channelId, serverId) {
     if (!(await canAccessServer(username, roles, channel.serverId))) {
       return { error: "Bu sunucuya erişimin yok." };
     }
-    if (!userCanAccessChannelDoc(roles, channel)) return { error: "Bu kanala erişim yetkin yok." };
+    const viewer = await channelViewer(username, roles, [channel.serverId]);
+    if (!canViewChannel(viewer, channel)) return { error: "Bu kanala erişim yetkin yok." };
     return { channel, roles };
   } catch (err) {
     // Geçersiz bir kimlik (ObjectId) de buraya düşer.
@@ -87,4 +138,16 @@ async function checkChannelAccess(username, channelId, serverId) {
   }
 }
 
-module.exports = { ADMIN_ROLE, isPlatformAdmin, getAccessibleServers, canAccessServer, isServerOwner, canModerateServer, userCanAccessChannelDoc, checkChannelAccess };
+module.exports = {
+  ADMIN_ROLE,
+  isPlatformAdmin,
+  getAccessibleServers,
+  canAccessServer,
+  isServerOwner,
+  serverPermissions,
+  requireServerPermission,
+  canModerateServer,
+  channelViewer,
+  canViewChannel,
+  checkChannelAccess,
+};

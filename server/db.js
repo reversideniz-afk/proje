@@ -172,6 +172,8 @@ const serverMemberSchema = new mongoose.Schema({
   serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
   username: { type: String, required: true },
   isOwner: { type: Boolean, default: false },
+  // Sunucuya özel rolleri (bkz. Role).
+  roleIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
   joinedAt: { type: Date, default: Date.now },
 });
 serverMemberSchema.index({ serverId: 1, username: 1 }, { unique: true });
@@ -185,11 +187,35 @@ const ServerMember =
 const channelSchema = new mongoose.Schema({
   serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
   name: { type: String, required: true, trim: true },
+  // Eski kısıtlama: platform rolü adları (User.roles). Kanal düzenlenince
+  // yerini allowedRoleIds alıyor.
   allowedRoles: { type: [String], default: [] },
+  // Sunucuya özel roller: boşsa (ve allowedRoles da boşsa) herkese açık.
+  allowedRoleIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
   createdAt: { type: Date, default: Date.now },
 });
 channelSchema.index({ serverId: 1, name: 1 }, { unique: true });
 const Channel = mongoose.models.Channel || mongoose.model("Channel", channelSchema);
+
+// Sunucuya özel rol: ad, renk, üye listesinde ayrı gösterme, yetkiler
+// (bkz. lib/roles.js). position küçük olan üstte: adın rengi ve üye
+// listesindeki başlık en üstteki rolden.
+const roleSchema = new mongoose.Schema({
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
+  name: { type: String, required: true, trim: true },
+  color: { type: String, default: null },
+  hoist: { type: Boolean, default: false },
+  position: { type: Number, default: 0 },
+  permissions: {
+    manageChannels: { type: Boolean, default: false },
+    manageMessages: { type: Boolean, default: false },
+    kickMembers: { type: Boolean, default: false },
+    createInvites: { type: Boolean, default: false },
+  },
+  createdAt: { type: Date, default: Date.now },
+});
+roleSchema.index({ serverId: 1, name: 1 }, { unique: true });
+const Role = mongoose.models.Role || mongoose.model("Role", roleSchema);
 
 async function connectDB() {
   const uri = process.env.MONGODB_URI;
@@ -215,4 +241,5 @@ module.exports = {
   ServerMember,
   Channel,
   Invite,
+  Role,
 };

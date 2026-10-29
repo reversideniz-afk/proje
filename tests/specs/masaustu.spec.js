@@ -19,16 +19,19 @@ function desktopAppEnv(disco, appUrl = disco.clientUrl) {
   return env
 }
 
-// Gerçek kamera ve mikrofon yerine Chromium'un sahte cihazları.
-const FAKE_MEDIA = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+// Gerçek kamera ve mikrofon yerine Chromium'un sahte cihazları. Sahte izin
+// arayüzü ekran paylaşımında uygulamanın kendi seçicisini atlayıp bir ekranı
+// kendisi seçiyor; seçiciyi deneyen test onu kapatıyor (fakeUi: false).
+const FAKE_DEVICES = '--use-fake-device-for-media-stream'
+const FAKE_UI = '--use-fake-ui-for-media-stream'
 
-// extraArgs: uygulamaya verilen ek komut satırı (ör. bir disco:// bağlantısı).
+// args: uygulamaya verilen ek komut satırı (ör. bir disco:// bağlantısı).
 // appUrl: varsayılan, test sunucusundaki istemci; paketlenmiş uygulama gibi
 // dosyadan (file://) açmak için derlenen istemcinin index.html'i.
-async function launchDesktopApp(disco, userDataDir, extraArgs = [], appUrl = disco.clientUrl) {
+async function launchDesktopApp(disco, userDataDir, { args = [], appUrl = disco.clientUrl, fakeUi = true } = {}) {
   const app = await electron.launch({
     executablePath: electronBinary,
-    args: [...FAKE_MEDIA, `--user-data-dir=${userDataDir}`, desktopDir, ...extraArgs],
+    args: [FAKE_DEVICES, ...(fakeUi ? [FAKE_UI] : []), `--user-data-dir=${userDataDir}`, desktopDir, ...args],
     env: desktopAppEnv(disco, appUrl),
   })
   const page = await app.firstWindow()
@@ -186,7 +189,7 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
 
   test('paketlenmiş uygulamadaki gibi dosyadan açılınca da mikrofon ses kapısından geçiyor', async ({ disco }, testInfo) => {
     const appUrl = pathToFileURL(path.join(clientBuildDir, 'index.html')).href
-    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'), [], appUrl)
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'), { appUrl })
     try {
       expect(page.url()).toMatch(/^file:/)
       const mert = new UserSession('Mert', app.context(), page)
@@ -204,12 +207,51 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
     }
   })
 
+  test('ekran paylaşımı: kaynak ve kalite aynı pencerede seçiliyor, gerçek yakalamaya uygulanıyor', async ({ disco }, testInfo) => {
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'), { fakeUi: false })
+    try {
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      await mert.openChannel('genel')
+      await mert.joinVoice()
+      // Pencere 720p'den büyük olsun ki sınırın küçülttüğü görülsün.
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 1000))
+      const windowSize = await page.evaluate(() => ({ width: window.outerWidth, height: window.outerHeight }))
+
+      await mert.mediaButton('Ekranı paylaş').click()
+      const dialog = page.getByRole('dialog', { name: 'Ekranını paylaş' })
+      const share = dialog.getByRole('button', { name: 'Paylaş', exact: true })
+      await expect(share).toBeDisabled()
+      await dialog.getByRole('radio', { name: '720p' }).click()
+      await dialog.getByRole('radio', { name: '15 FPS' }).click()
+      // Kendi penceresini paylaşıyor (testte kullanıcının ekranı yakalanmasın).
+      await dialog.getByRole('button', { name: 'Disco', exact: true }).first().click()
+      await share.click()
+      await expect(mert.mediaButton('Ekran paylaşımını durdur')).toBeVisible()
+
+      const video = page.locator('video.local-video--screen')
+      await expect.poll(() => video.evaluate((v) => v.videoHeight)).toBeGreaterThan(0)
+      const captured = await video.evaluate((v) => {
+        const track = v.srcObject.getVideoTracks()[0]
+        return { ...track.getSettings(), contentHint: track.contentHint, shown: [v.videoWidth, v.videoHeight] }
+      })
+      await testInfo.attach('yakalama.json', { body: JSON.stringify({ windowSize, captured }, null, 2), contentType: 'application/json' })
+      expect(windowSize.height).toBeGreaterThan(720)
+      expect(captured.height).toBeLessThanOrEqual(720)
+      expect(captured.width).toBeLessThanOrEqual(1280)
+      expect(captured.frameRate).toBeLessThanOrEqual(15)
+      expect(captured.contentHint).toBe('motion')
+    } finally {
+      await app.close().catch(() => {})
+    }
+  })
+
   test('disco://davet bağlantısı uygulamayı açınca da, uygulama açıkken de davet penceresini açıyor', async ({ disco }, testInfo) => {
     const owner = await disco.client('Alganis')
     const { code } = (await owner.emitAck('create-invite', { serverId: disco.serverId })).invite
     const link = `disco://davet/${code}`
     const userDataDir = testInfo.outputPath('kullanici-verisi')
-    const { app, page } = await launchDesktopApp(disco, userDataDir, [link])
+    const { app, page } = await launchDesktopApp(disco, userDataDir, { args: [link] })
     try {
       const mert = new UserSession('Mert', app.context(), page)
       await mert.login()

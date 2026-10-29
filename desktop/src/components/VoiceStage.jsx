@@ -202,18 +202,29 @@ export function VoiceStage({
     }
   }
 
+  // Büyütülen kutucuk sahneyi dolduruyor, diğerleri altta bir şeride
+  // iniyor; yandaki sohbet açık kalıyor (yayını izlerken yazışmak için).
+  const focused = enlargedTile ? tiles.find((tile) => tile.key === enlargedTile) : null
+  const tileWidth = Math.max(0, Math.floor(bestLayout(tiles.length, gridSize.width, gridSize.height).tileWidth))
+
   return (
     <section className="voice-stage" aria-label="Ses sahnesi">
-      <div className="stage-area">
-        <div
-          ref={gridRef}
-          className="stage-grid video-grid"
-          style={{ '--tile-width': `${Math.max(0, Math.floor(bestLayout(tiles.length, gridSize.width, gridSize.height).tileWidth))}px` }}
-        >
-          {tiles}
-        </div>
+      <div ref={gridRef} className={'stage-area' + (focused ? ' stage-area--focus' : '')}>
+        {focused ? (
+          <>
+            <div className="stage-focus">{focused}</div>
+            {tiles.length > 1 && (
+              <div className="stage-strip" aria-label="Sesteki diğer kişiler">
+                {tiles.filter((tile) => tile !== focused)}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="stage-grid video-grid" style={{ '--tile-width': `${tileWidth}px` }}>
+            {tiles}
+          </div>
+        )}
       </div>
-      {enlargedTile && <div className="enlarged-tile-backdrop" onClick={() => onToggleEnlarge(enlargedTile)} />}
       {mediaError && (
         <div className="stage-error" role="alert">
           <span>{mediaError}</span>

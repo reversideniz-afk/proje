@@ -15,6 +15,7 @@ import {
   Plus,
   Settings,
   Signal,
+  Smile,
   Download,
   UserPlus,
   Volume2,
@@ -23,8 +24,12 @@ import {
 import { Avatar } from './Avatar.jsx'
 import { useDismiss } from '../lib/useDismiss.js'
 import { formatKeyCode } from '../lib/format.js'
+import { STATUSES, statusLabel } from '../lib/presence.js'
 
-function ServerHeader({ name, isOwner, onInvite, onCreateChannel, onOpenServerSettings, onAddServer, onClose }) {
+// Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
+function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServerSettings, onAddServer, onClose }) {
+  const canOpenSettings = permissions.isOwner || permissions.createInvites || permissions.kickMembers
+  const hasActions = permissions.createInvites || permissions.manageChannels || canOpenSettings
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   const close = useCallback(() => setMenuOpen(false), [])
@@ -52,20 +57,22 @@ function ServerHeader({ name, isOwner, onInvite, onCreateChannel, onOpenServerSe
       </button>
       {menuOpen && (
         <div className="popover sidebar-server-menu" role="menu">
-          {isOwner && (
-            <>
-              <button type="button" role="menuitem" className="menu-item" onClick={run(onInvite)}>
-                <UserPlus className="icon" /> Arkadaşını davet et
-              </button>
-              <button type="button" role="menuitem" className="menu-item" onClick={run(onCreateChannel)}>
-                <Plus className="icon" /> Kanal oluştur
-              </button>
-              <button type="button" role="menuitem" className="menu-item" onClick={run(onOpenServerSettings)}>
-                <Settings className="icon" /> Sunucu ayarları
-              </button>
-              <div className="menu-separator" />
-            </>
+          {permissions.createInvites && (
+            <button type="button" role="menuitem" className="menu-item" onClick={run(onInvite)}>
+              <UserPlus className="icon" /> Arkadaşını davet et
+            </button>
           )}
+          {permissions.manageChannels && (
+            <button type="button" role="menuitem" className="menu-item" onClick={run(onCreateChannel)}>
+              <Plus className="icon" /> Kanal oluştur
+            </button>
+          )}
+          {canOpenSettings && (
+            <button type="button" role="menuitem" className="menu-item" onClick={run(onOpenServerSettings)}>
+              <Settings className="icon" /> Sunucu ayarları
+            </button>
+          )}
+          {hasActions && <div className="menu-separator" />}
           <button type="button" role="menuitem" className="menu-item" onClick={run(onAddServer)}>
             <Link className="icon" /> Sunucu oluştur ya da katıl
           </button>
@@ -75,7 +82,8 @@ function ServerHeader({ name, isOwner, onInvite, onCreateChannel, onOpenServerSe
   )
 }
 
-function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice }) {
+// onEdit: sadece "Kanalları yönet" yetkisi olana.
+function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice, onEdit }) {
   return (
     <li className="channel-row">
       <button
@@ -99,16 +107,31 @@ function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, can
           unread && <span className="channel-unread-dot" aria-label="Okunmamış mesaj var" />
         )}
       </button>
-      {canJoinVoice && (
-        <button
-          type="button"
-          className="icon-btn channel-join-voice"
-          onClick={onJoinVoice}
-          aria-label={`${channel.name} sesine katıl`}
-          title="Sese katıl"
-        >
-          <Headphones className="icon" />
-        </button>
+      {(canJoinVoice || onEdit) && (
+        <div className="channel-actions">
+          {onEdit && (
+            <button
+              type="button"
+              className="icon-btn channel-action"
+              onClick={onEdit}
+              aria-label={`${channel.name} kanalını düzenle`}
+              title="Kanalı düzenle"
+            >
+              <Settings className="icon" />
+            </button>
+          )}
+          {canJoinVoice && (
+            <button
+              type="button"
+              className="icon-btn channel-action channel-join-voice"
+              onClick={onJoinVoice}
+              aria-label={`${channel.name} sesine katıl`}
+              title="Sese katıl"
+            >
+              <Headphones className="icon" />
+            </button>
+          )}
+        </div>
       )}
       {voicers.length > 0 && (
         <ul className="channel-voicers" aria-label={`${channel.name} sesinde`}>
@@ -155,6 +178,43 @@ function VoicePanel({ channelName, ping, reconnecting, isScreenSharing, onOpenCh
   )
 }
 
+// Sol alttaki kişiye tıklayınca: durum seçimi ve özel durum.
+function StatusMenu({ status, customStatus, onSetStatus, onEditCustomStatus, onClearCustomStatus, onClose }) {
+  const run = (action) => () => {
+    onClose()
+    action()
+  }
+  return (
+    <div className="popover status-menu" role="menu" aria-label="Durum">
+      {STATUSES.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          role="menuitemradio"
+          aria-checked={status === s.id}
+          className="menu-item status-menu-item"
+          onClick={run(() => onSetStatus(s.id))}
+        >
+          <i className={`status-dot status-dot--${s.id === 'invisible' ? 'offline' : s.id}`} aria-hidden="true" />
+          <span>
+            <strong>{s.label}</strong>
+            {s.hint && <span className="status-menu-hint">{s.hint}</span>}
+          </span>
+        </button>
+      ))}
+      <div className="menu-separator" />
+      <button type="button" role="menuitem" className="menu-item" onClick={run(onEditCustomStatus)}>
+        <Smile className="icon" /> {customStatus ? 'Özel durumu düzenle' : 'Özel durum ayarla'}
+      </button>
+      {customStatus && (
+        <button type="button" role="menuitem" className="menu-item" onClick={run(onClearCustomStatus)}>
+          <X className="icon" /> Özel durumu sil
+        </button>
+      )}
+    </div>
+  )
+}
+
 function UserPanel({
   displayName,
   avatarUrl,
@@ -164,10 +224,19 @@ function UserPanel({
   isDeafened,
   pttEnabled,
   pttKey,
+  status = 'online',
+  customStatus,
+  onSetStatus,
+  onEditCustomStatus,
+  onClearCustomStatus,
   onToggleMic,
   onToggleDeafen,
   onOpenSettings,
 }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const panelRef = useRef(null)
+  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  useDismiss(panelRef, menuOpen, closeMenu)
   const micLabel = !inVoice
     ? 'Mikrofon (sese katılınca açılır)'
     : pttEnabled
@@ -175,13 +244,40 @@ function UserPanel({
       : isMicOn
         ? 'Mikrofonu kapat'
         : 'Mikrofonu aç'
+  const subtitle = customStatus || (pttEnabled ? `Bas-konuş: ${formatKeyCode(pttKey)}` : statusLabel(status))
   return (
-    <section className="user-panel" aria-label="Kullanıcı paneli">
-      <Avatar name={displayName} src={avatarUrl} size="sm" status="online" speaking={speaking} />
-      <div className="user-panel-text">
-        <strong className="whoami">{displayName}</strong>
-        <span>{pttEnabled ? `Bas-konuş: ${formatKeyCode(pttKey)}` : 'Çevrimiçi'}</span>
-      </div>
+    <section className="user-panel" aria-label="Kullanıcı paneli" ref={panelRef}>
+      <button
+        type="button"
+        className="user-panel-me"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-label={`Durumun: ${statusLabel(status)}. Değiştir`}
+        title="Durumunu değiştir"
+        onClick={onSetStatus ? () => setMenuOpen((open) => !open) : undefined}
+      >
+        <Avatar
+          name={displayName}
+          src={avatarUrl}
+          size="sm"
+          status={status === 'invisible' ? 'offline' : status}
+          speaking={speaking}
+        />
+        <span className="user-panel-text">
+          <strong className="whoami">{displayName}</strong>
+          <span>{subtitle}</span>
+        </span>
+      </button>
+      {menuOpen && (
+        <StatusMenu
+          status={status}
+          customStatus={customStatus}
+          onSetStatus={onSetStatus}
+          onEditCustomStatus={onEditCustomStatus}
+          onClearCustomStatus={onClearCustomStatus}
+          onClose={closeMenu}
+        />
+      )}
       <button
         type="button"
         className={'icon-btn' + (inVoice && !isMicOn ? ' icon-btn--off' : '')}
@@ -222,6 +318,7 @@ export function ChannelSidebar({
   onJoinVoiceIn,
   onInvite,
   onCreateChannel,
+  onEditChannel,
   onOpenServerSettings,
   onAddServer,
   onClose,
@@ -234,7 +331,7 @@ export function ChannelSidebar({
       {server ? (
         <ServerHeader
           name={server.name}
-          isOwner={server.isOwner}
+          permissions={server.permissions || {}}
           onInvite={onInvite}
           onCreateChannel={onCreateChannel}
           onOpenServerSettings={onOpenServerSettings}
@@ -254,7 +351,7 @@ export function ChannelSidebar({
         {server && (
           <div className="sidebar-category">
             <span>Kanallar</span>
-            {server.isOwner && (
+            {server.permissions?.manageChannels && (
               <button
                 type="button"
                 className="icon-btn icon-btn--small"
@@ -280,6 +377,7 @@ export function ChannelSidebar({
               canJoinVoice={!inVoice}
               onOpen={() => onOpenChannel(channel.id)}
               onJoinVoice={() => onJoinVoiceIn(channel.id)}
+              onEdit={server?.permissions?.manageChannels ? () => onEditChannel(channel) : null}
             />
           ))}
         </ul>

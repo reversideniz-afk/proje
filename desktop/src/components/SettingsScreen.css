@@ -469,8 +469,12 @@
   margin-left: auto;
 }
 
+/* Ad kalan yeri dolduruyor: satırların düğmeleri hep sağda, alt alta hizalı. */
 .settings-list-name {
+  flex: 1;
+  min-width: 0;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-weight: 500;
@@ -621,4 +625,35 @@
   .settings-close span {
     display: none;
   }
+}
+
+/* Sunucu üyelerinin rolleri: adın yanında küçük etiketler, "Roller"
+   açılınca satırın altında rol seçimi. */
+.role-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--cizgi);
+  border-radius: 10px;
+  color: var(--ikincil);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.role-chip .role-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.settings-member-roles {
+  flex-basis: 100%;
+  padding-left: 42px;
 }

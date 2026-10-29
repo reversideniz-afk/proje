@@ -1,8 +1,17 @@
 // Sunucular: oluşturma, silme, davetle katılma, kanal ve üye işlemleri,
 // varlık listesi.
 const crypto = require("crypto");
-const { User, Message, ChannelMember, Server: ServerModel, ServerMember, Channel, Invite } = require("../db");
-const { getAccessibleServers, canAccessServer, isServerOwner, userCanAccessChannelDoc } = require("../lib/access");
+const { User, Message, ChannelMember, Server: ServerModel, ServerMember, Channel, Invite, Role } = require("../db");
+const {
+  getAccessibleServers,
+  canAccessServer,
+  isServerOwner,
+  serverPermissions,
+  requireServerPermission,
+  channelViewer,
+  canViewChannel,
+} = require("../lib/access");
+const { avatarUrlsFor } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { refreshUserServerRooms, recheckUserAccess, buildServerPresence } = require("../lib/rooms");
 const { serverRoomName } = require("../lib/state");
@@ -79,6 +88,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
       await Message.deleteMany({ channelId: { $in: channelIds } });
       await ChannelMember.deleteMany({ channelId: { $in: channelIds } });
       await Channel.deleteMany({ serverId });
+      await Role.deleteMany({ serverId });
+      await Invite.deleteMany({ serverId });
       await ServerMember.deleteMany({ serverId });
       await ServerModel.deleteOne({ _id: serverId });
       callback({ success: true });
@@ -144,14 +155,12 @@ module.exports = function registerServerHandlers(socket, ctx) {
     }
   });
 
-  // Sahip için: yeni davet (süre: 1, 24, 168 saat ya da null; kullanım: 0
-  // sınırsız ya da 1, 5, 10, 25), etkin davetlerin listesi, davet iptali.
+  // Davet oluşturabilenler (sahip ya da "Davet oluştur" rolü): yeni davet
+  // (süre: 1, 24, 168 saat ya da null; kullanım: 0 sınırsız ya da 1, 5,
+  // 10, 25), etkin davetlerin listesi, davet iptali.
   const ownedServer = async (username, serverId) => {
     if (!username || typeof serverId !== "string") return null;
-    const requester = await User.findOne({ username }).lean();
-    const server = await ServerModel.findById(serverId).lean().catch(() => null);
-    if (!server || !(await isServerOwner(username, requester?.roles || [], server))) return null;
-    return server;
+    return (await requireServerPermission(username, serverId, "createInvites")).server || null;
   };
 
   socket.on("create-invite", async ({ serverId, expiresInHours = null, maxUses = 0 } = {}, callback) => {
@@ -247,13 +256,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
-      const requester = await User.findOne({ username }).lean();
-      const userRoles = requester?.roles || [];
-      const server = await ServerModel.findById(serverId).lean();
-      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
-      if (!(await isServerOwner(username, userRoles, server))) {
-        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
-      }
+      const { server, error } = await requireServerPermission(username, serverId, "createInvites");
+      if (error) return callback({ success: false, message: error });
       callback({ success: true, inviteCode: server.inviteCode });
     } catch (err) {
       console.error("Davet kodu alınırken hata:", err.message);
@@ -276,14 +280,21 @@ module.exports = function registerServerHandlers(socket, ctx) {
       if (!(await canAccessServer(username, userRoles, serverId))) {
         return callback({ success: false, message: "Bu sunucuya erişimin yok." });
       }
+      const server = await ServerModel.findById(serverId).lean();
       const channels = await Channel.find({ serverId }).sort({ createdAt: 1 }).lean();
-      const accessible = channels.filter((c) => userCanAccessChannelDoc(userRoles, c));
+      const viewer = await channelViewer(username, userRoles, [server._id]);
+      const accessible = channels.filter((c) => canViewChannel(viewer, c));
       const unread = await unreadByChannel(username, accessible.map((c) => c._id));
       callback({
         success: true,
+        // Arayüz sadece yapabildiklerini göstersin (sunucu yine her
+        // işlemde ayrıca denetliyor).
+        permissions: await serverPermissions(username, userRoles, server),
         channels: accessible.map((c) => ({
           id: c._id.toString(),
           name: c.name,
+          allowedRoleIds: (c.allowedRoleIds || []).map(String),
+          legacyRoles: c.allowedRoles || [],
           ...(unread.get(c._id.toString()) || { unread: false, mentions: 0 }),
         })),
       });
@@ -327,13 +338,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
       return callback({ success: false, message: "Kanal adı 1-50 karakter olmalı." });
     }
     try {
-      const requester = await User.findOne({ username }).lean();
-      const userRoles = requester?.roles || [];
-      const server = await ServerModel.findById(serverId).lean();
-      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
-      if (!(await isServerOwner(username, userRoles, server))) {
-        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
-      }
+      const { error } = await requireServerPermission(username, serverId, "manageChannels");
+      if (error) return callback({ success: false, message: error });
       const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [] });
       // Yeni kanal sunucudaki herkesin listesine anında düşsün (H16).
       // Sunucudakiler yeni kanalın bildirim odasına da girsin.
@@ -359,17 +365,19 @@ module.exports = function registerServerHandlers(socket, ctx) {
     if (typeof callback !== "function") return;
     if (!username || typeof serverId !== "string") return callback({ success: false });
     try {
-      const requester = await User.findOne({ username }).lean();
-      const userRoles = requester?.roles || [];
-      const server = await ServerModel.findById(serverId).lean();
-      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
-      if (!(await isServerOwner(username, userRoles, server))) {
-        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
-      }
+      // Sahibin de bütün yetkileri var; "Üyeleri çıkar" listeyi görmeye yetiyor.
+      const { error } = await requireServerPermission(username, serverId, "kickMembers");
+      if (error) return callback({ success: false, message: error });
       const members = await ServerMember.find({ serverId }).sort({ joinedAt: 1 }).lean();
+      const avatarUrls = await avatarUrlsFor(members.map((m) => m.username));
       callback({
         success: true,
-        members: members.map((m) => ({ username: m.username, isOwner: m.isOwner })),
+        members: members.map((m) => ({
+          username: m.username,
+          isOwner: m.isOwner,
+          roleIds: (m.roleIds || []).map(String),
+          avatarUrl: avatarUrls.get(m.username) || null,
+        })),
       });
     } catch (err) {
       console.error("Sunucu üyeleri alınırken hata:", err.message);
@@ -387,13 +395,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
       return callback({ success: false, message: "Eksik bilgi." });
     }
     try {
-      const requester = await User.findOne({ username }).lean();
-      const userRoles = requester?.roles || [];
-      const server = await ServerModel.findById(serverId).lean();
-      if (!server) return callback({ success: false, message: "Sunucu bulunamadı." });
-      if (!(await isServerOwner(username, userRoles, server))) {
-        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
-      }
+      const { server, error } = await requireServerPermission(username, serverId, "kickMembers");
+      if (error) return callback({ success: false, message: error });
       if (targetUsername === server.ownerUsername) {
         return callback({ success: false, message: "Sunucu sahibi çıkarılamaz." });
       }

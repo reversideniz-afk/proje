@@ -77,7 +77,8 @@ async function buildServerPresence(serverId) {
       if (info.serverId === serverId) voiceChannelByUser.set(info.username, roomId);
     }
   }
-  const members = await ServerMember.find({ serverId }).select("username").lean();
+  const members = await ServerMember.find({ serverId }).select("username roleIds").lean();
+  const roleIdsByUser = new Map(members.map((m) => [m.username, (m.roleIds || []).map(String)]));
   // Üye olmadan erişen platform yöneticisi seste olabilir; o da görünsün.
   const usernames = [...new Set([...members.map((m) => m.username), ...voiceChannelByUser.keys()])];
   const avatarUrls = await avatarUrlsFor(usernames);
@@ -86,6 +87,8 @@ async function buildServerPresence(serverId) {
     online: socketsByUsername.has(username),
     voiceChannelId: voiceChannelByUser.get(username) || null,
     avatarUrl: avatarUrls.get(username) || null,
+    // Rol rengi ve üye listesindeki başlık için (bkz. server-roles).
+    roleIds: roleIdsByUser.get(username) || [],
   }));
 }
 

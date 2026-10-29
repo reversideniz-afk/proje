@@ -253,21 +253,65 @@
   }
 }
 
-.video-tile--enlarged {
-  position: fixed;
-  inset: 24px;
+/* Büyütülen kutucuk sahneyi dolduruyor, diğerleri altta bir şeritte;
+   yandaki sohbet açık kalıyor. */
+.stage-area--focus {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stage-focus {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.stage-focus > .tile {
+  flex: 1;
   width: auto;
   aspect-ratio: auto;
-  z-index: 50;
+}
+
+.stage-strip {
+  flex: none;
+  display: flex;
+  justify-content: safe center;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.stage-strip > .tile {
+  flex: none;
+  width: 168px;
+  border-radius: 10px;
+}
+
+.stage-strip .tile-avatar {
+  scale: 0.5;
+}
+
+.stage-strip .tile-tag {
+  bottom: 6px;
+  left: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.stage-strip .tile-ping,
+.stage-strip .tile-live,
+.stage-strip .tile-actions {
+  display: none;
+}
+
+.video-tile--enlarged {
   cursor: zoom-out;
 }
 
-.enlarged-tile-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 49;
-  background: rgb(8 6 12 / 82%);
-  animation: fade-in 0.15s ease-out;
+/* Tam ekran (ekran paylaşımı kutucuğundaki düğme). */
+.tile:fullscreen {
+  border-radius: 0;
+  cursor: default;
 }
 
 /* ---------------- Kontroller ---------------- */
@@ -390,7 +434,7 @@
     width: 56px;
   }
 
-  .video-tile--enlarged {
-    inset: calc(8px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom));
+  .stage-strip > .tile {
+    width: 120px;
   }
 }

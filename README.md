@@ -17,10 +17,11 @@ server/
   lib/             paylaşılan parçalar: realtime (Express + Socket.IO), state (bellekteki
                    odalar), sessions, access, users, limits, validate, rooms, ice,
                    avatars (avatar adresleri), unread (okunmamışlar ve bahsedilmeler),
-                   invites (süreli/sınırlı davetler)
+                   invites (süreli/sınırlı davetler), roles (rol renkleri ve yetkileri)
   http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si, /davet/KOD
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
-                   grupları: account, servers, channels, voice, admin
+                   grupları: account, servers, channels, voice, admin, roles (roller ve kanal
+                   düzenleme)
 desktop/
   electron/        ana süreç (main.cjs: pencere, sistem tepsisi, güncelleme), preload köprüsü,
                    push-to-talk.cjs (global bas-konuş)
@@ -33,6 +34,7 @@ desktop/
                    konuşuyor), userColor (kişiye özel renk), notify (masaüstü bildirimi,
                    görev çubuğu sayısı), markdown (mesaj biçimlendirme), invites (davet
                    bağlantısı), micProcessor + voice-gate.worklet (giriş hassasiyeti),
+                   screenShare (ekran paylaşımı kalitesi),
                    useDismiss
 ```
 
@@ -57,6 +59,28 @@ Ses 10 ms geciktiriliyor, böylece kapı kelimenin başını kesmiyor; ses düş
 çalışmıyor) mikrofon işlenmeden gidiyor. Tarayıcının gürültü bastırma, yankı engelleme ve
 otomatik ses seviyesi ayarları da aynı sayfada; seste değişince mikrofon yeni ayarla yeniden
 açılıyor, gönderilen iz aynı kalıyor.
+
+Ekran paylaşımı başlamadan kalite penceresi açılıyor: çözünürlük (720p, 1080p, kaynak), kare
+hızı (15, 30, 60) ve içerik (oyun/video: akıcılık öncelikli, yazı/kod: netlik öncelikli,
+`contentHint`). Masaüstünde paylaşılacak ekran ya da pencere de aynı pencerede seçiliyor; web'de
+"Ekranı seç ve paylaş" tarayıcının seçicisini açıyor. Seçim yakalamaya (`applyConstraints`) ve
+her bağlantının ekran kanalına (bit hızı ve kare hızı sınırı, `setParameters`) uygulanıyor.
+Görüntü sesteki herkese ayrı gittiği için pencere toplam yükleme hızını da gösteriyor. Kalite
+Ayarlar > Ses ve görüntü'den paylaşırken de değişebiliyor (`lib/screenShare.js`). İzleyen
+taraf kutucuğu büyütünce yayın sahneyi dolduruyor, diğerleri altta şeride iniyor, yandaki sohbet
+açık kalıyor; ekran kutucuğunda tam ekran düğmesi var.
+
+Roller sunucuya özel (`Role` koleksiyonu, üyede `roleIds`). Sunucu sahibi Ayarlar > Roller'den
+rol oluşturuyor: ad, renk (listeden), "üye listesinde ayrı göster" ve yetkiler: kanalları
+yönet (oluştur, adını değiştir, sil, kimlerin göreceği), mesajları yönet (başkasının mesajını
+sil), üyeleri çıkar (sahip hariç), davet oluştur. Rolleri yönetmek ve sunucuyu silmek sadece
+sahibe (ve platform yöneticisine) ait. Bir kanal rollere kısıtlanabiliyor (`allowedRoleIds`);
+sahip kısıtlı kanalları da görüyor. Eski kısıtlama (`allowedRoles`, platform rolü adları) hâlâ
+geçerli, kanal düzenlenince yerini yenisi alıyor. Bir sunucudaki yetkiler tek yerde hesaplanıyor
+(`lib/access.js`: `serverPermissions`, `canViewChannel`); erişim değişince (kanal kısıtlandı,
+rol silindi ya da alındı) etkilenenler kanaldan ve sesten çıkarılıyor. Rol silinince sadece o
+role açık kanal herkese açılmıyor, sahibe kalıyor. Adın rengi ve üye listesindeki başlık en
+üstteki rolden.
 
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
@@ -138,14 +162,17 @@ Dosyalar:
   bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33), mesaja
   yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor),
   süreli ve sınırlı davet bağlantıları, giriş hassasiyeti (elle, otomatik, bas-konuşta kapalı)
-  ve ses işleme ayarları. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  ve ses işleme ayarları, ekran paylaşımı kalitesi ve yayını büyütme, sunucu rolleri (erişim,
+  yetkiler, arayüz). Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
   değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
   yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş, `disco://davet`
-  bağlantısı, paketlenmiş uygulamadaki gibi `file://`'dan açılınca ses kapısı.
+  bağlantısı, paketlenmiş uygulamadaki gibi `file://`'dan açılınca ses kapısı, ekran paylaşımında
+  kaynak seçme penceresi ve kalitenin gerçek yakalamaya uygulanması (bu test sahte izin
+  arayüzünü kapatıyor; yoksa Chromium seçiciyi atlayıp ekranı kendisi seçiyor).
   `desktop/node_modules`
   içindeki Electron kullanılıyor; ana süreç `DISCO_TEST_HOOKS` ile tepsiyi ve klavye kancasını
   testlere açıyor.

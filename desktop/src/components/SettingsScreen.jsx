@@ -2,6 +2,8 @@
 // Esc ya da sağ üstteki düğme kapatıyor.
 import { useEffect, useRef, useState } from 'react'
 import {
+  ArrowDown,
+  ArrowUp,
   Bell,
   Crown,
   Download,
@@ -12,8 +14,10 @@ import {
   Monitor,
   Mic,
   Palette,
+  Plus,
   RefreshCw,
   Server,
+  Shield,
   ShieldAlert,
   Square,
   Trash2,
@@ -24,10 +28,13 @@ import {
   X,
 } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
+import { ScreenQualityFields } from './Dialogs.jsx'
+import { Toggle } from './Toggle.jsx'
 import { ZoomControl } from './ZoomControl.jsx'
 import { IS_DESKTOP_APP, THEMES } from '../lib/config.js'
 import { formatKeyCode } from '../lib/format.js'
 import { describeInvite, inviteLink } from '../lib/invites.js'
+import { roleColorOf } from '../lib/roles.js'
 import './SettingsScreen.css'
 
 function Section({ title, description, children }) {
@@ -227,6 +234,16 @@ function AudioPage({ audio }) {
         </div>
         <p className="field-hint">Test sesini duyuyorsan sesli sohbetin sesi de bu cihazdan gelir.</p>
       </Section>
+      <Section
+        title="Ekran paylaşımı"
+        description={
+          audio.isScreenSharing
+            ? 'Şu an paylaşıyorsun: değiştirdiğin ayar hemen uygulanır.'
+            : 'Paylaşırken de değiştirebilirsin; hemen uygulanır.'
+        }
+      >
+        <ScreenQualityFields quality={audio.screenQuality} onChange={audio.onScreenQualityChange} viewerCount={audio.viewerCount} />
+      </Section>
     </>
   )
 }
@@ -302,25 +319,6 @@ function AppearancePage({ appearance }) {
         </Section>
       )}
     </>
-  )
-}
-
-function Toggle({ label, hint, checked, disabled, onChange }) {
-  return (
-    <label className={'settings-toggle' + (disabled ? ' settings-toggle--disabled' : '')}>
-      <span className="settings-toggle-text">
-        <strong>{label}</strong>
-        {hint && <span className="field-hint">{hint}</span>}
-      </span>
-      <input
-        type="checkbox"
-        role="switch"
-        className="settings-switch"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    </label>
   )
 }
 
@@ -427,8 +425,10 @@ function UpdatePage({ update }) {
 }
 
 function ServerPage({ server }) {
+  const { permissions } = server
   return (
     <>
+      {permissions.createInvites && (
       <Section title="Davetler" description="Davet bağlantısı oluştur; süreli ya da kullanım sayısı sınırlı olabilir.">
         <div className="settings-row">
           <button type="button" className="btn btn--secondary" onClick={server.onShowInvite}>
@@ -457,34 +457,140 @@ function ServerPage({ server }) {
           </ul>
         )}
       </Section>
-      <Section title={`Üyeler — ${server.members.length}`} description="Sunucu sahibi çıkarılamaz.">
-        <ul className="settings-list">
-          {server.members.map((m) => (
-            <li key={m.username} className="settings-list-row">
+      )}
+      {permissions.isOwner && (
+        <Section title="Tehlikeli bölge" description="Sunucu silinince bütün kanalları ve mesajları da silinir. Geri alınamaz.">
+          <div className="settings-row">
+            <button type="button" className="btn btn--danger" onClick={server.onDelete}>
+              <Trash2 className="icon" />
+              Sunucuyu sil
+            </button>
+          </div>
+        </Section>
+      )}
+    </>
+  )
+}
+
+// Sunucunun rolleri (sadece sahibi). Üstteki rol önce gelir: adın rengi ve
+// üye listesindeki başlık en üstteki rolden.
+function ServerRolesPage({ server }) {
+  const memberCount = (roleId) => server.members.filter((m) => m.roleIds?.includes(roleId)).length
+  return (
+    <Section
+      title="Roller"
+      description="Rolle kanalları belli kişilere açabilir, yetki verebilirsin. Üstteki rol önce gelir: adın rengi en üstteki renkli rolden."
+    >
+      <div className="settings-row">
+        <button type="button" className="btn" onClick={server.onCreateRole}>
+          <Plus className="icon" />
+          Rol oluştur
+        </button>
+      </div>
+      {server.roles.length > 0 && (
+        <ul className="settings-list" aria-label="Roller">
+          {server.roles.map((role, index) => (
+            <li key={role.id} className="settings-list-row">
+              <span className="role-dot" style={{ '--swatch': role.color || 'var(--soluk)' }} aria-hidden="true" />
+              <span className="settings-list-name">
+                <span style={role.color ? { color: role.color } : undefined}>{role.name}</span>
+                <span className="field-hint"> · {memberCount(role.id)} üye</span>
+              </span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => server.onMoveRole(role.id, 'up')}
+                disabled={index === 0}
+                aria-label={`${role.name}: yukarı taşı`}
+                title="Yukarı taşı"
+              >
+                <ArrowUp className="icon" />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => server.onMoveRole(role.id, 'down')}
+                disabled={index === server.roles.length - 1}
+                aria-label={`${role.name}: aşağı taşı`}
+                title="Aşağı taşı"
+              >
+                <ArrowDown className="icon" />
+              </button>
+              <button type="button" className="btn btn--secondary btn--small" onClick={() => server.onEditRole(role)}>
+                Düzenle
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  )
+}
+
+// Sunucunun üyeleri: rolleri (sahip veriyor) ve çıkarma (Üyeleri çıkar).
+function ServerMembersPage({ server }) {
+  const [editing, setEditing] = useState(null)
+  const { permissions, roles } = server
+  return (
+    <Section title={`Üyeler — ${server.members.length}`} description="Sunucu sahibi çıkarılamaz.">
+      <ul className="settings-list">
+        {server.members.map((m) => {
+          const memberRoleIds = m.roleIds || []
+          const memberRoles = roles.filter((r) => memberRoleIds.includes(r.id))
+          const toggleRole = (roleId) =>
+            server.onSetMemberRoles(
+              m.username,
+              memberRoleIds.includes(roleId) ? memberRoleIds.filter((id) => id !== roleId) : [...memberRoleIds, roleId]
+            )
+          return (
+            <li key={m.username} className="settings-list-row settings-list-row--wrap">
               <Avatar name={m.username} src={m.avatarUrl} size="sm" />
               <span className="settings-list-name">
-                {m.username}
+                <span style={{ color: roleColorOf(memberRoleIds, roles) || undefined }}>{m.username}</span>
                 {m.isOwner && <Crown className="icon settings-owner" aria-label="Sunucu sahibi" />}
+                {memberRoles.length > 0 && (
+                  <span className="role-chips">
+                    {memberRoles.map((r) => (
+                      <span key={r.id} className="role-chip">
+                        <span className="role-dot" style={{ '--swatch': r.color || 'var(--soluk)' }} aria-hidden="true" />
+                        {r.name}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </span>
-              {!m.isOwner && (
+              {permissions.isOwner && roles.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--small"
+                  aria-expanded={editing === m.username}
+                  onClick={() => setEditing((current) => (current === m.username ? null : m.username))}
+                >
+                  Roller
+                </button>
+              )}
+              {!m.isOwner && permissions.kickMembers && (
                 <button type="button" className="btn btn--ghost btn--small" onClick={() => server.onRemoveMember(m.username)}>
                   <UserMinus className="icon" />
                   Çıkar
                 </button>
               )}
+              {editing === m.username && (
+                <div className="role-checks settings-member-roles" role="group" aria-label={`${m.username}: roller`}>
+                  {roles.map((r) => (
+                    <label key={r.id} className="role-check">
+                      <input type="checkbox" checked={memberRoleIds.includes(r.id)} onChange={() => toggleRole(r.id)} />
+                      <span className="role-dot" style={{ '--swatch': r.color || 'var(--soluk)' }} aria-hidden="true" />
+                      {r.name}
+                    </label>
+                  ))}
+                </div>
+              )}
             </li>
-          ))}
-        </ul>
-      </Section>
-      <Section title="Tehlikeli bölge" description="Sunucu silinince bütün kanalları ve mesajları da silinir. Geri alınamaz.">
-        <div className="settings-row">
-          <button type="button" className="btn btn--danger" onClick={server.onDelete}>
-            <Trash2 className="icon" />
-            Sunucuyu sil
-          </button>
-        </div>
-      </Section>
-    </>
+          )
+        })}
+      </ul>
+    </Section>
   )
 }
 
@@ -607,7 +713,22 @@ export function SettingsScreen({
         ...(IS_DESKTOP_APP ? [{ id: 'update', label: 'Güncelleme', icon: Download }] : []),
       ],
     },
-    ...(server ? [{ title: server.name, items: [{ id: 'server', label: 'Sunucu ayarları', icon: Server }] }] : []),
+    ...(server
+      ? [
+          {
+            title: server.name,
+            items: [
+              ...(server.permissions.isOwner || server.permissions.createInvites
+                ? [{ id: 'server', label: 'Sunucu ayarları', icon: Server }]
+                : []),
+              ...(server.permissions.isOwner ? [{ id: 'server-roles', label: 'Roller', icon: Shield }] : []),
+              ...(server.permissions.isOwner || server.permissions.kickMembers
+                ? [{ id: 'server-members', label: 'Üyeler', icon: Users }]
+                : []),
+            ],
+          },
+        ]
+      : []),
     ...(admin
       ? [
           {
@@ -621,13 +742,17 @@ export function SettingsScreen({
       : []),
   ]
   const allItems = groups.flatMap((g) => g.items)
-  const current = allItems.find((item) => item.id === page) || allItems[0]
+  // "Sunucu ayarları" istenip o sayfaya yetki yoksa sunucunun ilk sayfası.
+  const current =
+    allItems.find((item) => item.id === page) ||
+    (page?.startsWith('server') && allItems.find((item) => item.id.startsWith('server'))) ||
+    allItems[0]
 
   return (
     <div className="settings-screen" role="dialog" aria-modal="true" aria-label="Ayarlar">
       <nav className="settings-nav" aria-label="Ayar kategorileri">
         <div className="settings-nav-inner">
-          {groups.map((group) => (
+          {groups.filter((group) => group.items.length > 0).map((group) => (
             <div key={group.title} className="settings-nav-group">
               <h2 className="settings-nav-title">{group.title}</h2>
               {group.items.map((item) => {
@@ -666,6 +791,8 @@ export function SettingsScreen({
           {current.id === 'desktop' && desktop && <DesktopPage desktop={desktop} />}
           {current.id === 'update' && <UpdatePage update={update} />}
           {current.id === 'server' && server && <ServerPage server={server} />}
+          {current.id === 'server-roles' && server && <ServerRolesPage server={server} />}
+          {current.id === 'server-members' && server && <ServerMembersPage server={server} />}
           {current.id === 'admin-users' && admin && <AdminUsersPage admin={admin} />}
           {current.id === 'admin-security' && admin && <AdminSecurityPage admin={admin} />}
         </div>

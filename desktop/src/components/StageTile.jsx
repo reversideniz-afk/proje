@@ -1,8 +1,15 @@
 // Ses sahnesindeki bir kutucuk (kamera, avatar ya da ekran). İmza burada:
 // konuşan kişinin avatarının etrafında disko topundan yansıyan ışık gibi
 // dönen bir halka ve kutucukta süzülen ışık benekleri ("dans pisti").
-import { Maximize2, MicOff, Minimize2, SlidersHorizontal } from 'lucide-react'
+import { useRef } from 'react'
+import { Fullscreen, Maximize2, MicOff, Minimize2, SlidersHorizontal } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
+
+// Ekran paylaşımını tam ekran izlemek (Esc çıkarıyor).
+function toggleFullscreen(element) {
+  if (document.fullscreenElement) document.exitFullscreen()
+  else element?.requestFullscreen?.()
+}
 
 export function StageTile({
   className = '',
@@ -19,9 +26,11 @@ export function StageTile({
   onToggleEnlarge,
   onOpenVolume,
 }) {
+  const tileRef = useRef(null)
   const pingClass = typeof ping !== 'number' ? '' : ping < 100 ? 'good' : ping < 250 ? 'ok' : 'bad'
   return (
     <div
+      ref={tileRef}
       className={
         `tile ${className}` + (speaking ? ' is-speaking' : '') + (isEnlarged ? ' video-tile--enlarged' : '')
       }
@@ -76,6 +85,17 @@ export function StageTile({
         >
           {isEnlarged ? <Minimize2 className="icon" /> : <Maximize2 className="icon" />}
         </button>
+        {live && (
+          <button
+            type="button"
+            className="icon-btn tile-action"
+            onClick={() => toggleFullscreen(tileRef.current)}
+            aria-label={`${name}: tam ekran`}
+            title="Tam ekran"
+          >
+            <Fullscreen className="icon" />
+          </button>
+        )}
       </div>
     </div>
   )

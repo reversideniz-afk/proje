@@ -91,8 +91,9 @@ export function instrumentPage() {
   }
 
   // Ekran paylaşımı: başsız tarayıcıda seçilecek bir ekran yok, aynı
-  // tuval kaynağını "ekran" olarak veriyoruz.
-  MediaDevices.prototype.getDisplayMedia = async function () {
+  // tuval kaynağını "ekran" olarak veriyoruz. İstenen kalite kayda geçiyor.
+  MediaDevices.prototype.getDisplayMedia = async function (constraints) {
+    disco.displayMediaConstraints = constraints
     const track = canvasCameraTrack()
     disco.mediaTracks.push(track)
     return new MediaStream([track])

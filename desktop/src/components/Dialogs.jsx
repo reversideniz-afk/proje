@@ -1,11 +1,15 @@
 // Küçük pencereler ve açılır kutular: sunucu oluştur/katıl, davet kodu,
 // kanal oluştur, onay, güvenlik uyarısı, kişi ses seviyesi, ekran seçimi,
 // fotoğraf büyütme.
-import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, RotateCcw, ShieldAlert } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { Check, Copy, Monitor, RotateCcw, ShieldAlert } from 'lucide-react'
 import { Dialog } from './Dialog.jsx'
+import { Toggle } from './Toggle.jsx'
 import { serverInitials } from '../lib/format.js'
+import { CUSTOM_STATUS_DURATIONS } from '../lib/presence.js'
+import { PERMISSIONS, ROLE_COLORS } from '../lib/roles.js'
 import { describeInvite, inviteLink } from '../lib/invites.js'
+import { CONTENT_TYPES, FRAME_RATES, RESOLUTIONS, formatBitrate, screenBitrate } from '../lib/screenShare.js'
 import { useDismiss } from '../lib/useDismiss.js'
 import './Dialogs.css'
 
@@ -354,16 +358,101 @@ export function VolumePopover({ username, x, y, volume, onChange, onClose }) {
   )
 }
 
-export function ScreenPicker({ sources, onSelect, onCancel }) {
+function ChoiceGroup({ label, options, value, onChange }) {
+  const labelId = useId()
   return (
-    <Dialog title="Neyi paylaşmak istersin?" onClose={onCancel} className="dialog--wide" closeLabel="İptal">
-      <div className="screen-picker-grid">
-        {sources.map((source) => (
-          <button key={source.id} type="button" className="screen-picker-item" onClick={() => onSelect(source.id)}>
-            <img src={source.thumbnailDataUrl} alt="" />
-            <span>{source.name}</span>
+    <div className="field">
+      <span className="field-label" id={labelId}>
+        {label}
+      </span>
+      <div className="segmented segmented--choice" role="radiogroup" aria-labelledby={labelId}>
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={value === option.value}
+            className="segmented-option"
+            title={option.hint}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
           </button>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// Ekran paylaşımı kalitesi (paylaşma penceresinde ve ayarlarda aynı).
+// viewerCount: sesteki diğer kişiler; görüntü her birine ayrı gidiyor.
+export function ScreenQualityFields({ quality, onChange, viewerCount = 0 }) {
+  const perViewer = screenBitrate(quality)
+  return (
+    <div className="screen-quality">
+      <ChoiceGroup
+        label="Çözünürlük"
+        options={RESOLUTIONS.map((r) => ({ value: r.id, label: r.label }))}
+        value={quality.resolution}
+        onChange={(resolution) => onChange({ resolution })}
+      />
+      <ChoiceGroup
+        label="Kare hızı"
+        options={FRAME_RATES.map((fps) => ({ value: fps, label: `${fps} FPS` }))}
+        value={quality.frameRate}
+        onChange={(frameRate) => onChange({ frameRate })}
+      />
+      <ChoiceGroup
+        label="İçerik"
+        options={CONTENT_TYPES.map((c) => ({ value: c.id, label: c.label, hint: c.hint }))}
+        value={quality.content}
+        onChange={(content) => onChange({ content })}
+      />
+      <p className="field-hint" role="status">
+        {CONTENT_TYPES.find((c) => c.id === quality.content)?.hint}. Kişi başı en fazla {formatBitrate(perViewer)}
+        {viewerCount > 1
+          ? `; sesteki ${viewerCount} kişiye ayrı gider, toplam ${formatBitrate(perViewer * viewerCount)} yükleme.`
+          : '; sesteki herkese ayrı gider. Yükleme hızın yetmezse görüntü kendiliğinden düşer.'}
+      </p>
+    </div>
+  )
+}
+
+// Ekran paylaşımını başlatma penceresi. Masaüstünde (sources) paylaşılacak
+// ekran ya da pencere burada seçiliyor; web'de tarayıcının kendi seçicisi
+// "Ekranı seç" ile açılıyor.
+export function ScreenShareDialog({ sources, quality, onQualityChange, viewerCount, onStart, onCancel }) {
+  const [selected, setSelected] = useState(null)
+  return (
+    <Dialog title="Ekranını paylaş" onClose={onCancel} className={sources ? 'dialog--wide' : ''} closeLabel="Vazgeç">
+      <div className="dialog-body">
+        {sources && (
+          <div className="screen-picker-grid" role="group" aria-label="Paylaşılacak ekran ya da pencere">
+            {sources.map((source) => (
+              <button
+                key={source.id}
+                type="button"
+                className="screen-picker-item"
+                aria-pressed={selected === source.id}
+                onClick={() => setSelected(source.id)}
+                onDoubleClick={() => onStart(source.id)}
+              >
+                <img src={source.thumbnailDataUrl} alt="" />
+                <span>{source.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <ScreenQualityFields quality={quality} onChange={onQualityChange} viewerCount={viewerCount} />
+        <div className="dialog-actions">
+          <button type="button" className="btn btn--secondary" onClick={onCancel}>
+            Vazgeç
+          </button>
+          <button type="button" className="btn" disabled={sources && !selected} onClick={() => onStart(selected)}>
+            <Monitor className="icon" />
+            {sources ? 'Paylaş' : 'Ekranı seç ve paylaş'}
+          </button>
+        </div>
       </div>
     </Dialog>
   )
@@ -381,5 +470,239 @@ export function PhotoLightbox({ src, onClose }) {
     <div className="photo-lightbox" role="dialog" aria-label="Fotoğraf" onClick={onClose}>
       <img src={src} alt="Paylaşılan fotoğraf" />
     </div>
+  )
+}
+
+// Özel durum: adının altında görünen kısa yazı ve ne zaman silineceği.
+export function CustomStatusDialog({ current, busy, error, onSave, onClose }) {
+  const [text, setText] = useState(current || '')
+  const [hours, setHours] = useState(4)
+  return (
+    <Dialog title="Özel durum" onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSave({ text: text.trim(), expiresInHours: hours })
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="custom-status-text">
+            Ne yapıyorsun?
+          </label>
+          <input
+            id="custom-status-text"
+            className="input"
+            maxLength={80}
+            placeholder="Ör. yarın sınav var, akşam gelirim"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="custom-status-expiry">
+            Silinsin
+          </label>
+          <select
+            id="custom-status-expiry"
+            className="select"
+            value={String(hours)}
+            onChange={(e) => setHours(e.target.value === 'null' ? null : Number(e.target.value))}
+          >
+            {CUSTOM_STATUS_DURATIONS.map((d) => (
+              <option key={String(d.hours)} value={String(d.hours)}>
+                {d.hours ? `${d.label} sonra` : d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !text.trim()}>
+            Kaydet
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
+// Sunucu rolü oluşturma ya da düzenleme (sadece sunucu sahibi).
+export function RoleDialog({ role, busy, error, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(role?.name || '')
+  const [color, setColor] = useState(role ? role.color : ROLE_COLORS[5])
+  const [hoist, setHoist] = useState(role?.hoist ?? false)
+  const [permissions, setPermissions] = useState(role?.permissions || {})
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const colorLabelId = useId()
+  return (
+    <Dialog title={role ? `“${role.name}” rolü` : 'Yeni rol'} onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSave({ name: name.trim(), color, hoist, permissions })
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="role-name">
+            Rol adı
+          </label>
+          <input id="role-name" className="input" maxLength={30} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div className="field">
+          <span className="field-label" id={colorLabelId}>
+            Renk
+          </span>
+          <div className="role-colors" role="radiogroup" aria-labelledby={colorLabelId}>
+            {[null, ...ROLE_COLORS].map((c) => (
+              <button
+                key={c || 'yok'}
+                type="button"
+                role="radio"
+                aria-checked={color === c}
+                aria-label={c ? `Renk ${c}` : 'Renksiz'}
+                title={c ? undefined : 'Renksiz: adı kişinin kendi renginde görünür'}
+                className={'role-color' + (c ? '' : ' role-color--none')}
+                style={c ? { '--swatch': c } : undefined}
+                onClick={() => setColor(c)}
+              />
+            ))}
+          </div>
+        </div>
+        <Toggle
+          label="Üye listesinde ayrı göster"
+          hint="Bu roldekiler çevrimiçi listesinde kendi başlıkları altında görünür."
+          checked={hoist}
+          onChange={setHoist}
+        />
+        <div className="field">
+          <span className="field-label">Yetkiler</span>
+          {PERMISSIONS.map((p) => (
+            <Toggle
+              key={p.id}
+              label={p.label}
+              hint={p.hint}
+              checked={!!permissions[p.id]}
+              onChange={(on) => setPermissions((prev) => ({ ...prev, [p.id]: on }))}
+            />
+          ))}
+        </div>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          {role &&
+            (confirmDelete ? (
+              <button type="button" className="btn btn--danger dialog-actions-start" onClick={onDelete} disabled={busy}>
+                Silmeyi onayla
+              </button>
+            ) : (
+              <button type="button" className="btn btn--ghost dialog-actions-start" onClick={() => setConfirmDelete(true)}>
+                Rolü sil
+              </button>
+            ))}
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !name.trim()}>
+            {role ? 'Kaydet' : 'Rolü oluştur'}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
+// Kanalı düzenleme: ad, kimlerin görebileceği, silme (Kanalları yönet).
+// Sunucu sahibi kısıtlı kanalları da her zaman görüyor.
+export function EditChannelDialog({ channel, roles, busy, error, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(channel.name)
+  const [restricted, setRestricted] = useState((channel.allowedRoleIds || []).length > 0)
+  const [roleIds, setRoleIds] = useState(channel.allowedRoleIds || [])
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const accessLabelId = useId()
+  const toggleRole = (id) => setRoleIds((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]))
+  return (
+    <Dialog title={`#${channel.name} kanalı`} onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSave({ name: name.trim(), allowedRoleIds: restricted ? roleIds : [] })
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="channel-edit-name">
+            Kanal adı
+          </label>
+          <input id="channel-edit-name" className="input" maxLength={50} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="field">
+          <span className="field-label" id={accessLabelId}>
+            Kimler görebilir
+          </span>
+          <div className="segmented segmented--choice" role="radiogroup" aria-labelledby={accessLabelId}>
+            <button type="button" role="radio" aria-checked={!restricted} className="segmented-option" onClick={() => setRestricted(false)}>
+              Herkes
+            </button>
+            <button type="button" role="radio" aria-checked={restricted} className="segmented-option" onClick={() => setRestricted(true)}>
+              Seçtiğim roller
+            </button>
+          </div>
+          {restricted &&
+            (roles.length === 0 ? (
+              <p className="field-hint">Henüz rol yok. Ayarlar &gt; Roller'den oluşturabilirsin.</p>
+            ) : (
+              <div className="role-checks" role="group" aria-label="Kanalı görebilecek roller">
+                {roles.map((role) => (
+                  <label key={role.id} className="role-check">
+                    <input type="checkbox" checked={roleIds.includes(role.id)} onChange={() => toggleRole(role.id)} />
+                    <span className="role-dot" style={{ '--swatch': role.color || 'var(--soluk)' }} aria-hidden="true" />
+                    {role.name}
+                  </label>
+                ))}
+              </div>
+            ))}
+          {channel.legacyRoles?.length > 0 && (
+            <p className="field-hint">
+              Eski kısıtlama: {channel.legacyRoles.join(', ')}. Kaydedince yerini buradaki ayar alır.
+            </p>
+          )}
+        </div>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          {confirmDelete ? (
+            <button type="button" className="btn btn--danger dialog-actions-start" onClick={onDelete} disabled={busy}>
+              Silmeyi onayla
+            </button>
+          ) : (
+            <button type="button" className="btn btn--ghost dialog-actions-start" onClick={() => setConfirmDelete(true)}>
+              Kanalı sil
+            </button>
+          )}
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !name.trim() || (restricted && roleIds.length === 0)}>
+            Kaydet
+          </button>
+        </div>
+      </form>
+    </Dialog>
   )
 }

@@ -316,16 +316,22 @@
   text-align: center;
 }
 
-.channel-join-voice {
+/* Kanalın üstüne gelince: düzenle (yetkisi olana) ve sese katıl. */
+.channel-actions {
   position: absolute;
   top: 2px;
   right: 2px;
+  display: flex;
+  gap: 2px;
   opacity: 0;
+}
+
+.channel-action {
   background: var(--kabin);
 }
 
-.channel-row:hover .channel-join-voice,
-.channel-join-voice:focus-visible {
+.channel-row:hover .channel-actions,
+.channel-actions:focus-within {
   opacity: 1;
 }
 
@@ -474,6 +480,7 @@
 
 .user-panel {
   --ring-bg: var(--gece);
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
@@ -489,6 +496,62 @@
   display: grid;
   margin-left: 6px;
   line-height: 1.25;
+  text-align: left;
+}
+
+/* Kişiye tıklayınca durum menüsü (yukarı doğru açılıyor). */
+.user-panel-me {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+}
+
+.user-panel-me:hover {
+  background: var(--kabin);
+}
+
+.status-menu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 8px;
+  z-index: 30;
+  width: min(280px, calc(100% - 16px));
+}
+
+.status-menu-item {
+  align-items: flex-start;
+}
+
+.status-menu-item .status-dot {
+  position: static;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  min-height: 0;
+  margin-top: 4px;
+  --ring-bg: var(--loca);
+}
+
+.status-menu-item > span {
+  display: grid;
+  gap: 2px;
+}
+
+.status-menu-hint {
+  color: var(--soluk);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.status-menu-item[aria-checked='true'] strong {
+  color: var(--metin);
 }
 
 .user-panel-text strong {
@@ -746,6 +809,13 @@ li.member-item:has(.member-item-button) {
   color: var(--spot);
 }
 
+.member-item-game strong {
+  overflow: hidden;
+  color: var(--ikincil);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
 .member-item--offline .member-item-name {
   color: var(--soluk);
 }
@@ -790,7 +860,7 @@ li.member-item:has(.member-item-button) {
     width: min(280px, calc(100vw - 112px));
   }
 
-  .channel-join-voice {
+  .channel-actions {
     opacity: 1;
   }
 

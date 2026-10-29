@@ -71,7 +71,10 @@ export const test = base.extend({
       await web.close()
       await appProxy.close()
       await clientProxy.close()
-      await mongo.stop()
+      // Bellek içi MongoDB bu makinede arada bir 10 saniyede kapanmıyor;
+      // testler bitmiş oluyor, kapanış gecikmesi çalıştırmayı kırmızıya
+      // çevirmesin.
+      await mongo.stop().catch((err) => console.warn('[düzenek] MongoDB kapanırken:', err.message))
     },
     { scope: 'worker', timeout: 180_000 },
   ],

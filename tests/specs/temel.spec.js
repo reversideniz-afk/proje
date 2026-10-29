@@ -108,7 +108,7 @@ test.describe('Temel akışlar', { tag: '@temel' }, () => {
     await mert.joinVoice()
     await ece.joinVoice()
 
-    await mert.mediaButton('Ekranı paylaş').click()
+    await mert.shareScreen()
     const screen = ece.page.locator('video.remote-video--screen')
     await expect(screen).toBeVisible()
     await expect.poll(() => screen.evaluate((v) => v.videoWidth)).toBeGreaterThan(0)

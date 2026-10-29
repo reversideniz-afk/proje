@@ -489,6 +489,241 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect(mert.channelButton('genel')).not.toHaveClass(/channel-button--unread/)
   })
 
+  test('ekran paylaşımı: seçilen kalite yakalamaya ve her bağlantıya uygulanıyor, paylaşırken değişebiliyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await joinVoiceTogether(mert, ece)
+
+    await mert.mediaButton('Ekranı paylaş').click()
+    const dialog = mert.page.getByRole('dialog', { name: 'Ekranını paylaş' })
+    await expect(dialog.getByRole('radio', { name: '720p' })).toHaveAttribute('aria-checked', 'true')
+    await dialog.getByRole('radio', { name: '1080p' }).click()
+    await dialog.getByRole('radio', { name: '60 FPS' }).click()
+    await expect(dialog.getByRole('status')).toContainText('Kişi başı en fazla 6,5 Mbit/sn')
+    await dialog.getByRole('button', { name: 'Ekranı seç ve paylaş' }).click()
+    await expect(mert.mediaButton('Ekran paylaşımını durdur')).toBeVisible()
+    expect(await mert.probe(() => window.__disco.displayMediaConstraints.video)).toEqual({
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { ideal: 60, max: 60 },
+    })
+    await expect.poll(() => ece.page.locator('video.remote-video--screen').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+
+    // Her açık bağlantının ekran kanalı (sabit kanal sırasında üçüncü).
+    const screenSenders = () =>
+      mert.probe(() =>
+        window.__disco.pcs
+          .filter((pc) => pc.connectionState !== 'closed')
+          .map((pc) => {
+            const sender = pc.getTransceivers()[2].sender
+            const { maxBitrate, maxFramerate } = sender.getParameters().encodings[0]
+            return { maxBitrate, maxFramerate, contentHint: sender.track?.contentHint }
+          })
+      )
+    await expect.poll(screenSenders).toEqual([{ maxBitrate: 6_500_000, maxFramerate: 60, contentHint: 'motion' }])
+
+    // Paylaşırken ayarlardan değişince hemen uygulanıyor.
+    await openAudioSettings(mert)
+    await expect(mert.page.getByText('Şu an paylaşıyorsun: değiştirdiğin ayar hemen uygulanır.')).toBeVisible()
+    await mert.page.getByRole('radio', { name: '15 FPS' }).click()
+    await mert.page.getByRole('radio', { name: 'Yazı, kod' }).click()
+    await expect.poll(screenSenders).toEqual([{ maxBitrate: 2_500_000, maxFramerate: 15, contentHint: 'detail' }])
+    await mert.page.keyboard.press('Escape')
+
+    // Sonradan sese giren de aynı sınırla alıyor.
+    const bora = await disco.user('Bora')
+    await joinVoiceTogether(bora)
+    await expect.poll(() => bora.page.locator('video.remote-video--screen').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+    await expect
+      .poll(screenSenders)
+      .toEqual([
+        { maxBitrate: 2_500_000, maxFramerate: 15, contentHint: 'detail' },
+        { maxBitrate: 2_500_000, maxFramerate: 15, contentHint: 'detail' },
+      ])
+    const saved = JSON.parse(await mert.probe(() => window.localStorage.getItem('screenQuality')))
+    expect(saved).toEqual({ resolution: '1080', frameRate: 15, content: 'detail' })
+  })
+
+  test('yayını büyütünce sahneyi dolduruyor, diğerleri şeritte, sohbet yanda açık kalıyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await joinVoiceTogether(mert, ece)
+    await mert.shareScreen()
+
+    const screenTile = ece.page.locator('.tile--screen')
+    await expect(screenTile).toBeVisible()
+    await screenTile.click()
+    await expect(screenTile).toHaveClass(/video-tile--enlarged/)
+    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(2)
+    const tileBox = await screenTile.boundingBox()
+    const stageBox = await ece.page.locator('.stage-area').boundingBox()
+    expect(tileBox.width).toBeGreaterThan(stageBox.width - 40)
+
+    // İzlerken yazışılabiliyor.
+    await ece.send('yayın çok net')
+    await expect(mert.chat).toContainText('yayın çok net')
+
+    await ece.page.getByRole('button', { name: 'Mert: tam ekran' }).click()
+    await expect.poll(() => ece.probe(() => document.fullscreenElement?.classList.contains('tile--screen'))).toBe(true)
+    await ece.page.getByRole('button', { name: 'Mert: tam ekran' }).click()
+    await expect.poll(() => ece.probe(() => document.fullscreenElement)).toBe(null)
+
+    await screenTile.getByRole('button', { name: 'Küçült' }).click()
+    await expect(ece.page.locator('.stage-strip')).toHaveCount(0)
+    await expect(screenTile).not.toHaveClass(/video-tile--enlarged/)
+  })
+
+  test('sunucu rolleri: rolle kısıtlanan kanalı rolsüz göremiyor, içindeyse çıkarılıyor; rol silinince kanal herkese açılmıyor', async ({ disco }) => {
+    const serverId = disco.serverId
+    const genel = disco.channels.genel
+    const owner = await disco.client('Alganis')
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    await mert.joinChannel(serverId, genel)
+    const channelNames = async (client) => (await client.emitAck('server-channels', { serverId })).channels.map((c) => c.name)
+
+    const created = await owner.emitAck('create-role', {
+      serverId,
+      name: 'Ekip',
+      color: '#5cc08a',
+      hoist: true,
+      permissions: { manageChannels: true, uydurma: true },
+    })
+    expect(created).toMatchObject({
+      success: true,
+      role: {
+        name: 'Ekip',
+        color: '#5cc08a',
+        hoist: true,
+        permissions: { manageChannels: true, manageMessages: false, kickMembers: false, createInvites: false },
+      },
+    })
+    const roleId = created.role.id
+    // Rolleri sadece sahip yönetiyor; renk listeden.
+    expect(await mert.emitAck('create-role', { serverId, name: 'Benim' })).toMatchObject({ success: false })
+    expect(await owner.emitAck('create-role', { serverId, name: 'Renkli', color: 'red' })).toMatchObject({ success: false })
+    expect(await mert.emitAck('set-member-roles', { serverId, username: 'Mert', roleIds: [roleId] })).toMatchObject({ success: false })
+
+    expect(await owner.emitAck('set-member-roles', { serverId, username: 'Ece', roleIds: [roleId] })).toMatchObject({ success: true })
+    expect((await ece.emitAck('server-channels', { serverId })).permissions).toMatchObject({
+      isOwner: false,
+      manageChannels: true,
+      kickMembers: false,
+    })
+    const presence = await mert.emitAck('server-presence', { serverId })
+    expect(presence.members.find((m) => m.username === 'Ece').roleIds).toEqual([roleId])
+
+    // "Kanalları yönet" rolüyle Ece genel'i Ekip'e kısıtlıyor; içindeki Mert çıkarılıyor.
+    expect(await mert.emitAck('update-channel', { serverId, channelId: genel, name: 'genel', allowedRoleIds: [] })).toMatchObject({
+      success: false,
+    })
+    const kicked = mert.nextEvent('join-error')
+    expect(await ece.emitAck('update-channel', { serverId, channelId: genel, name: 'genel', allowedRoleIds: [roleId] })).toMatchObject({
+      success: true,
+    })
+    expect(await kicked).toBe('Bu kanala erişim yetkin kalmadı.')
+    expect(await channelNames(mert)).not.toContain('genel')
+    expect(await channelNames(ece)).toContain('genel')
+    expect(await mert.emitAck('join-channel', { serverId, channelId: genel })).toMatchObject({ success: false })
+
+    // Rol silinince kanal herkese açılmıyor: artık sadece sahip görüyor.
+    expect(await owner.emitAck('delete-role', { serverId, roleId })).toMatchObject({ success: true })
+    expect(await channelNames(ece)).not.toContain('genel')
+    expect(await channelNames(mert)).not.toContain('genel')
+    expect(await channelNames(owner)).toContain('genel')
+    expect((await ece.emitAck('server-channels', { serverId })).permissions.manageChannels).toBe(false)
+  })
+
+  test('sunucu rolleri: üye çıkarma, davet ve mesaj silme yetkisi rolle veriliyor', async ({ disco }) => {
+    const serverId = disco.serverId
+    const owner = await disco.client('Alganis')
+    const bora = await disco.client('Bora')
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+
+    // Rol yokken hiçbiri yapılamıyor.
+    expect(await bora.emitAck('create-invite', { serverId })).toMatchObject({ success: false })
+    expect(await bora.emitAck('list-server-members', { serverId })).toMatchObject({ success: false })
+
+    const { role } = await owner.emitAck('create-role', {
+      serverId,
+      name: 'Moderatör',
+      permissions: { kickMembers: true, createInvites: true, manageMessages: true },
+    })
+    await owner.emitAck('set-member-roles', { serverId, username: 'Bora', roleIds: [role.id] })
+
+    expect(await bora.emitAck('create-invite', { serverId })).toMatchObject({ success: true })
+    const members = await bora.emitAck('list-server-members', { serverId })
+    expect(members.members.find((m) => m.username === 'Bora').roleIds).toEqual([role.id])
+
+    // Başkasının mesajını silebiliyor.
+    for (const client of [bora, ece]) await client.joinChannel(serverId, disco.channels.genel)
+    const sent = ece.nextEvent('new-message', (m) => m.text === 'silinecek')
+    ece.socket.emit('send-message', { token: ece.token, text: 'silinecek' })
+    const message = await sent
+    const deleted = ece.nextEvent('messages-deleted')
+    bora.socket.emit('delete-message', { token: bora.token, messageId: message.id })
+    expect(await deleted).toEqual({ messageIds: [message.id] })
+
+    // Üye çıkarabiliyor ama sahibi değil.
+    expect(await bora.emitAck('remove-server-member', { serverId, targetUsername: 'Alganis' })).toMatchObject({ success: false })
+    const listChanged = mert.nextEvent('server-list-changed')
+    expect(await bora.emitAck('remove-server-member', { serverId, targetUsername: 'Mert' })).toMatchObject({ success: true })
+    await listChanged
+    expect((await mert.emitAck('list-my-servers', { token: mert.token })).servers).toEqual([])
+  })
+
+  test('sunucu rolleri arayüzde: rol oluşturup veriliyor, adı renkleniyor, rolle kanal kısıtlanıyor', async ({ disco }) => {
+    const alganis = await disco.user('Alganis')
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    for (const user of [alganis, mert, ece]) await user.openChannel('genel')
+
+    await alganis.page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+    const nav = alganis.page.getByRole('navigation', { name: 'Ayar kategorileri' })
+    await nav.getByRole('button', { name: 'Roller' }).click()
+    await alganis.page.getByRole('button', { name: 'Rol oluştur' }).click()
+    const dialog = alganis.page.getByRole('dialog', { name: 'Yeni rol' })
+    await dialog.getByLabel('Rol adı').fill('Ekip')
+    await dialog.getByRole('radio', { name: 'Renk #5cc08a' }).click()
+    await dialog.getByRole('switch', { name: /Üye listesinde ayrı göster/ }).check()
+    await dialog.getByRole('switch', { name: /Kanalları yönet/ }).check()
+    await dialog.getByRole('button', { name: 'Rolü oluştur' }).click()
+    await expect(alganis.page.getByRole('list', { name: 'Roller' })).toContainText('Ekip')
+
+    await nav.getByRole('button', { name: 'Üyeler' }).click()
+    const mertRow = alganis.page.locator('.settings-list-row', { hasText: 'Mert' })
+    await mertRow.getByRole('button', { name: 'Roller' }).click()
+    await alganis.page.getByRole('group', { name: 'Mert: roller' }).getByLabel('Ekip').check()
+    await expect(mertRow.locator('.role-chip')).toHaveText('Ekip')
+    await alganis.page.keyboard.press('Escape')
+
+    // Üye listesinde kendi başlığı altında, adı rolün renginde.
+    const ekip = ece.page.locator('.member-list-section', { has: ece.page.getByRole('heading', { name: 'Ekip — 1' }) })
+    await expect(ekip).toContainText('Mert')
+    await expect(ekip.locator('.member-item-name')).toHaveCSS('color', 'rgb(92, 192, 138)')
+
+    // Mert artık kanal oluşturup düzenleyebiliyor: oyun'u Ekip'e kısıtlıyor.
+    await mert.page.locator('.sidebar-server-button').click()
+    await expect(mert.page.getByRole('menuitem', { name: 'Kanal oluştur' })).toBeVisible()
+    await expect(mert.page.getByRole('menuitem', { name: 'Arkadaşını davet et' })).toHaveCount(0)
+    await mert.page.keyboard.press('Escape')
+    await mert.channelButton('oyun').hover()
+    await mert.page.getByRole('button', { name: 'oyun kanalını düzenle' }).click()
+    const edit = mert.page.getByRole('dialog', { name: '#oyun kanalı' })
+    await edit.getByRole('radio', { name: 'Seçtiğim roller' }).click()
+    await edit.getByLabel('Ekip').check()
+    await edit.getByRole('button', { name: 'Kaydet' }).click()
+    await expect(edit).toHaveCount(0)
+
+    await expect(ece.channelButton('oyun')).toHaveCount(0)
+    await expect(mert.channelButton('oyun')).toBeVisible()
+    await expect(alganis.channelButton('oyun')).toBeVisible()
+    // Ece'nin menüsünde yetkisi olmayan işlemler yok.
+    await ece.page.locator('.sidebar-server-button').click()
+    await expect(ece.page.getByRole('menuitem', { name: 'Kanal oluştur' })).toHaveCount(0)
+  })
+
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {
     const ece = await disco.user('Ece', {
       storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -30 }) },

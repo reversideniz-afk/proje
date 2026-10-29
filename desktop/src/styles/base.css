@@ -402,6 +402,17 @@ img {
   background: var(--soluk);
 }
 
+/* Boşta: ay; rahatsız etmeyin: ortasında çizgi. Renk görmeyen de ayırt etsin. */
+.status-dot--idle {
+  background: radial-gradient(circle at 28% 28%, var(--ring-bg, var(--loca)) 0 38%, transparent 40%), var(--uyari);
+}
+
+.status-dot--dnd {
+  background:
+    linear-gradient(var(--ring-bg, var(--loca)), var(--ring-bg, var(--loca))) center / 56% 24% no-repeat,
+    var(--tehlike);
+}
+
 /* İmza ("dans pisti"): konuşan kişinin avatarı Spot ışığıyla nabız gibi
    atıyor. Hareket azaltma açıksa sabit bir halka kalıyor. */
 .avatar.is-speaking {

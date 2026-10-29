@@ -168,7 +168,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     await mert.openChannel('genel')
     await ece.openChannel('genel')
     await mert.joinVoice()
-    await mert.mediaButton('Ekranı paylaş').click()
+    await mert.shareScreen()
     await expect(mert.mediaButton('Ekran paylaşımını durdur')).toBeVisible()
 
     await ece.joinVoice()

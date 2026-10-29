@@ -82,8 +82,8 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     await ece.openChannel('genel')
     await mert.joinVoice()
     await ece.joinVoice()
-    await mert.mediaButton('Ekranı paylaş').click()
-    await ece.mediaButton('Ekranı paylaş').click()
+    await mert.shareScreen()
+    await ece.shareScreen()
 
     const screenOf = (viewer, name) =>
       viewer.page
@@ -111,7 +111,7 @@ test.describe('Faz 3: mimari', { tag: '@faz3' }, () => {
     await ece.joinVoice()
     await mert.micOn()
     await mert.cameraOn()
-    await mert.mediaButton('Ekranı paylaş').click()
+    await mert.shareScreen()
     await expect.poll(() => ece.page.locator('video.remote-video--screen').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
     const openConnections = (user) =>
       user.probe(() => window.__disco.pcs.filter((pc) => pc.connectionState !== 'closed').length)

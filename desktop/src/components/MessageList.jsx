@@ -82,9 +82,11 @@ function EditBox({ initialText, onSave, onCancel }) {
   )
 }
 
+// colorOf: kişinin adının rengi (rol rengi, yoksa kişiye özel renk).
 function MessageItem({
   item,
   avatarUrl,
+  colorOf,
   grouped,
   displayName,
   canModerate,
@@ -157,7 +159,7 @@ function MessageItem({
         >
           <CornerUpLeft className="icon" aria-hidden="true" />
           <Avatar name={item.replyTo.username} size="xxs" />
-          <strong style={{ color: userColor(item.replyTo.username) }}>{item.replyTo.username}</strong>
+          <strong style={{ color: colorOf(item.replyTo.username) }}>{item.replyTo.username}</strong>
           <span className="chat-message-reply-text">{item.replyTo.text}</span>
         </button>
       )}
@@ -172,7 +174,7 @@ function MessageItem({
       <div className="chat-message-body">
         {!grouped && (
           <header className="chat-message-head">
-            <strong className="chat-message-author" style={{ color: userColor(item.username) }}>
+            <strong className="chat-message-author" style={{ color: colorOf(item.username) }}>
               {item.username}
             </strong>
             <time className="chat-message-time" dateTime={item.createdAt} title={formatFullDate(item.createdAt)}>
@@ -286,9 +288,11 @@ function MessageItem({
   )
 }
 
+// nameColors: rol rengi olan kişiler -> renk (bkz. lib/roles.js).
 export function MessageList({
   items,
   avatars,
+  nameColors,
   newSince,
   displayName,
   canModerate,
@@ -299,6 +303,7 @@ export function MessageList({
   onReply,
   containerRef,
 }) {
+  const colorOf = (name) => nameColors?.get(name) || userColor(name)
   const [activeId, setActiveId] = useState(null)
   const [picker, setPicker] = useState(null) // { id, placement }
   const [editingId, setEditingId] = useState(null)
@@ -374,6 +379,7 @@ export function MessageList({
         <MessageItem
           item={item}
           avatarUrl={avatars.get(item.username)}
+          colorOf={colorOf}
           grouped={grouped}
           displayName={displayName}
           canModerate={canModerate}

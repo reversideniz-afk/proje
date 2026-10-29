@@ -79,6 +79,13 @@ export class UserSession {
     await expect(this.mediaButton('Mikrofonu kapat')).toBeVisible()
   }
 
+  // Ekran paylaşımı: önce kalite penceresi, sonra (testte sahte) seçici.
+  async shareScreen() {
+    await this.mediaButton('Ekranı paylaş').click()
+    await this.page.getByRole('dialog', { name: 'Ekranını paylaş' }).getByRole('button', { name: 'Ekranı seç ve paylaş' }).click()
+    await expect(this.mediaButton('Ekran paylaşımını durdur')).toBeVisible()
+  }
+
   async cameraOn() {
     await this.mediaButton('Kamerayı aç').click()
     await expect(this.mediaButton('Kamerayı kapat')).toBeVisible()

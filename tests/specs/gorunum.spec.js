@@ -132,4 +132,66 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await expect(mert.page.locator('.level-meter--open')).toHaveCount(0)
     await shot(mert, testInfo, '25-ses-hassasiyet-otomatik')
   })
+
+  test('ekran paylaşımı: kalite penceresi ve yayını büyütüp sohbeti yanda tutma', async ({ disco }, testInfo) => {
+    await insertChat(disco.mongoUri, disco.channels.genel, CHAT)
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    const bora = await disco.user('Bora')
+    for (const user of [mert, ece, bora]) {
+      await user.openChannel('genel')
+      await user.page.getByRole('button', { name: 'Sese katıl', exact: true }).click()
+      await expect(user.leaveVoiceButton()).toBeVisible()
+    }
+    await mert.mediaButton('Ekranı paylaş').click()
+    await mert.page.getByRole('dialog', { name: 'Ekranını paylaş' }).getByRole('radio', { name: '1080p' }).click()
+    await shot(mert, testInfo, '26-ekran-paylas-penceresi')
+    await mert.page.getByRole('button', { name: 'Ekranı seç ve paylaş' }).click()
+
+    const screenTile = ece.page.locator('.tile--screen')
+    await expect.poll(() => screenTile.locator('video').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
+    await screenTile.click()
+    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(3)
+    await shot(ece, testInfo, '27-yayin-odak')
+  })
+
+  test('sunucu rolleri: üye listesi, roller ve üyeler sayfası, rol ve kanal pencereleri', async ({ disco }, testInfo) => {
+    await insertChat(disco.mongoUri, disco.channels.genel, CHAT)
+    const serverId = disco.serverId
+    const owner = await disco.client('Alganis')
+    const { role: dj } = await owner.emitAck('create-role', {
+      serverId,
+      name: 'DJ',
+      color: '#a98af7',
+      hoist: true,
+      permissions: { manageChannels: true, createInvites: true },
+    })
+    const { role: regular } = await owner.emitAck('create-role', { serverId, name: 'Müdavim', color: '#e6b04a', hoist: true })
+    await owner.emitAck('set-member-roles', { serverId, username: 'Mert', roleIds: [dj.id] })
+    for (const username of ['Ece', 'Bora']) await owner.emitAck('set-member-roles', { serverId, username, roleIds: [regular.id] })
+    owner.close()
+
+    const alganis = await disco.user('Alganis')
+    const mert = await disco.user('Mert')
+    for (const user of [alganis, mert, await disco.user('Ece'), await disco.user('Bora')]) await user.openChannel('genel')
+    await expect(alganis.page.getByRole('heading', { name: 'Müdavim — 2' })).toBeVisible()
+    await shot(alganis, testInfo, '28-roller-uye-listesi')
+
+    await alganis.page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+    const nav = alganis.page.getByRole('navigation', { name: 'Ayar kategorileri' })
+    await nav.getByRole('button', { name: 'Roller' }).click()
+    await shot(alganis, testInfo, '29-roller-sayfasi')
+    await alganis.page.locator('.settings-list-row', { hasText: 'DJ' }).getByRole('button', { name: 'Düzenle' }).click()
+    await shot(alganis, testInfo, '30-rol-penceresi')
+    await alganis.page.getByRole('dialog', { name: '“DJ” rolü' }).getByRole('button', { name: 'Vazgeç' }).click()
+    await nav.getByRole('button', { name: 'Üyeler' }).click()
+    await alganis.page.locator('.settings-list-row', { hasText: 'Ece' }).getByRole('button', { name: 'Roller' }).click()
+    await shot(alganis, testInfo, '31-uyeler-sayfasi')
+
+    await mert.channelButton('oyun').hover()
+    await mert.page.getByRole('button', { name: 'oyun kanalını düzenle' }).click()
+    await mert.page.getByRole('radio', { name: 'Seçtiğim roller' }).click()
+    await mert.page.getByRole('dialog', { name: '#oyun kanalı' }).getByLabel('Müdavim').check()
+    await shot(mert, testInfo, '32-kanal-duzenle')
+  })
 })
