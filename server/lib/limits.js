@@ -110,6 +110,9 @@ const EVENT_GROUPS = {
   login: "auth",
   register: "auth",
   "resume-session": "auth",
+  // Davet kodu tahmin etmeyi yavaşlatmak için girişle aynı sıkı sınır.
+  "invite-info": "auth",
+  "join-server-by-invite": "auth",
   signal: "signal",
 };
 

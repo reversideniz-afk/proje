@@ -2,7 +2,7 @@
 // gözle kontrol etmek için; görüntüler test raporuna ekleniyor (npm run
 // report).
 import { test, expect } from '../harness/fixtures.js'
-import { insertChat } from '../harness/seed.js'
+import { PASSWORD, REGISTER_INVITE_CODE, insertChat } from '../harness/seed.js'
 
 async function shot(user, testInfo, name) {
   const path = testInfo.outputPath(`${name}.png`)
@@ -90,5 +90,28 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await mert.page.getByRole('button', { name: 'Sese katıl', exact: true }).click()
     await expect(mert.page.locator('.voice-stage')).toBeVisible()
     await shot(mert, testInfo, '14-telefon-ses')
+  })
+
+  test('davet: bağlantı oluşturma ve davetle gelenin katılma penceresi', async ({ disco }, testInfo) => {
+    const alganis = await disco.user('Alganis')
+    await alganis.page.locator('.sidebar-server-button').click()
+    await alganis.page.getByRole('menuitem', { name: 'Arkadaşını davet et' }).click()
+    const dialog = alganis.page.getByRole('dialog', { name: 'Test Sunucusu daveti' })
+    await dialog.getByLabel('Kullanım').selectOption('5')
+    await dialog.getByRole('button', { name: 'Yeni bağlantı oluştur' }).click()
+    await expect(dialog.getByRole('status')).toContainText('0/5 kullanıldı')
+    await shot(alganis, testInfo, '21-davet-olustur')
+    const link = await dialog.getByLabel('Davet bağlantısı').inputValue()
+
+    const client = await disco.client()
+    await client.emitAck('register', { username: 'Yolcu', password: PASSWORD, inviteCode: REGISTER_INVITE_CODE })
+    client.close()
+    const code = link.split('/davet/')[1]
+    const yolcu = await disco.user('Yolcu', { login: false, path: `/?davet=${code}` })
+    await expect(yolcu.page.getByRole('status')).toContainText('Test Sunucusu')
+    await shot(yolcu, testInfo, '22-davet-giris')
+    await yolcu.login()
+    await expect(yolcu.page.getByRole('dialog', { name: 'Sunucu daveti' })).toContainText('5 üye')
+    await shot(yolcu, testInfo, '23-davet-katil')
   })
 })

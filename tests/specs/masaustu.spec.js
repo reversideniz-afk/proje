@@ -20,10 +20,11 @@ function desktopAppEnv(disco) {
 // Gerçek kamera ve mikrofon yerine Chromium'un sahte cihazları.
 const FAKE_MEDIA = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
 
-async function launchDesktopApp(disco, userDataDir) {
+// extraArgs: uygulamaya verilen ek komut satırı (ör. bir disco:// bağlantısı).
+async function launchDesktopApp(disco, userDataDir, extraArgs = []) {
   const app = await electron.launch({
     executablePath: electronBinary,
-    args: [...FAKE_MEDIA, `--user-data-dir=${userDataDir}`, desktopDir],
+    args: [...FAKE_MEDIA, `--user-data-dir=${userDataDir}`, desktopDir, ...extraArgs],
     env: desktopAppEnv(disco),
   })
   const page = await app.firstWindow()
@@ -174,6 +175,34 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
       await expect
         .poll(() => app.evaluate(() => globalThis.discoTest.pushToTalk.isRunning()))
         .toBe(false)
+    } finally {
+      await app.close().catch(() => {})
+    }
+  })
+
+  test('disco://davet bağlantısı uygulamayı açınca da, uygulama açıkken de davet penceresini açıyor', async ({ disco }, testInfo) => {
+    const owner = await disco.client('Alganis')
+    const { code } = (await owner.emitAck('create-invite', { serverId: disco.serverId })).invite
+    const link = `disco://davet/${code}`
+    const userDataDir = testInfo.outputPath('kullanici-verisi')
+    const { app, page } = await launchDesktopApp(disco, userDataDir, [link])
+    try {
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      const dialog = page.getByRole('dialog', { name: 'Sunucu daveti' })
+      await expect(dialog).toContainText('Test Sunucusu')
+      // Mert zaten üye: katılmak yerine sunucuya gidiyor.
+      await dialog.getByRole('button', { name: 'Sunucuya git' }).click()
+      await expect(dialog).toHaveCount(0)
+
+      // Uygulama açıkken bağlantıya tıklamak: ikinci kopya kodu açık olana verip kapanıyor.
+      const second = spawn(electronBinary, [`--user-data-dir=${userDataDir}`, desktopDir, link], {
+        env: desktopAppEnv(disco),
+        stdio: 'ignore',
+      })
+      await new Promise((resolve) => second.once('exit', resolve))
+      await expect(dialog).toContainText('Test Sunucusu')
+      expect(app.windows()).toHaveLength(1)
     } finally {
       await app.close().catch(() => {})
     }

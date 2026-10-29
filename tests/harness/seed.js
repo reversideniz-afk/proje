@@ -116,3 +116,9 @@ export function insertChat(mongoUri, channelId, messages) {
     )
   )
 }
+
+// Bir davetin süresini geçmişe çeker (süresi dolmuş davet denemesi için).
+export function expireInvite(mongoUri, code) {
+  const { Invite } = requireFromServer('./db.js')
+  return withDatabase(mongoUri, () => Invite.updateOne({ code }, { expiresAt: new Date(Date.now() - 1000) }))
+}

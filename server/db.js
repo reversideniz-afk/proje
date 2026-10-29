@@ -151,6 +151,20 @@ const serverSchema = new mongoose.Schema({
 });
 const Server = mongoose.models.Server || mongoose.model("Server", serverSchema);
 
+// Sunucu sahibinin oluşturduğu süreli ya da kullanım sayısı sınırlı davet
+// bağlantıları (bkz. lib/invites.js). Süresi dolan kayıt kendiliğinden siliniyor.
+const inviteSchema = new mongoose.Schema({
+  code: { type: String, required: true, unique: true },
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true, index: true },
+  createdBy: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, default: null },
+  maxUses: { type: Number, default: 0 }, // 0: sınırsız
+  uses: { type: Number, default: 0 },
+});
+inviteSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+const Invite = mongoose.models.Invite || mongoose.model("Invite", inviteSchema);
+
 // YENİ: Bir kullanıcının hangi sunucu(lar)a üye olduğunu tutar. Sadece
 // üyelik kaydı olanlar (ya da platform admini) o sunucuyu/kanallarını
 // görebilir.
@@ -200,4 +214,5 @@ module.exports = {
   Server,
   ServerMember,
   Channel,
+  Invite,
 };

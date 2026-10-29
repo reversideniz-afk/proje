@@ -27,6 +27,7 @@ import { Avatar } from './Avatar.jsx'
 import { ZoomControl } from './ZoomControl.jsx'
 import { IS_DESKTOP_APP, THEMES } from '../lib/config.js'
 import { formatKeyCode } from '../lib/format.js'
+import { describeInvite, inviteLink } from '../lib/invites.js'
 import './SettingsScreen.css'
 
 function Section({ title, description, children }) {
@@ -337,12 +338,33 @@ function UpdatePage({ update }) {
 function ServerPage({ server }) {
   return (
     <>
-      <Section title="Davet kodu" description="Hesabı olan biri Sunucu oluştur ya da katıl > Katıl ile bu koda girerek sunucuna katılabilir.">
+      <Section title="Davetler" description="Davet bağlantısı oluştur; süreli ya da kullanım sayısı sınırlı olabilir.">
         <div className="settings-row">
           <button type="button" className="btn btn--secondary" onClick={server.onShowInvite}>
-            Davet kodunu göster
+            Arkadaşını davet et
           </button>
         </div>
+        {server.invites.length > 0 && (
+          <ul className="settings-list" aria-label="Etkin davetler">
+            {server.invites.map((invite) => (
+              <li key={invite.code} className="settings-list-row settings-list-row--wrap">
+                <span className="settings-invite">
+                  <span className="settings-mono">{inviteLink(invite.code)}</span>
+                  <span className="field-hint">
+                    {invite.createdBy} · {describeInvite(invite)}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  onClick={() => server.onRevokeInvite(invite.code)}
+                >
+                  İptal et
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </Section>
       <Section title={`Üyeler — ${server.members.length}`} description="Sunucu sahibi çıkarılamaz.">
         <ul className="settings-list">

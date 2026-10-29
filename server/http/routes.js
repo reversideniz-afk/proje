@@ -125,6 +125,13 @@ app.get("/api/avatars/:username", async (req, res) => {
   }
 });
 
+// Davet bağlantısı: /davet/KOD -> /?davet=KOD. Uygulama dosyaları göreli
+// yollarla yüklendiği için sayfa kökten açılmalı; uygulama daveti adres
+// parametresinden okuyor.
+app.get("/davet/:code", (req, res) => {
+  res.redirect(302, `/?davet=${encodeURIComponent(req.params.code)}`);
+});
+
 // SPA yedek yönlendirme: bilinen bir statik dosyaya karşılık gelmeyen
 // her GET isteği index.html'e düşsün (Socket.io kendi /socket.io/
 // yolunu bundan önce, Express'e hiç uğramadan kendi işliyor zaten).

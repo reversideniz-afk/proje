@@ -89,6 +89,20 @@
   }
 }
 
+.auth-invite {
+  margin: -8px 0 20px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--metin);
+  font-size: 14px;
+  text-align: center;
+}
+
+.auth-invite--error {
+  background: var(--tehlike-soft);
+}
+
 .auth-form {
   display: grid;
   gap: 16px;

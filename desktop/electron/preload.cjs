@@ -60,6 +60,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   flashFrame: () => ipcRenderer.send("flash-frame"),
   setBadge: (count, image) => ipcRenderer.send("set-badge", { count, image }),
   showWindow: () => ipcRenderer.send("show-window"),
+  // disco://davet/KOD ile gelen davet: açılışta bekleyen ve sonradan gelenler.
+  takePendingInvite: () => ipcRenderer.invoke("take-pending-invite"),
+  onOpenInvite: (callback) => {
+    const listener = (_event, code) => callback(code);
+    ipcRenderer.on("open-invite", listener);
+    return () => ipcRenderer.removeListener("open-invite", listener);
+  },
   getOpenAtLogin: () => ipcRenderer.invoke("get-open-at-login"),
   setOpenAtLogin: (value) => ipcRenderer.invoke("set-open-at-login", value),
   checkForUpdates: () => ipcRenderer.send("check-for-updates"),

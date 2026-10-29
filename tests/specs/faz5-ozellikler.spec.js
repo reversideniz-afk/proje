@@ -1,5 +1,15 @@
-// Faz 5: Discord'a yaklaşan özellikler ve bu fazda kapanan hatalar (H28).
+// Faz 5: Discord'a yaklaşan özellikler ve bu fazda kapanan hatalar (H28, H33).
 import { test, expect } from '../harness/fixtures.js'
+import { PASSWORD, REGISTER_INVITE_CODE, SERVER_INVITE_CODE, expireInvite } from '../harness/seed.js'
+
+// Hiçbir sunucuya üye olmayan yeni bir kullanıcı (kayıt + giriş).
+async function newUser(disco, username) {
+  const client = await disco.client()
+  const registered = await client.emitAck('register', { username, password: PASSWORD, inviteCode: REGISTER_INVITE_CODE })
+  expect(registered.success).toBe(true)
+  await client.login(username)
+  return client
+}
 
 const micTracks = (user) =>
   user.probe(() =>
@@ -223,6 +233,73 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect(text.locator('img')).toHaveCount(0)
     await expect(text).toContainText('<img src=x onerror="window.__xss=1">')
     expect(await ece.probe(() => window.__xss)).toBeUndefined()
+  })
+
+  test('davetler: süreli ve sınırlı, sadece sahip oluşturuyor, giriş yapmadan sunucu adı görünüyor', async ({ disco }) => {
+    const owner = await disco.client('Alganis')
+    const mert = await disco.client('Mert')
+    expect((await mert.emitAck('create-invite', { serverId: disco.serverId, maxUses: 1 })).success).toBe(false)
+    const once = (await owner.emitAck('create-invite', { serverId: disco.serverId, maxUses: 1 })).invite
+    expect(once).toMatchObject({ maxUses: 1, uses: 0, createdBy: 'Alganis' })
+    expect((await owner.emitAck('create-invite', { serverId: disco.serverId, maxUses: 3 })).success).toBe(false)
+
+    // Giriş yapmamış biri bağlantıdaki sunucunun adını görebiliyor.
+    const anonymous = await disco.client()
+    expect(await anonymous.emitAck('invite-info', { code: once.code })).toEqual({
+      success: true,
+      server: { id: disco.serverId, name: 'Test Sunucusu', memberCount: 5 },
+    })
+    expect((await anonymous.emitAck('invite-info', { code: 'yok-boyle-bir-kod' })).message).toBe('Geçersiz davet kodu.')
+    expect((await anonymous.emitAck('join-server-by-invite', { inviteCode: once.code })).success).toBe(false)
+
+    // Tek kullanımlık davet: ilk kişi giriyor, ikincisi giremiyor.
+    const first = await newUser(disco, 'Yolcu')
+    expect((await first.emitAck('join-server-by-invite', { inviteCode: once.code })).success).toBe(true)
+    const second = await newUser(disco, 'Gezgin')
+    expect((await second.emitAck('join-server-by-invite', { inviteCode: once.code })).message).toBe(
+      'Bu davetin kullanım sınırı dolmuş.'
+    )
+    // Kalıcı kod hâlâ çalışıyor.
+    expect((await second.emitAck('join-server-by-invite', { inviteCode: SERVER_INVITE_CODE })).success).toBe(true)
+
+    // Süresi dolan ve iptal edilen davetler.
+    const hourly = (await owner.emitAck('create-invite', { serverId: disco.serverId, expiresInHours: 1 })).invite
+    expect(new Date(hourly.expiresAt) - Date.now()).toBeGreaterThan(59 * 60_000)
+    const listed = (await owner.emitAck('list-invites', { serverId: disco.serverId })).invites.map((i) => i.code)
+    expect(listed).toEqual([hourly.code]) // tek kullanımlık olan doldu, listede yok
+    await expireInvite(disco.mongoUri, hourly.code)
+    const third = await newUser(disco, 'Misafir')
+    expect((await third.emitAck('join-server-by-invite', { inviteCode: hourly.code })).message).toBe(
+      'Bu davetin süresi dolmuş.'
+    )
+    const forever = (await owner.emitAck('create-invite', { serverId: disco.serverId })).invite
+    expect(forever.expiresAt).toBeNull()
+    expect((await mert.emitAck('delete-invite', { serverId: disco.serverId, code: forever.code })).success).toBe(false)
+    await owner.emitAck('delete-invite', { serverId: disco.serverId, code: forever.code })
+    expect((await third.emitAck('join-server-by-invite', { inviteCode: forever.code })).message).toBe('Geçersiz davet kodu.')
+
+    // /davet/KOD uygulamanın kendisine yönlendiriyor.
+    const redirect = await fetch(`${disco.socketUrl}/davet/${forever.code}`, { redirect: 'manual' })
+    expect(redirect.status).toBe(302)
+    expect(redirect.headers.get('location')).toBe(`/?davet=${forever.code}`)
+  })
+
+  test('davet bağlantısıyla gelen kişi giriş ekranında sunucuyu görüyor, girince katılıyor', async ({ disco }) => {
+    const owner = await disco.client('Alganis')
+    const { code } = (await owner.emitAck('create-invite', { serverId: disco.serverId, expiresInHours: 24 })).invite
+    ;(await newUser(disco, 'Yolcu')).close()
+
+    const yolcu = await disco.user('Yolcu', { login: false, path: `/?davet=${code}` })
+    await expect(yolcu.page.getByRole('status')).toContainText('Seni Test Sunucusu sunucusuna davet ettiler')
+    expect(new URL(yolcu.page.url()).search).toBe('')
+    await yolcu.login()
+    const dialog = yolcu.page.getByRole('dialog', { name: 'Sunucu daveti' })
+    await expect(dialog).toContainText('Test Sunucusu')
+    await expect(dialog).toContainText('5 üye')
+    await dialog.getByRole('button', { name: 'Sunucuya katıl' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(yolcu.page.locator('.server-rail-icon--active')).toHaveAttribute('title', 'Test Sunucusu')
+    await expect(yolcu.channelButton('genel')).toBeVisible()
   })
 
   test('H33: açık sunucunun simgesine tekrar tıklamak kanaldan ve sesten çıkarmıyor', async ({ disco }) => {

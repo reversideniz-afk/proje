@@ -1,13 +1,7 @@
 // En soldaki sunucu şeridi: her sunucu bir simge, en altta "sunucu ekle".
 import { Plus } from 'lucide-react'
 import logoUrl from '../assets/logo.png'
-
-// "Oyun Gecesi" -> "OG", "Disco" -> "DI"
-function serverInitials(name = '') {
-  const words = name.trim().split(/\s+/).filter(Boolean)
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : name.trim().slice(0, 2)
-  return letters.toLocaleUpperCase('tr')
-}
+import { serverInitials } from '../lib/format.js'
 
 // activity: sunucu kimliği -> { unread, mentions } (okunmamış işareti ve
 // bahsedilme sayısı).

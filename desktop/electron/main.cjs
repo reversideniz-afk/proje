@@ -50,10 +50,32 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => showMainWindow());
+  app.on("second-instance", (_event, argv) => {
+    deliverInvite(inviteFromArgs(argv));
+    showMainWindow();
+  });
 }
 
 const isWebLink = (url) => /^https?:\/\//i.test(url);
+
+// Davet bağlantısı: disco://davet/KOD. Uygulama kapalıyken bağlantıyla
+// açılırsa kod komut satırında, açıkken tıklanırsa ikinci kopyanın komut
+// satırında geliyor (bkz. second-instance). Arayüz hazır olunca alıyor.
+const INVITE_LINK = /^disco:\/\/davet\/([\w-]{1,64})\/?$/i;
+let pendingInvite = null;
+function inviteFromArgs(argv) {
+  for (const arg of argv) {
+    const match = INVITE_LINK.exec(arg);
+    if (match) return match[1];
+  }
+  return null;
+}
+pendingInvite = inviteFromArgs(process.argv);
+function deliverInvite(code) {
+  if (!code) return;
+  pendingInvite = code;
+  mainWindow?.webContents.send("open-invite", code);
+}
 
 // YENİ: pencere referansını modül seviyesinde tutuyoruz — ekran paylaşımı
 // seçicisi, kaynak listesini bu pencereye (renderer'a) göndermek için
@@ -200,6 +222,14 @@ app.whenReady().then(() => {
 
   // Windows bildirimleri uygulama kimliğiyle gösteriliyor (kurulumdaki ile aynı).
   if (process.platform === "win32") app.setAppUserModelId("com.alganis.seslisohbet");
+  // disco:// bağlantıları bu uygulamayla açılsın. Sadece kurulmuş uygulamada:
+  // geliştirmede electron.exe'yi kaydederdi.
+  if (app.isPackaged) app.setAsDefaultProtocolClient("disco");
+  ipcMain.handle("take-pending-invite", () => {
+    const code = pendingInvite;
+    pendingInvite = null;
+    return code;
+  });
 
   // YENİ: "File Edit View Window" gibi geliştirici görünümlü üst menü
   // çubuğunu tamamen kaldırıyoruz — gerçek bir uygulama gibi hissettirsin

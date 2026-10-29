@@ -5,7 +5,7 @@ import { Eye, EyeOff, LoaderCircle } from 'lucide-react'
 import logoUrl from '../assets/logo.png'
 import './AuthScreen.css'
 
-function AuthShell({ children, subtitle }) {
+function AuthShell({ children, subtitle, invite }) {
   return (
     <div className="auth-screen">
       <main className="auth-card">
@@ -15,6 +15,16 @@ function AuthShell({ children, subtitle }) {
           <h1 className="auth-title">Disco</h1>
           {subtitle && <p className="auth-subtitle">{subtitle}</p>}
         </div>
+        {invite?.success && (
+          <p className="auth-invite" role="status">
+            Seni <strong>{invite.server.name}</strong> sunucusuna davet ettiler. Katılmak için giriş yap ya da hesap aç.
+          </p>
+        )}
+        {invite && !invite.success && (
+          <p className="auth-invite auth-invite--error" role="alert">
+            Davet bağlantısı açılamadı: {invite.message}
+          </p>
+        )}
         {children}
       </main>
     </div>
@@ -80,10 +90,11 @@ export function AuthScreen({
   loginError,
   registerError,
   registerSuccessMessage,
+  invite,
 }) {
   if (mode === 'register') {
     return (
-      <AuthShell subtitle="Davet koduyla hesap aç">
+      <AuthShell subtitle="Davet koduyla hesap aç" invite={invite}>
         <form className="auth-form" onSubmit={onRegister}>
           <div className="field">
             <label className="field-label" htmlFor="register-username">
@@ -143,7 +154,7 @@ export function AuthScreen({
   }
 
   return (
-    <AuthShell subtitle="Hesabınla giriş yap">
+    <AuthShell subtitle="Hesabınla giriş yap" invite={invite}>
       <form className="auth-form" onSubmit={onLogin}>
         <div className="field">
           <label className="field-label" htmlFor="login-username">

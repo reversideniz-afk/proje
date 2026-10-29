@@ -1,4 +1,12 @@
-// Görüntülemek için biçimlendirme: tuş adları, mesaj saati ve günü, medya hataları.
+// Görüntülemek için biçimlendirme: tuş adları, mesaj saati ve günü, medya hataları,
+// sunucu simgesindeki harfler.
+
+// Sunucu simgesindeki harfler: "Oyun Gecesi" -> "OG", "Disco" -> "DI".
+export function serverInitials(name = '') {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : name.trim().slice(0, 2)
+  return letters.toLocaleUpperCase('tr')
+}
 
 // YENİ: bas-konuş için seçilen tuşu (event.code) okunabilir göstermek için.
 export function formatKeyCode(code) {

@@ -89,7 +89,8 @@ export const test = base.extend({
       // storage: sayfa açılmadan önce localStorage'a yazılacak değerler.
       // desktopApp: Electron'un preload köprüsünü (window.electronAPI) taklit
       // eder; yakınlaştırma çağrıları window.__disco.zoomFactors'a düşer.
-      async user(name, { login = true, rememberMe = false, viewport, storage, desktopApp } = {}) {
+      // path: uygulamanın açılacağı adres (ör. "/?davet=KOD").
+      async user(name, { login = true, rememberMe = false, viewport, storage, desktopApp, path } = {}) {
         const context = await browser.newContext({
           permissions: ['microphone', 'camera'],
           locale: 'tr-TR',
@@ -118,7 +119,7 @@ export const test = base.extend({
         page.on('console', (msg) => session.consoleLines.push(`[${msg.type()}] ${msg.text()}`))
         page.on('pageerror', (err) => session.consoleLines.push(`[sayfa hatası] ${err.message}`))
         users.push(session)
-        await page.goto(env.clientUrl)
+        await page.goto(new URL(path || '/', env.clientUrl).href)
         if (login) await session.login({ rememberMe })
         return session
       },

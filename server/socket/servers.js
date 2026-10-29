@@ -1,12 +1,21 @@
 // Sunucular: oluşturma, silme, davetle katılma, kanal ve üye işlemleri,
 // varlık listesi.
 const crypto = require("crypto");
-const { User, Message, ChannelMember, Server: ServerModel, ServerMember, Channel } = require("../db");
+const { User, Message, ChannelMember, Server: ServerModel, ServerMember, Channel, Invite } = require("../db");
 const { getAccessibleServers, canAccessServer, isServerOwner, userCanAccessChannelDoc } = require("../lib/access");
 const { io } = require("../lib/realtime");
 const { refreshUserServerRooms, recheckUserAccess, buildServerPresence } = require("../lib/rooms");
 const { serverRoomName } = require("../lib/state");
 const { unreadByChannel, unreadByServer } = require("../lib/unread");
+const {
+  EXPIRY_HOURS,
+  MAX_USES,
+  newInviteCode,
+  resolveInvite,
+  consumeInvite,
+  inviteSummary,
+  serializeInvite,
+} = require("../lib/invites");
 
 module.exports = function registerServerHandlers(socket, ctx) {
   // ---- YENİ: Sunucu oluşturma — hesabı olan herkes kişi başı 1 tane
@@ -91,15 +100,15 @@ module.exports = function registerServerHandlers(socket, ctx) {
     const username = await ctx.authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
-    if (typeof inviteCode !== "string" || !inviteCode.trim()) {
-      return callback({ success: false, message: "Davet kodu gerekli." });
-    }
     try {
-      const server = await ServerModel.findOne({ inviteCode: inviteCode.trim() }).lean();
-      if (!server) return callback({ success: false, message: "Geçersiz davet kodu." });
+      const { server, invite, error } = await resolveInvite(inviteCode);
+      if (error) return callback({ success: false, message: error });
       const existing = await ServerMember.findOne({ serverId: server._id, username }).lean();
       if (existing) {
         return callback({ success: false, message: "Bu sunucuya zaten üyesin." });
+      }
+      if (!(await consumeInvite(invite))) {
+        return callback({ success: false, message: "Bu davetin kullanım sınırı dolmuş." });
       }
       await ServerMember.create({ serverId: server._id, username, isOwner: false });
       await refreshUserServerRooms(username);
@@ -116,6 +125,90 @@ module.exports = function registerServerHandlers(socket, ctx) {
       });
     } catch (err) {
       console.error("Sunucuya katılırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- Davet bağlantısının hangi sunucuya ait olduğu: giriş yapmadan da
+  // soruluyor (davet linkiyle gelen kişi giriş ekranında sunucu adını görsün).
+  // Sadece ad ve üye sayısı gidiyor. ----
+  socket.on("invite-info", async ({ code } = {}, callback) => {
+    if (typeof callback !== "function") return;
+    try {
+      const { server, error } = await resolveInvite(code);
+      if (error) return callback({ success: false, message: error });
+      callback({ success: true, server: await inviteSummary(server) });
+    } catch (err) {
+      console.error("Davet bilgisi alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // Sahip için: yeni davet (süre: 1, 24, 168 saat ya da null; kullanım: 0
+  // sınırsız ya da 1, 5, 10, 25), etkin davetlerin listesi, davet iptali.
+  const ownedServer = async (username, serverId) => {
+    if (!username || typeof serverId !== "string") return null;
+    const requester = await User.findOne({ username }).lean();
+    const server = await ServerModel.findById(serverId).lean().catch(() => null);
+    if (!server || !(await isServerOwner(username, requester?.roles || [], server))) return null;
+    return server;
+  };
+
+  socket.on("create-invite", async ({ serverId, expiresInHours = null, maxUses = 0 } = {}, callback) => {
+    if (typeof callback !== "function") return;
+    try {
+      const server = await ownedServer(ctx.username, serverId);
+      if (!server) return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      if (!(expiresInHours === null || EXPIRY_HOURS.includes(expiresInHours)) || !MAX_USES.includes(maxUses)) {
+        return callback({ success: false, message: "Geçersiz davet ayarı." });
+      }
+      const invite = await Invite.create({
+        code: newInviteCode(),
+        serverId: server._id,
+        createdBy: ctx.username,
+        expiresAt: expiresInHours ? new Date(Date.now() + expiresInHours * 3_600_000) : null,
+        maxUses,
+      });
+      callback({ success: true, invite: serializeInvite(invite) });
+    } catch (err) {
+      console.error("Davet oluşturulurken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  socket.on("list-invites", async ({ serverId } = {}, callback) => {
+    if (typeof callback !== "function") return;
+    try {
+      const server = await ownedServer(ctx.username, serverId);
+      if (!server) return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      const now = new Date();
+      const invites = await Invite.find({
+        serverId: server._id,
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+      callback({
+        success: true,
+        invites: invites.filter((i) => !(i.maxUses > 0 && i.uses >= i.maxUses)).map(serializeInvite),
+      });
+    } catch (err) {
+      console.error("Davetler alınırken hata:", err.message);
+      callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  socket.on("delete-invite", async ({ serverId, code } = {}, callback) => {
+    if (typeof callback !== "function") return;
+    try {
+      const server = await ownedServer(ctx.username, serverId);
+      if (!server || typeof code !== "string") {
+        return callback({ success: false, message: "Bu işlemi yapma yetkin yok." });
+      }
+      await Invite.deleteOne({ serverId: server._id, code });
+      callback({ success: true });
+    } catch (err) {
+      console.error("Davet silinirken hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
     }
   });

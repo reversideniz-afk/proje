@@ -4,6 +4,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, RotateCcw, ShieldAlert } from 'lucide-react'
 import { Dialog } from './Dialog.jsx'
+import { serverInitials } from '../lib/format.js'
+import { describeInvite, inviteLink } from '../lib/invites.js'
 import { useDismiss } from '../lib/useDismiss.js'
 import './Dialogs.css'
 
@@ -72,27 +74,154 @@ export function ServerDialog({ initialTab, hasOwnServer, busy, error, onCreate, 
   )
 }
 
-export function InviteDialog({ serverName, code, onClose }) {
+const EXPIRY_OPTIONS = [
+  { hours: 168, label: '7 gün' },
+  { hours: 24, label: '1 gün' },
+  { hours: 1, label: '1 saat' },
+  { hours: null, label: 'Hiç dolmasın' },
+]
+const USE_OPTIONS = [0, 1, 5, 10, 25]
+
+// Sahip için davet: açılınca sunucunun kalıcı bağlantısı; süreli ya da
+// kullanım sayısı sınırlı yeni bağlantı oluşturulabiliyor.
+export function InviteDialog({ serverName, permanentCode, onCreate, onClose }) {
+  const [invite, setInvite] = useState(null) // oluşturulan son davet
+  const [expiresInHours, setExpiresInHours] = useState(168)
+  const [maxUses, setMaxUses] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const link = inviteLink(invite ? invite.code : permanentCode)
+
+  const create = async () => {
+    setBusy(true)
+    setError(null)
+    const response = await onCreate({ expiresInHours, maxUses })
+    setBusy(false)
+    if (response?.success) {
+      setInvite(response.invite)
+      setCopied(false)
+    } else {
+      setError(response?.message || 'Davet oluşturulamadı.')
+    }
+  }
+
   return (
     <Dialog title={`${serverName} daveti`} onClose={onClose}>
       <div className="dialog-body">
         <p className="field-hint">
-          Bu kodu arkadaşına gönder. Sunucu oluştur ya da katıl &gt; Katıl&apos;a yazarak sunucuya girebilir.
+          Bağlantıyı arkadaşına gönder: açınca Disco'da sunucuya katılma penceresi çıkıyor. Kod olarak da
+          kullanılabiliyor (Sunucu oluştur ya da katıl &gt; Katıl).
         </p>
         <div className="invite-code-row">
-          <input className="input invite-code" value={code} readOnly onFocus={(e) => e.target.select()} aria-label="Davet kodu" />
+          <input className="input invite-code" value={link} readOnly onFocus={(e) => e.target.select()} aria-label="Davet bağlantısı" />
           <button
             type="button"
             className="btn"
             onClick={() => {
-              navigator.clipboard?.writeText(code)
+              navigator.clipboard?.writeText(link)
               setCopied(true)
             }}
           >
             {copied ? <Check className="icon" /> : <Copy className="icon" />}
             {copied ? 'Kopyalandı' : 'Kopyala'}
           </button>
+        </div>
+        <p className="field-hint invite-status" role="status">
+          {invite ? describeInvite(invite) : 'Kalıcı bağlantı: süresi dolmuyor, kullanım sınırı yok.'}
+        </p>
+        <div className="invite-options">
+          <div className="field">
+            <label className="field-label" htmlFor="invite-expiry">
+              Süre
+            </label>
+            <select
+              id="invite-expiry"
+              className="select"
+              value={String(expiresInHours)}
+              onChange={(e) => setExpiresInHours(e.target.value === 'null' ? null : Number(e.target.value))}
+            >
+              {EXPIRY_OPTIONS.map((o) => (
+                <option key={String(o.hours)} value={String(o.hours)}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="invite-uses">
+              Kullanım
+            </label>
+            <select id="invite-uses" className="select" value={maxUses} onChange={(e) => setMaxUses(Number(e.target.value))}>
+              {USE_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? 'Sınırsız' : `${n} kişi`}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn--secondary" onClick={create} disabled={busy}>
+            Yeni bağlantı oluştur
+          </button>
+        </div>
+      </div>
+    </Dialog>
+  )
+}
+
+// Davet bağlantısıyla gelen kişiye: hangi sunucu, kaç üye; katıl ya da
+// zaten üyeyse sunucuya git.
+export function JoinInviteDialog({ code, info, isMember, busy, error, onJoin, onGoTo, onClose }) {
+  const server = info?.success ? info.server : null
+  return (
+    <Dialog title="Sunucu daveti" onClose={onClose}>
+      <div className="dialog-body">
+        {!info && <p className="field-hint">Davet kontrol ediliyor…</p>}
+        {info && !server && (
+          <p className="form-error" role="alert">
+            {info.message || 'Davet bağlantısı geçersiz.'}
+          </p>
+        )}
+        {server && (
+          <div className="invite-server">
+            <span className="invite-server-icon" aria-hidden="true">
+              {serverInitials(server.name)}
+            </span>
+            <span>
+              <strong className="invite-server-name">{server.name}</strong>
+              <span className="field-hint">{server.memberCount} üye</span>
+            </span>
+          </div>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          {!window.electronAPI && server && (
+            <a className="btn btn--ghost" href={`disco://davet/${code}`}>
+              Masaüstü uygulamasında aç
+            </a>
+          )}
+          {server && isMember && (
+            <button type="button" className="btn" onClick={onGoTo}>
+              Sunucuya git
+            </button>
+          )}
+          {server && !isMember && (
+            <button type="button" className="btn" onClick={onJoin} disabled={busy}>
+              {busy ? 'Katılınıyor…' : 'Sunucuya katıl'}
+            </button>
+          )}
+          {!server && info && (
+            <button type="button" className="btn btn--secondary" onClick={onClose}>
+              Tamam
+            </button>
+          )}
         </div>
       </div>
     </Dialog>

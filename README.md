@@ -16,8 +16,9 @@ server/
   db.js            MongoDB şemaları
   lib/             paylaşılan parçalar: realtime (Express + Socket.IO), state (bellekteki
                    odalar), sessions, access, users, limits, validate, rooms, ice,
-                   avatars (avatar adresleri), unread (okunmamışlar ve bahsedilmeler)
-  http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si
+                   avatars (avatar adresleri), unread (okunmamışlar ve bahsedilmeler),
+                   invites (süreli/sınırlı davetler)
+  http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si, /davet/KOD
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin
 desktop/
@@ -30,7 +31,8 @@ desktop/
                    (StageTile, Remote*Tile), SettingsScreen, Dialog(s), Avatar
   src/lib/         config, debug, format, sounds, mentions, webrtc, speaking (kim
                    konuşuyor), userColor (kişiye özel renk), notify (masaüstü bildirimi,
-                   görev çubuğu sayısı), useDismiss
+                   görev çubuğu sayısı), markdown (mesaj biçimlendirme), invites (davet
+                   bağlantısı), useDismiss
 ```
 
 Tasarım "gece kulübü": koyu mor gece zemin, Ayarlar > Görünüm'den seçilen tek vurgu rengi ve
@@ -50,6 +52,15 @@ Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğ
 yapan bağlantı erişebildiği bütün kanalların bildirim odalarına giriyor; başka kanaldaki
 yeni mesaj kanalda okunmamış işareti, bahsedilince sayı, Ayarlar > Bildirimler'e göre
 masaüstü bildirimi ve görev çubuğunda sayı olarak görünüyor.
+
+Davetler sunucu menüsündeki "Arkadaşını davet et"ten oluşturuluyor: süresi (1 saat, 1 gün,
+7 gün ya da süresiz) ve kaç kişinin kullanabileceği seçiliyor. Bağlantı `SUNUCU/davet/KOD` biçiminde; açınca
+web uygulaması giriş ekranında hangi sunucuya davet edildiğini gösteriyor, girişten sonra
+katılma penceresini açıyor. Masaüstü uygulaması `disco://davet/KOD` bağlantılarını kendisi
+açıyor (Windows'ta kurulumla kaydediliyor; uygulama açıksa bağlantı açık olan pencereye
+gidiyor). Davetler `Invite` koleksiyonunda; süresi dolan MongoDB tarafından siliniyor, kullanım
+sayısı tek bir koşullu güncellemeyle artıyor. Sunucunun sabit davet kodu da hâlâ çalışıyor.
+Sahip, açık davetleri Ayarlar > Sunucu'dan görüp iptal edebiliyor.
 
 Masaüstü uygulamasında bas-konuş tuşu işletim sistemi seviyesinde dinleniyor
 (`uiohook-napi`): oyundayken ve Disco tepsideyken de çalışıyor. Klavye kancası sadece seste ve
@@ -114,12 +125,14 @@ Dosyalar:
 - `specs/faz5-ozellikler.spec.js` — Faz 5: mikrofonun sese girerken hazırlanması (H28), seste
   mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı, kalıcı okunmamışlar ve
   bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33), mesaja
-  yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor).
+  yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor),
+  süreli ve sınırlı davet bağlantıları.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
-  yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş. `desktop/node_modules`
+  yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş, `disco://davet`
+  bağlantısı. `desktop/node_modules`
   içindeki Electron kullanılıyor; ana süreç `DISCO_TEST_HOOKS` ile tepsiyi ve klavye kancasını
   testlere açıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).

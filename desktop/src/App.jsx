@@ -10,6 +10,7 @@ import {
   ConfirmDialog,
   CreateChannelDialog,
   InviteDialog,
+  JoinInviteDialog,
   PhotoLightbox,
   ScreenPicker,
   SecurityAlertDialog,
@@ -254,6 +255,52 @@ function App() {
   const [serverModalBusy, setServerModalBusy] = useState(false)
   // YENİ: sunucu davet kodu popover'ı (sadece sahibiyken açılabiliyor).
   const [serverInvitePopover, setServerInvitePopover] = useState(null) // { code } | null
+  // Sahibin oluşturduğu etkin davetler (Ayarlar > Sunucu ayarları).
+  const [serverInvites, setServerInvites] = useState([])
+
+  // Davet bağlantısıyla gelindiyse kod: web'de /?davet=KOD (sunucu
+  // /davet/KOD'u buraya yönlendiriyor), masaüstünde disco://davet/KOD.
+  // Giriş ya da kayıt sürerken sayfa yenilense de kaybolmasın diye oturum
+  // deposunda da duruyor.
+  const [pendingInvite, setPendingInvite] = useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('davet')
+    if (fromUrl) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+      try {
+        window.sessionStorage?.setItem('pendingInvite', fromUrl)
+      } catch {
+        /* sadece bu açılışta geçerli olur */
+      }
+      return fromUrl
+    }
+    try {
+      return window.sessionStorage?.getItem('pendingInvite') || null
+    } catch {
+      return null
+    }
+  })
+  const [inviteInfo, setInviteInfo] = useState(null) // invite-info yanıtı
+  const [inviteJoin, setInviteJoin] = useState({ busy: false, error: null })
+  const clearPendingInvite = useCallback(() => {
+    setPendingInvite(null)
+    setInviteInfo(null)
+    setInviteJoin({ busy: false, error: null })
+    try {
+      window.sessionStorage?.removeItem('pendingInvite')
+    } catch {
+      /* yok sayılabilir */
+    }
+  }, [])
+  useEffect(() => {
+    if (!window.electronAPI?.onOpenInvite) return
+    const open = (code) => code && setPendingInvite(code)
+    window.electronAPI.takePendingInvite().then(open)
+    // Uygulama açıkken gelen davet ana süreçte de bekliyor: alınca temizle.
+    return window.electronAPI.onOpenInvite((code) => {
+      open(code)
+      window.electronAPI.takePendingInvite()
+    })
+  }, [])
   // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
   const [serverMembers, setServerMembers] = useState([])
   // Kanal oluşturma penceresi ve sunucuyu silme onayı. (Kanal adı eskiden
@@ -2281,6 +2328,52 @@ function App() {
     }
   }, [emitRequest, leaveChannel, refreshMyServers])
 
+  // Davet bağlantısının sunucusu (giriş yapmadan da soruluyor).
+  useEffect(() => {
+    if (!pendingInvite) return
+    let cancelled = false
+    setInviteInfo(null)
+    emitRequest('invite-info', { code: pendingInvite }).then((response) => {
+      if (!cancelled) setInviteInfo(response)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [pendingInvite, emitRequest])
+
+  const joinFromInvite = useCallback(async () => {
+    setInviteJoin({ busy: true, error: null })
+    const response = await emitRequest('join-server-by-invite', {
+      token: sessionTokenRef.current,
+      inviteCode: pendingInvite,
+    })
+    if (!response?.success) {
+      setInviteJoin({ busy: false, error: response?.message || 'Sunucuya katılamadın.' })
+      return
+    }
+    clearPendingInvite()
+    await refreshMyServers()
+    selectServer(response.server.id)
+  }, [emitRequest, pendingInvite, clearPendingInvite, refreshMyServers, selectServer])
+
+  const createInvite = useCallback(
+    (options) => emitRequest('create-invite', { serverId: activeServerIdRef.current, ...options }),
+    [emitRequest]
+  )
+
+  const fetchServerInvites = useCallback(async () => {
+    const response = await emitRequest('list-invites', { serverId: activeServerIdRef.current })
+    setServerInvites(response?.success ? response.invites : [])
+  }, [emitRequest])
+
+  const revokeInvite = useCallback(
+    async (code) => {
+      await emitRequest('delete-invite', { serverId: activeServerIdRef.current, code })
+      fetchServerInvites()
+    },
+    [emitRequest, fetchServerInvites]
+  )
+
   const openServerInvitePopover = useCallback(async () => {
     const response = await emitRequest('get-server-invite', {
       token: sessionTokenRef.current,
@@ -2642,10 +2735,13 @@ function App() {
   useEffect(() => {
     const isOwnerOfActiveServer = myServers.find((s) => s.id === activeServerId)?.isOwner
     const showsServerMembers = showAppSettings && isOwnerOfActiveServer
-    if (showsServerMembers) fetchServerMembers()
+    if (showsServerMembers) {
+      fetchServerMembers()
+      fetchServerInvites()
+    }
     // Sunucuya biri katılınca/çıkarılınca liste açıksa yenilensin (H16).
     refreshServerMembersRef.current = showsServerMembers ? fetchServerMembers : null
-  }, [showAppSettings, myServers, activeServerId, fetchServerMembers])
+  }, [showAppSettings, myServers, activeServerId, fetchServerMembers, fetchServerInvites])
 
   const addRoleToUser = (targetUsername) => {
     const role = (roleInputByUser[targetUsername] || '').trim()
@@ -2770,6 +2866,7 @@ function App() {
         loginError={loginError}
         registerError={registerError}
         registerSuccessMessage={registerSuccessMessage}
+        invite={pendingInvite ? inviteInfo : null}
       />
     )
   }
@@ -3151,6 +3248,8 @@ function App() {
                   members: serverMembers,
                   onRemoveMember: removeServerMember,
                   onShowInvite: openServerInvitePopover,
+                  invites: serverInvites,
+                  onRevokeInvite: revokeInvite,
                   onDelete: () => setConfirmDeleteServer(true),
                 }
               : null
@@ -3206,7 +3305,12 @@ function App() {
       )}
 
       {serverInvitePopover && (
-        <InviteDialog serverName={activeServerName} code={serverInvitePopover.code} onClose={() => setServerInvitePopover(null)} />
+        <InviteDialog
+          serverName={activeServerName}
+          permanentCode={serverInvitePopover.code}
+          onCreate={createInvite}
+          onClose={() => setServerInvitePopover(null)}
+        />
       )}
 
       {createChannelDialog && (
@@ -3229,6 +3333,22 @@ function App() {
       )}
 
       {securityAlert && <SecurityAlertDialog alert={securityAlert} onClose={() => setSecurityAlert(null)} />}
+
+      {pendingInvite && (
+        <JoinInviteDialog
+          code={pendingInvite}
+          info={inviteInfo}
+          isMember={!!inviteInfo?.server && myServers.some((s) => s.id === inviteInfo.server.id)}
+          busy={inviteJoin.busy}
+          error={inviteJoin.error}
+          onJoin={joinFromInvite}
+          onGoTo={() => {
+            selectServer(inviteInfo.server.id)
+            clearPendingInvite()
+          }}
+          onClose={clearPendingInvite}
+        />
+      )}
     </div>
   )
 }

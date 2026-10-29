@@ -369,6 +369,17 @@
   font-weight: 500;
 }
 
+.settings-invite {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-invite .settings-mono {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 .settings-owner {
   width: 15px;
   height: 15px;
