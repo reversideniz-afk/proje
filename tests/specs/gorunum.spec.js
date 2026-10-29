@@ -114,4 +114,22 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await expect(yolcu.page.getByRole('dialog', { name: 'Sunucu daveti' })).toContainText('5 üye')
     await shot(yolcu, testInfo, '23-davet-katil')
   })
+
+  test('ses ayarları: seste giriş hassasiyeti çubuğu', async ({ disco }, testInfo) => {
+    const mert = await disco.user('Mert', {
+      storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -45 }) },
+    })
+    await mert.useSyntheticMic(-20)
+    await mert.openChannel('genel')
+    await mert.joinVoice()
+    await mert.micOn()
+    await mert.page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+    await mert.page.getByRole('button', { name: 'Ses ve görüntü' }).click()
+    await expect(mert.page.locator('.level-meter--open')).toHaveCount(1)
+    await shot(mert, testInfo, '24-ses-hassasiyet')
+    await mert.page.getByRole('switch', { name: 'Otomatik ayarla' }).check()
+    await mert.setSyntheticMicLevel(-50)
+    await expect(mert.page.locator('.level-meter--open')).toHaveCount(0)
+    await shot(mert, testInfo, '25-ses-hassasiyet-otomatik')
+  })
 })

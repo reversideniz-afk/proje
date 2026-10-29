@@ -25,6 +25,7 @@ import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js
 import { DEBUG, debugLog } from './lib/debug.js'
 import { describeMediaError, formatKeyCode } from './lib/format.js'
 import { mentionsUser } from './lib/mentions.jsx'
+import { DEFAULT_VOICE_SETTINGS, createMicProcessor, gateSettings, micConstraints } from './lib/micProcessor.js'
 import { ensureNotificationPermission, requestAttention, setAttentionBadge, showNotification } from './lib/notify.js'
 import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
@@ -422,6 +423,10 @@ function App() {
   // --- Mikrofon + kamera (ana bağlantı) ---
   const [localMainStream, setLocalMainStream] = useState(null)
   const [isMicOn, setIsMicOn] = useState(false)
+  // Seste mikrofonun geçtiği ses kapısı (bkz. lib/micProcessor.js); yerel
+  // akıştaki mikrofon izi bunun çıkışı. Kurulamazsa null, ham iz gidiyor.
+  const micProcessorRef = useRef(null)
+  const [micProcessor, setMicProcessor] = useState(null)
 
   // YENİ: Ses giriş/çıkış cihazı seçimi — hangi mikrofonu/hoparlörü
   // kullanacağını seçebilesin diye. Seçim kalıcı (uygulamayı kapatıp
@@ -489,6 +494,25 @@ function App() {
     window.localStorage?.setItem('audioInputId', selectedAudioInput)
     selectedAudioInputRef.current = selectedAudioInput
   }, [selectedAudioInput])
+
+  // Mikrofon ayarları (bu cihazda kalıcı): tarayıcının ses işlemesi ve giriş
+  // hassasiyeti (otomatik ya da elle seçilen eşik, dB).
+  const [voiceSettings, setVoiceSettings] = useState(() => {
+    try {
+      return { ...DEFAULT_VOICE_SETTINGS, ...JSON.parse(window.localStorage?.getItem('voiceSettings') || '{}') }
+    } catch {
+      return DEFAULT_VOICE_SETTINGS
+    }
+  })
+  const voiceSettingsRef = useRef(voiceSettings)
+  useEffect(() => {
+    voiceSettingsRef.current = voiceSettings
+    try {
+      window.localStorage?.setItem('voiceSettings', JSON.stringify(voiceSettings))
+    } catch {
+      /* kalıcılık olmasa da çalışıyor */
+    }
+  }, [voiceSettings])
 
   useEffect(() => {
     window.localStorage?.setItem('audioOutputId', selectedAudioOutput)
@@ -699,63 +723,56 @@ function App() {
     oscillator.stop(ctx.currentTime + 0.6)
   }, [getAudioContext])
 
-  // YENİ: Mikrofon testi — seçili mikrofonu kısa süreliğine açıp canlı bir
-  // seviye çubuğu gösteriyor (konuşunca hareket etmeli). Hoparlöre
-  // BAĞLAMIYORUZ (yankı/geri besleme olmasın diye) — sadece bir
-  // AnalyserNode ile seviyeyi ölçüp okuyoruz. 10 saniye sonra ya da
-  // tekrar tıklanınca kendiliğinden kapanır, mikrofonu açık unutmuyoruz.
-  const [isTestingMic, setIsTestingMic] = useState(false)
-  const [micTestLevel, setMicTestLevel] = useState(0)
+  // Ses kapısının ayarı (bkz. lib/micProcessor.js): seste ve mikrofon
+  // testinde aynı. Bas-konuşta kapı hep açık.
+  const gateConfig = useMemo(() => gateSettings(voiceSettings, pttEnabled), [voiceSettings, pttEnabled])
+  const gateConfigRef = useRef(gateConfig)
+
+  // Mikrofon testi: seçili mikrofonu ses kapısıyla birlikte kısa süreliğine
+  // açıyor; ayarlardaki seviye çubuğu konuşunca doluyor, eşiği geçince
+  // yanıyor. Ses hoparlöre verilmiyor (yankı olmasın). 15 saniye sonra ya da
+  // tekrar tıklanınca kapanıyor, mikrofon açık unutulmuyor.
+  const [micTestProcessor, setMicTestProcessor] = useState(null)
+  const isTestingMic = !!micTestProcessor
   const micTestCleanupRef = useRef(null)
 
   const stopMicTest = useCallback(() => {
     micTestCleanupRef.current?.()
     micTestCleanupRef.current = null
-    setIsTestingMic(false)
-    setMicTestLevel(0)
+    setMicTestProcessor(null)
   }, [])
 
   const testMicrophone = useCallback(async () => {
-    if (isTestingMic) {
+    if (micTestCleanupRef.current) {
       stopMicTest()
       return
     }
+    let stream = null
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true,
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: micConstraints(selectedAudioInput, voiceSettingsRef.current),
       })
       const ctx = getAudioContext()
-      const source = ctx.createMediaStreamSource(stream)
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 512
-      source.connect(analyser)
-      const data = new Uint8Array(analyser.frequencyBinCount)
-
-      const tick = () => {
-        analyser.getByteTimeDomainData(data)
-        let peak = 0
-        for (let i = 0; i < data.length; i++) {
-          const v = Math.abs(data[i] - 128)
-          if (v > peak) peak = v
-        }
-        setMicTestLevel(Math.min(100, Math.round((peak / 128) * 100)))
-        rafId = requestAnimationFrame(tick)
-      }
-      let rafId = requestAnimationFrame(tick)
-
-      const autoStopTimer = setTimeout(() => stopMicTest(), 10000)
-
+      await audioContextReadyRef.current
+      const processor = await createMicProcessor(ctx, gateConfigRef.current)
+      processor.setInput(stream.getAudioTracks()[0])
+      const autoStopTimer = setTimeout(stopMicTest, 15000)
       micTestCleanupRef.current = () => {
-        cancelAnimationFrame(rafId)
         clearTimeout(autoStopTimer)
-        source.disconnect()
-        stream.getTracks().forEach((t) => t.stop())
+        processor.dispose()
       }
-      setIsTestingMic(true)
+      setMicTestProcessor(processor)
     } catch (err) {
+      stream?.getTracks().forEach((t) => t.stop())
       setMediaError(describeMediaError(err))
     }
-  }, [isTestingMic, selectedAudioInput, getAudioContext, stopMicTest])
+  }, [selectedAudioInput, getAudioContext, stopMicTest])
+
+  useEffect(() => {
+    gateConfigRef.current = gateConfig
+    micProcessor?.setGate(gateConfig)
+    micTestProcessor?.setGate(gateConfig)
+  }, [gateConfig, micProcessor, micTestProcessor])
 
   // Panel kapanırken ya da bileşen kaldırılırken testi arkada bırakma.
   useEffect(() => {
@@ -1038,6 +1055,10 @@ function App() {
       if (prev) prev.getTracks().forEach((t) => t.stop())
       return null
     })
+    // Ham mikrofon izi ses kapısında; o da kapanmalı.
+    micProcessorRef.current?.dispose()
+    micProcessorRef.current = null
+    setMicProcessor(null)
     setLocalScreenStream((prev) => {
       if (prev) prev.getTracks().forEach((t) => t.stop())
       return null
@@ -1272,17 +1293,52 @@ function App() {
   // cihazın açılması beklenirken (özellikle bas-konuşta) ilk kelimeler
   // kayboluyordu (H28). Bekleyen hazırlık micReadyRef'te.
   const micReadyRef = useRef(null)
+
+  // Ham mikrofon izini ses kapısından geçirip gönderilecek izi döndürüyor.
+  // Kapı kurulamazsa (ses motoru çalışmıyor, AudioWorklet yok) ham iz
+  // gidiyor: hassasiyet çalışmaz ama mikrofon da susmaz.
+  const processMic = useCallback(
+    async (rawTrack) => {
+      let processor = micProcessorRef.current
+      if (!processor) {
+        try {
+          const ctx = getAudioContext()
+          // Kullanıcı etkileşimi olmadan resume() hiç sonuçlanmayabiliyor:
+          // en fazla 2 saniye bekleyip ham izle devam ediyoruz.
+          const ready = Promise.all([audioContextReadyRef.current, ctx.state === 'running' || ctx.resume()])
+          await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 2000))])
+          if (ctx.state !== 'running') throw new Error(`ses motoru ${ctx.state}`)
+          processor = await createMicProcessor(ctx, gateConfigRef.current)
+        } catch (err) {
+          console.warn('[mikrofon] ses kapısı kurulamadı, mikrofon işlenmeden gidiyor:', err.message)
+          return rawTrack
+        }
+        // Bu arada sesten çıkıldıysa kapıyı bırak (çağıran ham izi kapatıyor).
+        if (!voiceChannelRef.current) {
+          processor.dispose()
+          return rawTrack
+        }
+        micProcessorRef.current = processor
+        setMicProcessor(processor)
+      }
+      processor.setInput(rawTrack)
+      return processor.track
+    },
+    [getAudioContext]
+  )
+
   const addMicTrack = useCallback(
     (enabled) => {
       const ready = (async () => {
-        const deviceId = selectedAudioInputRef.current
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+          audio: micConstraints(selectedAudioInputRef.current, voiceSettingsRef.current),
         })
-        const track = stream.getAudioTracks()[0]
+        const rawTrack = stream.getAudioTracks()[0]
+        rawTrack.enabled = enabled
+        const track = voiceChannelRef.current ? await processMic(rawTrack) : rawTrack
         // Bu arada sesten çıkıldıysa izi açık bırakma.
         if (!voiceChannelRef.current) {
-          track.stop()
+          rawTrack.stop()
           return null
         }
         track.enabled = enabled
@@ -1306,7 +1362,7 @@ function App() {
           if (micReadyRef.current === ready) micReadyRef.current = null
         })
     },
-    [setLocalTrackOnMainConnections]
+    [setLocalTrackOnMainConnections, processMic]
   )
 
   // YENİ: Sese katıl — metin kanalına ZATEN girmiş olmamız lazım. Hangi
@@ -1787,6 +1843,9 @@ function App() {
         if (!active || !(await addMicTrack(true))) return
       } else {
         existingAudioTrack.enabled = active
+        // Ses kapısındaki ham iz de: mikrofon kapalıyken ses hiç işlenmiyor.
+        const rawTrack = micProcessorRef.current?.inputTrack
+        if (rawTrack) rawTrack.enabled = active
       }
       setIsMicOn(active)
       socketRef.current?.emit('state-update', { muted: !active })
@@ -1794,17 +1853,25 @@ function App() {
     [addMicTrack]
   )
 
-  // Seste mikrofon cihazı değiştirilince yeni cihaz hemen devreye giriyor;
-  // açık/kapalı durumu korunuyor. Eskiden bir sonraki açışı bekliyordu.
-  const previousAudioInputRef = useRef(selectedAudioInput)
+  // Seste mikrofon cihazı ya da ses işleme ayarı (gürültü bastırma, yankı
+  // engelleme, otomatik ses seviyesi) değişince mikrofon yeni ayarla hemen
+  // yeniden açılıyor; açık/kapalı durumu korunuyor. Eskiden bir sonraki
+  // açışı bekliyordu.
+  const { noiseSuppression, echoCancellation, autoGainControl } = voiceSettings
+  const micSetup = [selectedAudioInput, noiseSuppression, echoCancellation, autoGainControl].join('|')
+  const previousMicSetupRef = useRef(micSetup)
   useEffect(() => {
-    if (previousAudioInputRef.current === selectedAudioInput) return
-    previousAudioInputRef.current = selectedAudioInput
+    if (previousMicSetupRef.current === micSetup) return
+    previousMicSetupRef.current = micSetup
     const oldTrack = localMainStreamRef.current?.getAudioTracks()[0]
     if (!oldTrack) return
     let cancelled = false
+    const processor = micProcessorRef.current
+    // Aynı cihaz açıkken ses işleme ayarı değişmeyebiliyor: kapıda önce eski
+    // ham izi kapatıyoruz (bu arada karşıya sessizlik gidiyor).
+    processor?.stopInput()
     navigator.mediaDevices
-      .getUserMedia({ audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true })
+      .getUserMedia({ audio: micConstraints(selectedAudioInput, voiceSettingsRef.current) })
       .then((stream) => {
         const track = stream.getAudioTracks()[0]
         if (cancelled || localMainStreamRef.current?.getAudioTracks()[0] !== oldTrack) {
@@ -1812,6 +1879,10 @@ function App() {
           return
         }
         track.enabled = oldTrack.enabled
+        if (processor) {
+          processor.setInput(track)
+          return
+        }
         const next = new MediaStream([
           ...localMainStreamRef.current.getTracks().filter((t) => t !== oldTrack),
           track,
@@ -1825,7 +1896,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedAudioInput, setLocalTrackOnMainConnections])
+  }, [micSetup, selectedAudioInput, setLocalTrackOnMainConnections])
 
   // YENİ: Herkesin sesini, kayıtlı tercihine (peerVolumes) göre geri
   // getiren ortak fonksiyon — hem "sağırlığı kapat" hem de "PTT ile
@@ -3191,8 +3262,13 @@ function App() {
             onSelectInput: setSelectedAudioInput,
             onSelectOutput: setSelectedAudioOutput,
             isTestingMic,
-            micLevel: micTestLevel,
             onTestMic: testMicrophone,
+            // Seviye çubuğu: seste kapının kendisi, değilse mikrofon testi.
+            levelSource: micProcessor || micTestProcessor,
+            isLive: !!micProcessor,
+            pushToTalk: pttEnabled,
+            voice: voiceSettings,
+            onVoiceChange: (patch) => setVoiceSettings((prev) => ({ ...prev, ...patch })),
             onTestTone: playTestTone,
             outputError: outputDeviceError,
           }}

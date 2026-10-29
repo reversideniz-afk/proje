@@ -137,6 +137,32 @@ export async function readIncomingAudioBytesPerConnection() {
   return result
 }
 
+// Sayfada çalışır: mikrofonu, seviyesi testten ayarlanan sürekli bir tonla
+// değiştirir. Sahte aygıtın bip sesi kısa ve aralıklı; giriş hassasiyeti
+// testleri bilinen seviyede sürekli ses istiyor. peakDb: tonun tepe
+// seviyesi (dBFS); etkin değeri (RMS) bundan 3 dB düşük.
+export function installSyntheticMic(peakDb) {
+  const ctx = new AudioContext()
+  const tone = ctx.createOscillator()
+  tone.frequency.value = 330
+  const gain = ctx.createGain()
+  gain.gain.value = 10 ** (peakDb / 20)
+  const output = ctx.createMediaStreamDestination()
+  tone.connect(gain).connect(output)
+  tone.start()
+  window.__disco.syntheticMic = { ctx, gain }
+  MediaDevices.prototype.getUserMedia = async function () {
+    const track = output.stream.getAudioTracks()[0].clone()
+    window.__disco.mediaTracks.push(track)
+    return new MediaStream([track])
+  }
+}
+
+export function setSyntheticMicLevel(peakDb) {
+  const { ctx, gain } = window.__disco.syntheticMic
+  gain.gain.setValueAtTime(10 ** (peakDb / 20), ctx.currentTime)
+}
+
 // Sayfada çalışır: ~1 saniye boyunca hoparlöre giden sesin en yüksek
 // genliği (0 = tam sessizlik, 1 = en yüksek).
 export async function readSpeakerPeak() {

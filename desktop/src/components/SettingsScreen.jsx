@@ -79,7 +79,89 @@ function AccountPage({ account }) {
   )
 }
 
+// Seviye çubuğu -80 dB (sessizlik) ile 0 dB (en yüksek) arası.
+const METER_MIN_DB = -80
+const meterPercent = (db) => Math.min(100, Math.max(0, (1 - db / METER_MIN_DB) * 100))
+
+// Giriş hassasiyeti: mikrofonun canlı seviyesi ve üstünde eşik çizgisi.
+// Ses çizgiyi geçince karşıya gidiyor ve çubuk yanıyor. Elle ayarda çizgi
+// sürüklenebiliyor; otomatikte Disco'nun seçtiği yerde duruyor.
+function InputSensitivity({ audio }) {
+  const { levelSource, voice, pushToTalk } = audio
+  const [reading, setReading] = useState(null)
+  useEffect(() => levelSource?.onLevel(setReading), [levelSource])
+  const live = levelSource ? reading : null
+  const thresholdDb = pushToTalk ? null : voice.autoSensitivity ? (live?.thresholdDb ?? null) : voice.thresholdDb
+  const levelDb = live ? Math.round(live.levelDb) : METER_MIN_DB
+
+  return (
+    <Section
+      title="Giriş hassasiyeti"
+      description={
+        pushToTalk
+          ? 'Bas-konuş açık: tuşa bastığın sürece sesin gider, hassasiyet kullanılmıyor.'
+          : 'Sesin çizgiyi geçince karşıya gider. Daha sessiz sesler (klavye, fan, oda) gitmez.'
+      }
+    >
+      {!pushToTalk && (
+        <Toggle
+          label="Otomatik ayarla"
+          hint="Ortam gürültüsünü ölçüp çizgiyi kendisi yerleştirir."
+          checked={voice.autoSensitivity}
+          onChange={(autoSensitivity) => audio.onVoiceChange({ autoSensitivity })}
+        />
+      )}
+      <div className="level-meter-row">
+        <div className={'level-meter' + (live?.open && !pushToTalk ? ' level-meter--open' : '')}>
+          <div
+            className="level-meter-track"
+            role="meter"
+            aria-label="Mikrofon seviyesi"
+            aria-valuemin={METER_MIN_DB}
+            aria-valuemax={0}
+            aria-valuenow={Math.max(METER_MIN_DB, levelDb)}
+            aria-valuetext={live ? `${levelDb} dB` : 'Ölçülmüyor'}
+          >
+            <div className="level-meter-fill" style={{ width: `${live ? meterPercent(live.levelDb) : 0}%` }} />
+          </div>
+          {thresholdDb !== null &&
+            (voice.autoSensitivity ? (
+              <span className="level-meter-mark" style={{ left: `${meterPercent(thresholdDb)}%` }} aria-hidden="true" />
+            ) : (
+              <input
+                type="range"
+                className="level-meter-threshold"
+                min={METER_MIN_DB}
+                max={0}
+                step={1}
+                value={thresholdDb}
+                aria-label="Eşik"
+                aria-valuetext={`${thresholdDb} dB`}
+                onChange={(e) => audio.onVoiceChange({ thresholdDb: Number(e.target.value) })}
+              />
+            ))}
+        </div>
+        {thresholdDb !== null && <span className="level-meter-value">{Math.round(thresholdDb)} dB</span>}
+      </div>
+      {audio.isLive ? (
+        <p className="field-hint">Seste olduğun için seviye canlı gösteriliyor.</p>
+      ) : (
+        <div className="settings-row">
+          <button type="button" className="btn btn--secondary" onClick={audio.onTestMic}>
+            {audio.isTestingMic ? <Square className="icon" /> : <Mic className="icon" />}
+            {audio.isTestingMic ? 'Testi durdur' : 'Mikrofonu test et'}
+          </button>
+          <span className="field-hint">
+            {audio.isTestingMic ? 'Konuş: çubuk dolar, çizgiyi geçince yanar. Ses hoparlöre verilmiyor.' : 'Seviyeyi görmek için mikrofonu dene.'}
+          </span>
+        </div>
+      )}
+    </Section>
+  )
+}
+
 function AudioPage({ audio }) {
+  const { voice, onVoiceChange } = audio
   return (
     <>
       <Section title="Mikrofon">
@@ -96,18 +178,27 @@ function AudioPage({ audio }) {
             ))}
           </select>
         </div>
-        <div className="settings-row">
-          <button type="button" className="btn btn--secondary" onClick={audio.onTestMic}>
-            {audio.isTestingMic ? <Square className="icon" /> : <Mic className="icon" />}
-            {audio.isTestingMic ? 'Testi durdur' : 'Mikrofonu test et'}
-          </button>
-          {audio.isTestingMic && (
-            <div className="mic-meter" role="meter" aria-label="Mikrofon seviyesi" aria-valuemin={0} aria-valuemax={100} aria-valuenow={audio.micLevel}>
-              <div className="mic-meter-fill" style={{ width: `${audio.micLevel}%` }} />
-            </div>
-          )}
-        </div>
-        {audio.isTestingMic && <p className="field-hint">Konuş: çubuk hareket ediyorsa mikrofonun ses alıyor. Ses hoparlöre verilmiyor.</p>}
+      </Section>
+      <InputSensitivity audio={audio} />
+      <Section title="Ses işleme" description="Seste değiştirirsen mikrofon yeni ayarla bir an kapanıp açılır.">
+        <Toggle
+          label="Gürültü bastırma"
+          hint="Fan, klima, uğultu gibi sürekli arka plan seslerini azaltır."
+          checked={voice.noiseSuppression}
+          onChange={(noiseSuppression) => onVoiceChange({ noiseSuppression })}
+        />
+        <Toggle
+          label="Yankı engelleme"
+          hint="Hoparlörden gelen sesin mikrofonuna karışıp geri gitmesini önler. Kulaklık takıyorsan kapatabilirsin."
+          checked={voice.echoCancellation}
+          onChange={(echoCancellation) => onVoiceChange({ echoCancellation })}
+        />
+        <Toggle
+          label="Otomatik ses seviyesi"
+          hint="Mikrofona yakın da uzak da konuşsan sesini aynı seviyede tutar."
+          checked={voice.autoGainControl}
+          onChange={(autoGainControl) => onVoiceChange({ autoGainControl })}
+        />
       </Section>
       <Section title="Hoparlör">
         <div className="field">

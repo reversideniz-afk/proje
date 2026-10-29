@@ -2,9 +2,11 @@
 // gerçek bir kullanıcı gibi giriş yapar, kanala girer, sese katılır.
 import { expect } from '@playwright/test'
 import {
+  installSyntheticMic,
   readIncomingAudioBytes,
   readIncomingAudioBytesPerConnection,
   readSpeakerPeak,
+  setSyntheticMicLevel,
 } from './instrument.js'
 import { PASSWORD } from './seed.js'
 
@@ -122,6 +124,16 @@ export class UserSession {
 
   speakerPeak() {
     return this.page.evaluate(readSpeakerPeak)
+  }
+
+  // Mikrofon yerine bilinen seviyede sürekli bir ton (bkz.
+  // installSyntheticMic). Sese girmeden önce çağır.
+  useSyntheticMic(peakDb) {
+    return this.page.evaluate(installSyntheticMic, peakDb)
+  }
+
+  setSyntheticMicLevel(peakDb) {
+    return this.page.evaluate(setSyntheticMicLevel, peakDb)
   }
 
   // Kullanıcı katmanı: hoparlörden gerçekten ses çıkıyor mu? Kısa efekt

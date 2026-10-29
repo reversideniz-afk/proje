@@ -1,9 +1,11 @@
 // Gerçek masaüstü uygulaması (Electron) ile testler. Uygulama, test için
 // derlenen istemciyi açıyor (DISCO_APP_URL) ve aynı yerel sunucuya bağlanıyor.
 import { spawn } from 'node:child_process'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { _electron as electron } from '@playwright/test'
 import { test, expect } from '../harness/fixtures.js'
-import { desktopDir, requireFromDesktop } from '../harness/paths.js'
+import { clientBuildDir, desktopDir, requireFromDesktop } from '../harness/paths.js'
 import { UserSession } from '../harness/user-session.js'
 
 const electronBinary = requireFromDesktop('electron')
@@ -11,8 +13,8 @@ const electronBinary = requireFromDesktop('electron')
 // VS Code gibi Electron tabanlı araçlar ELECTRON_RUN_AS_NODE=1 bırakabiliyor;
 // o zaman electron.exe uygulama yerine düz Node olarak çalışıyor.
 // DISCO_TEST_HOOKS: ana süreç bas-konuş ve tepsiyi testlere açıyor.
-function desktopAppEnv(disco) {
-  const env = { ...process.env, DISCO_APP_URL: disco.clientUrl, DISCO_TEST_HOOKS: '1' }
+function desktopAppEnv(disco, appUrl = disco.clientUrl) {
+  const env = { ...process.env, DISCO_APP_URL: appUrl, DISCO_TEST_HOOKS: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }
@@ -21,11 +23,13 @@ function desktopAppEnv(disco) {
 const FAKE_MEDIA = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
 
 // extraArgs: uygulamaya verilen ek komut satırı (ör. bir disco:// bağlantısı).
-async function launchDesktopApp(disco, userDataDir, extraArgs = []) {
+// appUrl: varsayılan, test sunucusundaki istemci; paketlenmiş uygulama gibi
+// dosyadan (file://) açmak için derlenen istemcinin index.html'i.
+async function launchDesktopApp(disco, userDataDir, extraArgs = [], appUrl = disco.clientUrl) {
   const app = await electron.launch({
     executablePath: electronBinary,
     args: [...FAKE_MEDIA, `--user-data-dir=${userDataDir}`, desktopDir, ...extraArgs],
-    env: desktopAppEnv(disco),
+    env: desktopAppEnv(disco, appUrl),
   })
   const page = await app.firstWindow()
   // Pencerenin konsolu test raporuna ekleniyor (bkz. afterEach).
@@ -175,6 +179,26 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
       await expect
         .poll(() => app.evaluate(() => globalThis.discoTest.pushToTalk.isRunning()))
         .toBe(false)
+    } finally {
+      await app.close().catch(() => {})
+    }
+  })
+
+  test('paketlenmiş uygulamadaki gibi dosyadan açılınca da mikrofon ses kapısından geçiyor', async ({ disco }, testInfo) => {
+    const appUrl = pathToFileURL(path.join(clientBuildDir, 'index.html')).href
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'), [], appUrl)
+    try {
+      expect(page.url()).toMatch(/^file:/)
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      await mert.openChannel('genel')
+      await mert.joinVoice()
+      await page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+      await page.getByRole('button', { name: 'Ses ve görüntü' }).click()
+      await expect(page.getByText('Seste olduğun için seviye canlı gösteriliyor.')).toBeVisible()
+      const meter = page.getByRole('meter', { name: 'Mikrofon seviyesi' })
+      await expect(meter).not.toHaveAttribute('aria-valuetext', 'Ölçülmüyor')
+      expect(consoleLines.filter((line) => line.includes('ses kapısı kurulamadı'))).toEqual([])
     } finally {
       await app.close().catch(() => {})
     }

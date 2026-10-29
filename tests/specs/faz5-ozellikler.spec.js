@@ -18,6 +18,43 @@ const micTracks = (user) =>
       .map((t) => ({ enabled: t.enabled, live: t.readyState === 'live' }))
   )
 
+// Giriş hassasiyeti testlerindeki tonlar (bkz. useSyntheticMic): konuşma
+// (tepe -14 dB, etkin değer -17) ve sürekli ortam sesi (tepe -40, etkin -43).
+const SPEECH_DB = -14
+const ROOM_DB = -40
+
+// Hoparlörde art arda iki ölçümün ikisinde de en az bu kadar ses var.
+async function expectHears(user, minPeak) {
+  await expect
+    .poll(async () => Math.min(await user.speakerPeak(), await user.speakerPeak()), {
+      message: `${user.name} beklenen sesi duymuyor`,
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(minPeak)
+}
+
+// ...ya da iki ölçümde de (neredeyse) hiç ses yok.
+async function expectSilence(user) {
+  await expect
+    .poll(async () => Math.max(await user.speakerPeak(), await user.speakerPeak()), {
+      message: `${user.name} hâlâ ses duyuyor`,
+      timeout: 15_000,
+    })
+    .toBeLessThan(0.002)
+}
+
+async function openAudioSettings(user) {
+  await user.page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+  await user.page.getByRole('button', { name: 'Ses ve görüntü' }).click()
+}
+
+async function joinVoiceTogether(...users) {
+  for (const user of users) {
+    await user.openChannel('genel')
+    await user.joinVoice()
+  }
+}
+
 async function sendAs(client, text) {
   const delivered = client.nextEvent('new-message', (m) => m.text === text)
   client.socket.emit('send-message', { token: client.token, text })
@@ -416,5 +453,136 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await assign.click()
     await mert.page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 4 })))
     await expect(mert.page.locator('.settings-key')).toHaveText('Fare 5')
+  })
+
+  test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {
+    const ece = await disco.user('Ece', {
+      storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -30 }) },
+    })
+    const mert = await disco.user('Mert')
+    await ece.useSyntheticMic(SPEECH_DB)
+    await joinVoiceTogether(ece, mert)
+    await ece.micOn()
+    await expectHears(mert, 0.05)
+
+    await ece.setSyntheticMicLevel(ROOM_DB)
+    await expectSilence(mert)
+
+    // Eşik sesten çıkmadan değişiyor: en sola çekince sessiz ses de gidiyor.
+    await openAudioSettings(ece)
+    const threshold = ece.page.getByRole('slider', { name: 'Eşik' })
+    await expect(threshold).toHaveValue('-30')
+    await threshold.focus()
+    await ece.page.keyboard.press('Home')
+    await expect(ece.page.locator('.level-meter-value')).toHaveText('-80 dB')
+    await expectHears(mert, 0.004)
+    const saved = JSON.parse(await ece.probe(() => window.localStorage.getItem('voiceSettings')))
+    expect(saved).toMatchObject({ autoSensitivity: false, thresholdDb: -80 })
+  })
+
+  test('otomatik hassasiyet: sürekli ortam sesi gitmiyor, üstüne çıkan konuşma gidiyor', async ({ disco }) => {
+    const ece = await disco.user('Ece')
+    const mert = await disco.user('Mert')
+    await ece.useSyntheticMic(ROOM_DB)
+    await joinVoiceTogether(ece, mert)
+    await ece.micOn()
+    await expectSilence(mert)
+
+    await ece.setSyntheticMicLevel(SPEECH_DB)
+    await expectHears(mert, 0.05)
+    await ece.setSyntheticMicLevel(ROOM_DB)
+    await expectSilence(mert)
+
+    // Seste olduğu için ayarlardaki çubuk canlı. Disco'nun seçtiği eşik ortam
+    // sesinin 12 dB üstü, en fazla -36 dB.
+    await openAudioSettings(ece)
+    await expect(ece.page.getByRole('switch', { name: 'Otomatik ayarla' })).toBeChecked()
+    await expect(ece.page.getByText('Seste olduğun için seviye canlı gösteriliyor.')).toBeVisible()
+    await expect(ece.page.locator('.level-meter-value')).toHaveText('-36 dB')
+    const meter = ece.page.getByRole('meter', { name: 'Mikrofon seviyesi' })
+    await expect.poll(async () => Number(await meter.getAttribute('aria-valuenow'))).toBeLessThan(-38)
+    await expect(ece.page.locator('.level-meter--open')).toHaveCount(0)
+    await ece.setSyntheticMicLevel(SPEECH_DB)
+    await expect(ece.page.locator('.level-meter--open')).toHaveCount(1)
+    await expect(ece.page.getByRole('slider', { name: 'Eşik' })).toHaveCount(0)
+  })
+
+  test('bas-konuşta hassasiyet kullanılmıyor: tuş basılıyken sessiz ses de gidiyor', async ({ disco }) => {
+    const ece = await disco.user('Ece', {
+      storage: { pttKey: 'KeyV', voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -10 }) },
+    })
+    const mert = await disco.user('Mert')
+    await ece.useSyntheticMic(ROOM_DB)
+    await joinVoiceTogether(ece, mert)
+
+    await ece.page.locator('.chat-messages').click()
+    await ece.page.keyboard.down('KeyV')
+    await expectHears(mert, 0.004)
+    await ece.page.keyboard.up('KeyV')
+    await expectSilence(mert)
+
+    await openAudioSettings(ece)
+    await expect(ece.page.getByText(/^Bas-konuş açık: tuşa bastığın sürece sesin gider/)).toBeVisible()
+    await expect(ece.page.getByRole('slider', { name: 'Eşik' })).toHaveCount(0)
+    await expect(ece.page.getByRole('switch', { name: 'Otomatik ayarla' })).toHaveCount(0)
+  })
+
+  test('ses işleme ayarı seste değişince mikrofon yeni ayarla açılıyor, açık kalıyor', async ({ disco }) => {
+    const ece = await disco.user('Ece')
+    const mert = await disco.user('Mert')
+    await joinVoiceTogether(ece, mert)
+    await ece.micOn()
+    await mert.expectHearingSomeone()
+
+    const audioTracks = () =>
+      ece.probe(() =>
+        window.__disco.mediaTracks
+          .filter((t) => t.kind === 'audio')
+          .map((t) => {
+            const { noiseSuppression, echoCancellation, autoGainControl } = t.getSettings()
+            return { live: t.readyState === 'live', enabled: t.enabled, noiseSuppression, echoCancellation, autoGainControl }
+          })
+      )
+    expect(await audioTracks()).toEqual([
+      { live: true, enabled: true, noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+    ])
+
+    await openAudioSettings(ece)
+    await ece.page.getByRole('switch', { name: 'Gürültü bastırma' }).click()
+    await ece.page.getByRole('switch', { name: 'Yankı engelleme' }).click()
+    await expect
+      .poll(async () => {
+        const tracks = await audioTracks()
+        return { oldOnesClosed: tracks.slice(0, -1).every((t) => !t.live), current: tracks.at(-1) }
+      })
+      .toEqual({
+        oldOnesClosed: true,
+        current: { live: true, enabled: true, noiseSuppression: false, echoCancellation: false, autoGainControl: true },
+      })
+    await ece.page.keyboard.press('Escape')
+    await expect(ece.mediaButton('Mikrofonu kapat')).toBeVisible()
+    await mert.expectHearingSomeone()
+
+    // Kapatıp açınca da yeni iz kullanılıyor.
+    await ece.mediaButton('Mikrofonu kapat').click()
+    await expect.poll(async () => (await audioTracks()).at(-1).enabled).toBe(false)
+    await ece.micOn()
+    await expect.poll(async () => (await audioTracks()).at(-1).enabled).toBe(true)
+    const saved = JSON.parse(await ece.probe(() => window.localStorage.getItem('voiceSettings')))
+    expect(saved).toMatchObject({ noiseSuppression: false, echoCancellation: false, autoGainControl: true })
+  })
+
+  test('sesten önce mikrofon testi seviye çubuğunu dolduruyor, bitince mikrofonu bırakıyor', async ({ disco }) => {
+    const ece = await disco.user('Ece')
+    await ece.useSyntheticMic(SPEECH_DB)
+    await openAudioSettings(ece)
+    const meter = ece.page.getByRole('meter', { name: 'Mikrofon seviyesi' })
+    await expect(meter).toHaveAttribute('aria-valuetext', 'Ölçülmüyor')
+    await ece.page.getByRole('button', { name: 'Mikrofonu test et' }).click()
+    await expect(ece.page.locator('.level-meter--open')).toHaveCount(1)
+    await expect(meter).not.toHaveAttribute('aria-valuetext', 'Ölçülmüyor')
+    await ece.page.getByRole('button', { name: 'Testi durdur' }).click()
+    await expect(meter).toHaveAttribute('aria-valuetext', 'Ölçülmüyor')
+    await expect.poll(() => micTracks(ece)).toEqual([{ enabled: true, live: false }])
   })
 })

@@ -32,7 +32,8 @@ desktop/
   src/lib/         config, debug, format, sounds, mentions, webrtc, speaking (kim
                    konuşuyor), userColor (kişiye özel renk), notify (masaüstü bildirimi,
                    görev çubuğu sayısı), markdown (mesaj biçimlendirme), invites (davet
-                   bağlantısı), useDismiss
+                   bağlantısı), micProcessor + voice-gate.worklet (giriş hassasiyeti),
+                   useDismiss
 ```
 
 Tasarım "gece kulübü": koyu mor gece zemin, Ayarlar > Görünüm'den seçilen tek vurgu rengi ve
@@ -46,6 +47,16 @@ sıkışmada gidiyor. Seste her kişiyle tek bir WebRTC bağlantısı ve sabit d
 (mikrofon, kamera, ekran, ekran sesi); açıp kapamak sadece kanalın izini değiştiriyor.
 Mikrofon sese girerken kapalı hazırlanıyor; açmak ya da bas-konuş tuşuna basmak sadece izi
 açıyor.
+
+Karşıya giden mikrofon sesi bir ses kapısından geçiyor (`voice-gate.worklet.js`, AudioWorklet:
+ses iş parçacığında çalıştığı için pencere arkadayken de yavaşlamıyor). Ses, Ayarlar > Ses ve
+görüntü'deki eşiğin altındayken karşıya sessizlik gidiyor. Eşik elle seçilebiliyor ya da
+otomatik: son 2 saniyenin en sessiz anı (ortam gürültüsü) + 12 dB, -60 ile -36 dB arasında.
+Ses 10 ms geciktiriliyor, böylece kapı kelimenin başını kesmiyor; ses düştükten sonra kapı
+350 ms daha açık kalıyor. Bas-konuşta kapı kullanılmıyor. Kapı kurulamazsa (ses motoru
+çalışmıyor) mikrofon işlenmeden gidiyor. Tarayıcının gürültü bastırma, yankı engelleme ve
+otomatik ses seviyesi ayarları da aynı sayfada; seste değişince mikrofon yeni ayarla yeniden
+açılıyor, gönderilen iz aynı kalıyor.
 
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
@@ -126,13 +137,16 @@ Dosyalar:
   mikrofon değiştirme, bas-konuş tuşu (klavye ve fare) ve kalıcılığı, kalıcı okunmamışlar ve
   bahsedilmeler, masaüstü bildirimi, "Yeni" çizgisi, açık sunucuya tekrar tıklama (H33), mesaja
   yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor),
-  süreli ve sınırlı davet bağlantıları.
+  süreli ve sınırlı davet bağlantıları, giriş hassasiyeti (elle, otomatik, bas-konuşta kapalı)
+  ve ses işleme ayarları. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
 - `specs/protokol.spec.js` — sunucunun bütün olaylarının temel davranışı.
 - `specs/masaustu.spec.js` — gerçek masaüstü uygulamasıyla (Electron) testler: açılış, giriş,
   yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş, `disco://davet`
-  bağlantısı. `desktop/node_modules`
+  bağlantısı, paketlenmiş uygulamadaki gibi `file://`'dan açılınca ses kapısı.
+  `desktop/node_modules`
   içindeki Electron kullanılıyor; ana süreç `DISCO_TEST_HOOKS` ile tepsiyi ve klavye kancasını
   testlere açıyor.
 - `harness/` — düzeneğin kendisi (vekil, sunucu süreci, örnek veriler, tarayıcı yardımcıları).
