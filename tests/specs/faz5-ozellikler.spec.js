@@ -1,6 +1,14 @@
 // Faz 5: Discord'a yaklaşan özellikler ve bu fazda kapanan hatalar (H28, H33).
 import { test, expect } from '../harness/fixtures.js'
-import { PASSWORD, REGISTER_INVITE_CODE, SERVER_INVITE_CODE, expireCustomStatus, expireInvite } from '../harness/seed.js'
+import {
+  PASSWORD,
+  REGISTER_INVITE_CODE,
+  SERVER_INVITE_CODE,
+  expireCustomStatus,
+  expireInvite,
+  insertChat,
+  insertMessages,
+} from '../harness/seed.js'
 
 // Hiçbir sunucuya üye olmayan yeni bir kullanıcı (kayıt + giriş).
 async function newUser(disco, username) {
@@ -923,6 +931,63 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     // Sunucuya dönünce son kanal açılıyor.
     await ece.page.getByRole('button', { name: /^Test Sunucusu/ }).click()
     await expect(ece.channelTitle()).toHaveText('genel')
+  })
+
+  test('sabitleme ve arama: sadece yetkili sabitliyor; arama kişiye ve görebildiği kanallara göre', async ({ disco }) => {
+    const serverId = disco.serverId
+    await insertChat(disco.mongoUri, disco.channels.ozel, [{ username: 'Bora', text: 'gizli plan: cumartesi turnuva', minutesAgo: 5 }])
+    await insertChat(disco.mongoUri, disco.channels.oyun, [{ username: 'Ece', text: 'turnuva için takım kuralım', minutesAgo: 4 }])
+    const owner = await disco.client('Alganis')
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    for (const client of [owner, mert, ece]) await client.joinChannel(serverId, disco.channels.genel)
+    const message = await sendAs(ece, 'akşam turnuva saat 9da')
+
+    // Sabitleme: Mert'in yetkisi yok, sunucu sahibi sabitliyor ve kaldırıyor.
+    expect(await mert.emitAck('toggle-pin', { messageId: message.id })).toMatchObject({ success: false })
+    const pinned = mert.nextEvent('message-pin-changed')
+    expect(await owner.emitAck('toggle-pin', { messageId: message.id })).toMatchObject({ success: true })
+    expect(await pinned).toMatchObject({ messageId: message.id, pinned: { by: 'Alganis' } })
+    const pins = await mert.emitAck('list-pins', { channelId: disco.channels.genel })
+    expect(pins.messages).toMatchObject([{ id: message.id, text: 'akşam turnuva saat 9da', pinned: { by: 'Alganis' } }])
+    await owner.emitAck('toggle-pin', { messageId: message.id })
+    expect((await mert.emitAck('list-pins', { channelId: disco.channels.genel })).messages).toEqual([])
+
+    // Arama: Mert VIP kanalını görmüyor, Ece görüyor; "from:" kişiye göre.
+    const texts = async (client, query) =>
+      (await client.emitAck('search-messages', { serverId, query })).messages.map((m) => m.text).sort()
+    expect(await texts(mert, 'turnuva')).toEqual(['akşam turnuva saat 9da', 'turnuva için takım kuralım'])
+    expect(await texts(ece, 'TURNUVA')).toEqual(['akşam turnuva saat 9da', 'gizli plan: cumartesi turnuva', 'turnuva için takım kuralım'])
+    expect(await texts(ece, 'turnuva from:bora')).toEqual(['gizli plan: cumartesi turnuva'])
+    expect(await mert.emitAck('search-messages', { serverId, query: 'a' })).toMatchObject({ success: false })
+    expect(await mert.emitAck('list-pins', { channelId: disco.channels.ozel })).toMatchObject({ success: false })
+  })
+
+  test('arayüzde arama sonucu eski mesaja götürüyor; sabitlenen mesaj listede', async ({ disco }) => {
+    await insertChat(disco.mongoUri, disco.channels.genel, [
+      { username: 'Ece', text: 'mercimek çorbası tarifi: önce soğanı kavur', minutesAgo: 90 },
+    ])
+    await insertMessages(disco.mongoUri, disco.channels.genel, 'Bora', 120)
+    const alganis = await disco.user('Alganis')
+    await alganis.openChannel('genel')
+    await expect(alganis.chat).toContainText('mesaj 120')
+    await expect(alganis.chat).not.toContainText('mercimek')
+
+    await alganis.page.getByRole('searchbox', { name: /içinde ara/ }).fill('mercimek')
+    await alganis.page.keyboard.press('Enter')
+    const panel = alganis.page.getByRole('complementary', { name: 'Arama sonuçları' })
+    await expect(panel).toContainText('mercimek çorbası')
+    await panel.getByRole('button', { name: /mercimek/ }).click()
+    const old = alganis.chat.locator('.chat-message', { hasText: 'mercimek çorbası' })
+    await expect(old).toBeVisible()
+    await expect(old).toBeInViewport()
+
+    // Sabitle: mesajın araç çubuğundan, başlıktaki düğmeyle listede.
+    await old.hover()
+    await old.getByRole('button', { name: 'Sabitle' }).click()
+    await expect(old.locator('.chat-message-pinned')).toBeVisible()
+    await alganis.page.getByRole('button', { name: 'Sabitlenmiş mesajlar' }).click()
+    await expect(alganis.page.getByRole('complementary', { name: 'Sabitlenmiş mesajlar' })).toContainText('mercimek çorbası')
   })
 
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {

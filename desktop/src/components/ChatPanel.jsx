@@ -23,6 +23,7 @@ export function ChatPanel({
   members,
   displayName,
   canModerate,
+  onTogglePin,
   hasMoreHistory,
   isLoadingOlder,
   onLoadOlder,
@@ -83,6 +84,7 @@ export function ChatPanel({
           newSince={newSince}
           displayName={displayName}
           canModerate={canModerate}
+          onTogglePin={onTogglePin}
           onReact={onReact}
           onEdit={onEdit}
           onDelete={onDelete}

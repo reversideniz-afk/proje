@@ -671,6 +671,49 @@
   margin-left: auto;
 }
 
+/* Başlıktaki arama kutusu: odaklanınca genişliyor. */
+.header-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-right: 4px;
+}
+
+.header-search .icon {
+  position: absolute;
+  left: 9px;
+  width: 15px;
+  height: 15px;
+  color: var(--soluk);
+  pointer-events: none;
+}
+
+.header-search input {
+  width: 170px;
+  height: 32px;
+  padding: 0 10px 0 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--gece);
+  color: var(--metin);
+  font: inherit;
+  font-size: 13px;
+  transition: width 0.18s var(--ease-out), border-color 0.15s;
+}
+
+.header-search input:focus {
+  width: 240px;
+  border-color: var(--cizgi);
+  outline: none;
+}
+
+@media (max-width: 760px) {
+  .header-search input,
+  .header-search input:focus {
+    width: 120px;
+  }
+}
+
 .join-voice-button {
   margin-right: 6px;
 }

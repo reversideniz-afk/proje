@@ -23,7 +23,7 @@ server/
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin, roles (roller ve kanal
                    düzenleme), presence (durum, özel durum, boşta, oyun), friends (arkadaşlık
-                   ve özel mesaj)
+                   ve özel mesaj), messages (sabitleme ve arama)
 desktop/
   electron/        ana süreç (main.cjs: pencere, sistem tepsisi, güncelleme), preload köprüsü,
                    push-to-talk.cjs (global bas-konuş), activity.cjs (oynanan oyun)
@@ -103,6 +103,13 @@ bildiriliyor. Özel mesajda sese giren karşıdakini arıyor (`dm-call`; arayan 
 `dm-call-ended`). Ana sayfaya geçmek sesi kapatmıyor; aynı sunucuya dönünce son kanal açılıyor.
 Bir kişinin durumu değişince aynı sunucuda olmayan arkadaşları da haber alıyor
 (`announceUserPresence`).
+
+Sabitleme ve arama: "Mesajları yönet" yetkisi olan (özel mesajda iki taraf da) mesajı
+sabitleyebiliyor (`Message.pinnedAt/pinnedBy`, en fazla 50); başlıktaki raptiye kanalın
+sabitlenmiş mesajlarını sağdaki panelde gösteriyor. Başlıktaki arama kutusu sunucunun
+görebildiğin bütün kanallarında (özel mesajda o konuşmada) arıyor; `from:Ece` kişiye göre
+süzüyor (`socket/messages.js`). Bir sonuca tıklayınca o kanal açılıyor, mesaj yüklenmemişse
+eski mesajlar yüklenerek bulunuyor ve vurgulanıyor.
 
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
@@ -186,7 +193,8 @@ Dosyalar:
   süreli ve sınırlı davet bağlantıları, giriş hassasiyeti (elle, otomatik, bas-konuşta kapalı)
   ve ses işleme ayarları, ekran paylaşımı kalitesi ve yayını büyütme, sunucu rolleri (erişim,
   yetkiler, arayüz), durum ve etkinlik (rahatsız etmeyin, görünmez, özel durum, kendiliğinden
-  boşta), arkadaşlık ve özel mesajlar (istek, konuşma, erişim, arama, arayüz). Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  boşta), arkadaşlık ve özel mesajlar (istek, konuşma, erişim, arama, arayüz), sabitleme ve
+  mesajlarda arama. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
   değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).

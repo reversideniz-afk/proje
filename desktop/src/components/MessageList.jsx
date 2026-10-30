@@ -4,7 +4,7 @@
 // üstüne gelince, klavyeyle odaklanınca, sağ tıklayınca ve dokunmatikte
 // uzun basınca görünüyor (H15; eskiden sadece sağ tıkla açılıyordu).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, CornerUpLeft, Info, Pencil, Reply, SmilePlus, Trash2, X } from 'lucide-react'
+import { Check, Copy, CornerUpLeft, Info, Pencil, Pin, PinOff, Reply, SmilePlus, Trash2, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { QUICK_REACTIONS } from '../lib/config.js'
 import { formatDayLabel, formatFullDate, formatMessageTime, isSameDay } from '../lib/format.js'
@@ -105,6 +105,7 @@ function MessageItem({
   onOpenPhoto,
   onReply,
   onJumpTo,
+  onTogglePin,
 }) {
   const pressTimer = useRef(null)
   const isOwn = item.username === displayName
@@ -204,6 +205,9 @@ function MessageItem({
                 (düzenlendi)
               </span>
             )}
+            {item.pinned && (
+              <Pin className="icon chat-message-pinned" aria-label={`${item.pinned.by} sabitledi`} role="img" />
+            )}
           </div>
         )}
 
@@ -247,6 +251,17 @@ function MessageItem({
           <button type="button" className="icon-btn" title="Yanıtla" aria-label="Yanıtla" onClick={() => onReply(item)}>
             <Reply className="icon" />
           </button>
+          {onTogglePin && (
+            <button
+              type="button"
+              className="icon-btn"
+              title={item.pinned ? 'Sabitlemeyi kaldır' : 'Sabitle'}
+              aria-label={item.pinned ? 'Sabitlemeyi kaldır' : 'Sabitle'}
+              onClick={() => onTogglePin(item.id)}
+            >
+              {item.pinned ? <PinOff className="icon" /> : <Pin className="icon" />}
+            </button>
+          )}
           {isOwn && (
             <button type="button" className="icon-btn" title="Düzenle" aria-label="Düzenle" onClick={onStartEdit}>
               <Pencil className="icon" />
@@ -301,6 +316,7 @@ export function MessageList({
   onDelete,
   onOpenPhoto,
   onReply,
+  onTogglePin,
   containerRef,
 }) {
   const colorOf = (name) => nameColors?.get(name) || userColor(name)
@@ -380,6 +396,7 @@ export function MessageList({
           item={item}
           avatarUrl={avatars.get(item.username)}
           colorOf={colorOf}
+          onTogglePin={onTogglePin}
           grouped={grouped}
           displayName={displayName}
           canModerate={canModerate}

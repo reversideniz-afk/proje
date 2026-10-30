@@ -40,6 +40,7 @@ function serializeMessage(msg) {
     replyTo: msg.replyTo
       ? { id: msg.replyTo.messageId?.toString() || null, username: msg.replyTo.username, text: msg.replyTo.text }
       : null,
+    pinned: msg.pinnedAt ? { by: msg.pinnedBy, at: msg.pinnedAt } : null,
   };
 }
 

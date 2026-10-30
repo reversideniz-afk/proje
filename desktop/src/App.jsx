@@ -22,6 +22,7 @@ import {
 } from './components/Dialogs.jsx'
 import { MemberList } from './components/MemberList.jsx'
 import { FriendsPage } from './components/FriendsPage.jsx'
+import { MessagePanel } from './components/MessagePanel.jsx'
 import { ServerRail } from './components/ServerRail.jsx'
 import { SettingsScreen } from './components/SettingsScreen.jsx'
 import { VoiceStage } from './components/VoiceStage.jsx'
@@ -405,6 +406,15 @@ function App() {
   const [isSendingPhoto, setIsSendingPhoto] = useState(false)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
+  // Sağdaki mesaj paneli: arama sonuçları ya da kanalın sabitlenmiş
+  // mesajları. { kind: 'search' | 'pins', query, messages, loading, error }
+  const [messagePanel, setMessagePanel] = useState(null)
+  const refreshPinsRef = useRef(null)
+  // Arama ya da sabitlenmiş mesajdan gidilen mesaj: yüklenmemişse eski
+  // mesajlar yüklenerek bulunuyor. { channelId, messageId, createdAt }
+  const [pendingJump, setPendingJump] = useState(null)
+  const jumpAttemptsRef = useRef(0)
+  const loadOlderRef = useRef(null)
   // YENİ: o an aktif kanalda kimlerin yazıyor olduğu.
   const [typingUsers, setTypingUsers] = useState([])
   const isTypingRef = useRef(false)
@@ -1672,6 +1682,12 @@ function App() {
     // YENİ: Mesaj(lar) silindiğinde, listeden kaldır.
     socket.on('messages-deleted', ({ messageIds }) => {
       setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)))
+    })
+
+    // Bir mesaj sabitlendi ya da sabitlemesi kalktı.
+    socket.on('message-pin-changed', ({ messageId, pinned }) => {
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pinned } : m)))
+      refreshPinsRef.current?.()
     })
 
     // YENİ: Bir mesaj düzenlendiğinde, metnini güncelle.
@@ -3337,6 +3353,83 @@ function App() {
       }
     )
   }
+  useEffect(() => {
+    loadOlderRef.current = handleLoadOlderMessages
+  })
+
+  // ---- Arama ve sabitlenmiş mesajlar (sağdaki panel) ----
+  const searchMessages = async (query) => {
+    setMessagePanel({ kind: 'search', query, messages: [], loading: true })
+    const response = await emitRequest(
+      'search-messages',
+      activeDm ? { channelId: activeDm.id, query } : { serverId: activeServerIdRef.current, query }
+    )
+    setMessagePanel((panel) =>
+      panel?.kind === 'search' && panel.query === query
+        ? { ...panel, loading: false, messages: response?.success ? response.messages : [], error: response?.message }
+        : panel
+    )
+  }
+
+  const showPins = async (channelId = activeChannelRef.current) => {
+    if (!channelId) return
+    const response = await emitRequest('list-pins', { channelId })
+    setMessagePanel((panel) =>
+      panel === null || panel.kind === 'pins'
+        ? { kind: 'pins', channelId, messages: response?.success ? response.messages : [], loading: false }
+        : panel
+    )
+  }
+  useEffect(() => {
+    refreshPinsRef.current = () => {
+      if (messagePanel?.kind === 'pins') showPins(messagePanel.channelId)
+    }
+  })
+
+  const togglePin = (messageId) => emitRequest('toggle-pin', { messageId })
+
+  // Mesaja git: başka kanaldaysa o kanal açılıyor, yüklenmemişse eski
+  // mesajlar yükleniyor (bkz. aşağıdaki etki).
+  const jumpToMessage = (message) => {
+    if (message.channelId !== activeChannelRef.current) {
+      const dm = dms.find((d) => d.id === message.channelId)
+      if (dm) openDm(dm)
+      else joinChannel(message.channelId)
+    }
+    jumpAttemptsRef.current = 0
+    setPendingJump({ channelId: message.channelId, messageId: message.id, createdAt: message.createdAt })
+  }
+  useEffect(() => {
+    if (!pendingJump || pendingJump.channelId !== activeChannel || messages.length === 0 || isLoadingOlder) return
+    if (messages.some((m) => m.id === pendingJump.messageId)) {
+      requestAnimationFrame(() => {
+        const target = document.getElementById(`mesaj-${pendingJump.messageId}`)
+        target?.scrollIntoView({ block: 'center' })
+        target?.classList.remove('is-highlighted')
+        void target?.offsetWidth
+        target?.classList.add('is-highlighted')
+      })
+      setPendingJump(null)
+      return
+    }
+    const oldest = messages[0]?.createdAt
+    if (hasMoreHistory && jumpAttemptsRef.current < 20 && oldest && new Date(oldest) > new Date(pendingJump.createdAt)) {
+      jumpAttemptsRef.current += 1
+      loadOlderRef.current?.()
+      return
+    }
+    setPendingJump(null)
+    setNotice('Mesaj bulunamadı; silinmiş olabilir.')
+  }, [pendingJump, activeChannel, messages, isLoadingOlder, hasMoreHistory])
+
+  // Kanal değişince o kanalın sabitlenmiş mesajları kapanıyor; sunucu ya da
+  // ana sayfa değişince arama da.
+  useEffect(() => {
+    setMessagePanel((panel) => (panel?.kind === 'pins' && panel.channelId !== activeChannel ? null : panel))
+  }, [activeChannel])
+  useEffect(() => {
+    setMessagePanel(null)
+  }, [activeServerId, homeOpen])
 
   // "Beni hatırla" ile kaydedilmiş bir oturum varsa, deneme sonuçlanana
   // kadar giriş formunu göstermiyoruz; yoksa her açılışta giriş ekranı bir
@@ -3398,6 +3491,8 @@ function App() {
   // sahibi. Sunucu sahibine zaten izin veriyordu ama arayüz düğmeyi sadece
   // platform yöneticisine gösteriyordu (H17).
   const canModerateActiveServer = isAdmin || activeServerIsOwner || !!serverPermissions.manageMessages
+  // Sabitleme: sunucuda "Mesajları yönet", özel mesajda iki taraf da.
+  const canPinHere = activeDm ? true : canModerateActiveServer
   // Adı rol rengiyle görünenler (sohbette; üye listesi rengi kendisi buluyor).
   const nameColors = new Map(
     [...onlineMembers, ...offlineMembers]
@@ -3464,6 +3559,7 @@ function App() {
       members={membersForMentions}
       displayName={displayName}
       canModerate={canModerateActiveServer}
+      onTogglePin={canPinHere ? togglePin : null}
       hasMoreHistory={hasMoreHistory}
       isLoadingOlder={isLoadingOlder}
       onLoadOlder={handleLoadOlderMessages}
@@ -3572,19 +3668,41 @@ function App() {
     mainContent = (
       <div className="channel-body">
         {chatPanel}
-        {membersVisible && (
-          <div className={'member-drawer' + (mobileMembersOpen ? ' member-drawer--open' : '')}>
-            <MemberList
-              online={onlineMembers}
-              offline={offlineMembers}
-              roles={serverRoles}
-              displayName={displayName}
-              channelNameOf={channelNameOf}
-              speakingUsernames={speakingUsernames}
-              onOpenVolume={openVolumePopup}
-              onClose={() => setMobileMembersOpen(false)}
+        {messagePanel ? (
+          <div className="member-drawer member-drawer--open">
+            <MessagePanel
+              title={messagePanel.kind === 'pins' ? 'Sabitlenmiş mesajlar' : 'Arama sonuçları'}
+              messages={messagePanel.messages}
+              loading={messagePanel.loading}
+              emptyText={
+                messagePanel.kind === 'pins'
+                  ? 'Bu kanalda sabitlenmiş mesaj yok.'
+                  : messagePanel.error || `"${messagePanel.query}" için sonuç yok.`
+              }
+              query={messagePanel.kind === 'search' ? messagePanel.query.replace(/(^|\s)from:\S+/i, ' ').trim() : null}
+              avatars={avatarByName}
+              nameColors={nameColors}
+              channelNameOf={messagePanel.kind === 'search' && !homeOpen ? channelNameOf : null}
+              onOpen={jumpToMessage}
+              onUnpin={messagePanel.kind === 'pins' && canPinHere ? (m) => togglePin(m.id) : null}
+              onClose={() => setMessagePanel(null)}
             />
           </div>
+        ) : (
+          membersVisible && (
+            <div className={'member-drawer' + (mobileMembersOpen ? ' member-drawer--open' : '')}>
+              <MemberList
+                online={onlineMembers}
+                offline={offlineMembers}
+                roles={serverRoles}
+                displayName={displayName}
+                channelNameOf={channelNameOf}
+                speakingUsernames={speakingUsernames}
+                onOpenVolume={openVolumePopup}
+                onClose={() => setMobileMembersOpen(false)}
+              />
+            </div>
+          )
         )}
       </div>
     )
@@ -3718,6 +3836,30 @@ function App() {
           }
           chatToggle={isVoiceView ? { open: voiceChatOpen, onToggle: () => setVoiceChatOpen((open) => !open) } : null}
           onOpenNav={() => setMobileSidebarOpen(true)}
+          search={
+            activeChannel && !connectionError && !isVoiceView
+              ? {
+                  scopeLabel: activeDm ? 'Konuşma' : activeServerName,
+                  onSearch: searchMessages,
+                  onClear: () => setMessagePanel((panel) => (panel?.kind === 'search' ? null : panel)),
+                }
+              : null
+          }
+          pins={
+            activeChannel && !connectionError && !isVoiceView
+              ? {
+                  open: messagePanel?.kind === 'pins',
+                  onToggle: () => {
+                    if (messagePanel?.kind === 'pins') {
+                      setMessagePanel(null)
+                      return
+                    }
+                    setMessagePanel({ kind: 'pins', channelId: activeChannel, messages: [], loading: true })
+                    showPins()
+                  },
+                }
+              : null
+          }
         />
         {reconnecting && (
           <div className="status-banner status-banner--warn reconnecting-banner" role="status">

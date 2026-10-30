@@ -83,6 +83,9 @@ const messageSchema = new mongoose.Schema({
     type: [{ emoji: String, username: String, _id: false }],
     default: [],
   },
+  // Sabitlenmiş mesaj: kim, ne zaman (bkz. toggle-pin).
+  pinnedAt: { type: Date, default: null },
+  pinnedBy: { type: String, default: null },
 });
 // Kanalın son mesajları ve "şu andan sonraki mesajlar" sorguları için.
 messageSchema.index({ channelId: 1, createdAt: -1 });

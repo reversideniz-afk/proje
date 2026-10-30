@@ -245,4 +245,17 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await expect(mert.page.getByRole('alert').filter({ hasText: 'Ece seni arıyor' })).toBeVisible()
     await shot(mert, testInfo, '35-ozel-mesaj-arama')
   })
+
+  test('arama sonuçları ve sabitlenmiş mesajlar paneli', async ({ disco }, testInfo) => {
+    await insertChat(disco.mongoUri, disco.channels.genel, CHAT)
+    await insertChat(disco.mongoUri, disco.channels.oyun, [
+      { username: 'Bora', text: 'akşam turnuvada ben destek oynarım', minutesAgo: 30 },
+    ])
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await mert.page.getByRole('searchbox', { name: /içinde ara/ }).fill('akşam')
+    await mert.page.keyboard.press('Enter')
+    await expect(mert.page.getByRole('complementary', { name: 'Arama sonuçları' })).toContainText('turnuvada')
+    await shot(mert, testInfo, '36-arama')
+  })
 })
