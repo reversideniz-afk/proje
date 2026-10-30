@@ -9,19 +9,31 @@ const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib
 const { voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
 const { pickVoiceState } = require("../lib/validate");
 
+// 1.1.0 ve öncesinin ses bağlantısı (eş başına ayrı ekran bağlantısı,
+// addTrack ile eklenen izler) yeni istemcilerin sabit dört kanallı tek
+// bağlantısıyla anlaşamıyor: aynı seste birbirlerini duymuyorlar. O
+// sürümler sese katılırken channelId göndermiyor; onları sessizce bozuk
+// bir sese sokmak yerine sohbette güncellemelerini söylüyoruz (eski
+// istemci yanıt beklemiyor, sistem mesajlarını sohbette gösteriyor).
+const LEGACY_VOICE_MESSAGE =
+  "Sesli sohbet için Disco'yu güncellemen gerekiyor. Sol alttaki ⚙️ Ayarlar'dan \"Güncellemeleri kontrol et\"e bas, güncelleme inince \"Yeniden başlat\"a tıkla.";
+
 module.exports = function registerVoiceHandlers(socket, ctx) {
   // ---- Sese katılma ----
-  // channelId verilmezse (eski istemciler) o an açık olan metin kanalının
-  // sesine katılınıyor. Yeni istemci kanalı açıkça gönderiyor: yeniden
-  // bağlanınca o sırada başka bir kanala bakıyor olsa bile sesin olduğu
-  // kanala dönebilsin diye. state ile mikrofon/kamera/ekran durumu da
-  // baştan doğru duyuruluyor.
+  // İstemci kanalı açıkça gönderiyor: yeniden bağlanınca o sırada başka bir
+  // kanala bakıyor olsa bile sesin olduğu kanala dönebilsin diye. state ile
+  // mikrofon/kamera/ekran durumu da baştan doğru duyuruluyor.
   socket.on("join-voice", async ({ token, channelId, state } = {}, ack) => {
     const reply = typeof ack === "function" ? ack : () => {};
+    if (typeof channelId !== "string") {
+      socket.emit("new-message", { username: "Sistem", text: LEGACY_VOICE_MESSAGE, createdAt: new Date() });
+      reply({ success: false, message: LEGACY_VOICE_MESSAGE });
+      return;
+    }
     const username = await ctx.authenticate(token);
-    const roomId = typeof channelId === "string" ? channelId : ctx.textRoom;
-    if (!username || !roomId) {
-      reply({ success: false, message: "Önce bir kanala girmen gerekiyor." });
+    const roomId = channelId;
+    if (!username) {
+      reply({ success: false, message: "Önce giriş yapman gerekiyor." });
       return;
     }
     let voiceServerId = ctx.serverId;

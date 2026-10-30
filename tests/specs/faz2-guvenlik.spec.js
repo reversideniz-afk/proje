@@ -28,7 +28,7 @@ test.describe('Faz 2: güvenlik ve yetki', { tag: '@faz2' }, () => {
     expect((await forwarded).state).toEqual({ muted: false })
 
     const existing = bora.nextEvent('existing-voice-users')
-    bora.socket.emit('join-voice', { token: bora.token })
+    bora.socket.emit('join-voice', { token: bora.token, channelId: disco.channels.genel })
     const mertAsSeenByBora = (await existing).find((u) => u.socketId === mert.socket.id)
     expect(mertAsSeenByBora).toMatchObject({ username: 'Mert', avatarUrl: null, muted: false, cameraOn: false })
     expect(mertAsSeenByBora).not.toHaveProperty('avatarData')

@@ -80,6 +80,25 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     expect((await existing).map((u) => u.socketId)).toEqual([yeni.socket.id])
   })
 
+  test('1.1.0 istemcisi sese alınmıyor, sohbette güncellemesi söyleniyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const eski = await disco.client('Bora')
+    const ece = await disco.client('Ece')
+    for (const client of [mert, eski, ece]) await client.joinChannel(disco.serverId, disco.channels.genel)
+    await mert.emitAck('join-voice', { token: mert.token, channelId: disco.channels.genel })
+
+    // 1.1.0 sese channelId'siz giriyordu; bağlantı düzeni yeni istemcilerle
+    // anlaşamadığı için sessizce bozuk bir sese girmesin.
+    const notice = eski.nextEvent('new-message')
+    const response = await eski.emitAck('join-voice', { token: eski.token })
+    expect(response.success).toBe(false)
+    expect(await notice).toMatchObject({ username: 'Sistem', text: expect.stringContaining('güncelle') })
+
+    const existing = ece.nextEvent('existing-voice-users')
+    await ece.emitAck('join-voice', { token: ece.token, channelId: disco.channels.genel })
+    expect((await existing).map((u) => u.username)).toEqual(['Mert'])
+  })
+
   test('H1: sesteyken başka kanala bakarken kopan kişi sesin olduğu kanala döner', async ({ disco }) => {
     const observer = await disco.observer('genel')
     const { mert } = await mertVeEceSeste(disco)
