@@ -2,7 +2,7 @@
 // kanal oluştur, onay, güvenlik uyarısı, kişi ses seviyesi, ekran seçimi,
 // fotoğraf büyütme.
 import { useEffect, useId, useRef, useState } from 'react'
-import { Check, Copy, Monitor, RotateCcw, ShieldAlert } from 'lucide-react'
+import { Check, Copy, MessageSquare, Monitor, RotateCcw, ShieldAlert } from 'lucide-react'
 import { Dialog } from './Dialog.jsx'
 import { Toggle } from './Toggle.jsx'
 import { serverInitials } from '../lib/format.js'
@@ -320,7 +320,8 @@ export function SecurityAlertDialog({ alert, onClose }) {
 
 // Bir kişinin ses seviyesi (%0-200). Sağ tıkla ya da kişinin üzerindeki
 // düğmeyle açılıyor; tıklanan yerin yanında beliriyor.
-export function VolumePopover({ username, x, y, volume, onChange, onClose }) {
+// Bir kişinin ses seviyesi; onMessage verilirse ona özel mesaj düğmesi.
+export function VolumePopover({ username, x, y, volume, onChange, onMessage, onClose }) {
   const ref = useRef(null)
   const [position, setPosition] = useState({ left: x, top: y })
   useDismiss(ref, true, onClose)
@@ -350,10 +351,18 @@ export function VolumePopover({ username, x, y, volume, onChange, onClose }) {
         aria-label={`${username} ses seviyesi`}
         autoFocus
       />
-      <button type="button" className="btn btn--ghost btn--small" onClick={() => onChange(100)} disabled={volume === 100}>
-        <RotateCcw className="icon" />
-        Sıfırla
-      </button>
+      <div className="volume-popup-actions">
+        <button type="button" className="btn btn--ghost btn--small" onClick={() => onChange(100)} disabled={volume === 100}>
+          <RotateCcw className="icon" />
+          Sıfırla
+        </button>
+        {onMessage && (
+          <button type="button" className="btn btn--secondary btn--small" onClick={onMessage}>
+            <MessageSquare className="icon" />
+            Mesaj gönder
+          </button>
+        )}
+      </div>
     </div>
   )
 }

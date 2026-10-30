@@ -1,6 +1,15 @@
 // Görüntülemek için biçimlendirme: tuş adları, mesaj saati ve günü, medya hataları,
 // sunucu simgesindeki harfler.
 
+// Bir ada yönelme eki: "Ece" -> "Ece'ye", "Mert" -> "Mert'e", "Bora" ->
+// "Bora'ya" (son ünlüye göre e/a, ünlüyle bitiyorsa araya y).
+export function toDative(name) {
+  const vowels = name.toLocaleLowerCase('tr').match(/[aeıioöuü]/g)
+  const front = !vowels || 'eiöü'.includes(vowels.at(-1))
+  const buffer = /[aeıioöuü]$/i.test(name) ? 'y' : ''
+  return `${name}'${buffer}${front ? 'e' : 'a'}`
+}
+
 // Sunucu simgesindeki harfler: "Oyun Gecesi" -> "OG", "Disco" -> "DI".
 export function serverInitials(name = '') {
   const words = name.trim().split(/\s+/).filter(Boolean)

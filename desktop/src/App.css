@@ -32,10 +32,50 @@
   background: var(--gece);
 }
 
+/* Disko topu: ana sayfa (özel mesajlar). Açıkken sunucu simgeleri gibi
+   solunda çizgi, etrafında Spot değil vurgu rengi halka. */
+.server-rail-home {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+}
+
+.server-rail-home::before {
+  content: '';
+  position: absolute;
+  left: -13px;
+  width: 4px;
+  height: 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--metin);
+  transition: height 0.18s var(--ease-out);
+}
+
+.server-rail-home:hover::before {
+  height: 20px;
+}
+
+.server-rail-home--active::before,
+.server-rail-home--active:hover::before {
+  height: 36px;
+}
+
+.server-rail-home--active .server-rail-logo {
+  box-shadow: 0 0 0 2px var(--gece), 0 0 0 4px var(--accent);
+}
+
 .server-rail-logo {
   width: 44px;
   height: 44px;
   border-radius: 50%;
+  transition: box-shadow 0.15s;
 }
 
 .server-rail-divider {
@@ -659,6 +699,19 @@
   color: var(--uyari);
 }
 
+/* Özel mesajda gelen arama: Spot ışığı (canlı). */
+.call-banner {
+  background: color-mix(in srgb, var(--spot) 12%, var(--kabin));
+}
+
+.call-banner .icon {
+  color: var(--spot);
+}
+
+.call-banner-text {
+  flex: 1;
+}
+
 .channel-body {
   flex: 1;
   min-height: 0;
@@ -712,6 +765,119 @@
   flex: none;
   min-height: 0;
   display: flex;
+}
+
+/* Sağdaki mesaj paneli: arama sonuçları ve sabitlenmiş mesajlar. */
+.message-panel {
+  width: 340px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--cizgi);
+  background: var(--loca);
+}
+
+.message-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.message-panel-head h3 {
+  margin: 0;
+  font: 600 14px/1.2 var(--font-display);
+}
+
+.message-panel-empty {
+  margin: 24px 16px;
+  color: var(--soluk);
+  font-size: 14px;
+}
+
+.message-panel-list {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.message-panel-item {
+  --ring-bg: var(--sahne);
+  position: relative;
+  border-radius: var(--radius);
+  background: var(--sahne);
+}
+
+.message-panel-open {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.message-panel-open:hover {
+  background: var(--kabin);
+}
+
+.message-panel-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.message-panel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--soluk);
+  font-size: 12px;
+}
+
+.message-panel-meta strong {
+  font-size: 14px;
+}
+
+.message-panel-meta time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.message-panel-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.message-panel-text mark {
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--metin);
+}
+
+.message-panel-unpin {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+}
+
+.message-panel-item:hover .message-panel-unpin,
+.message-panel-unpin:focus-visible {
+  opacity: 1;
 }
 
 .member-list-panel {

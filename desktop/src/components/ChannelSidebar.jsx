@@ -16,6 +16,7 @@ import {
   Settings,
   Signal,
   Smile,
+  Users,
   Download,
   UserPlus,
   Volume2,
@@ -24,7 +25,7 @@ import {
 import { Avatar } from './Avatar.jsx'
 import { useDismiss } from '../lib/useDismiss.js'
 import { formatKeyCode } from '../lib/format.js'
-import { STATUSES, statusLabel } from '../lib/presence.js'
+import { STATUSES, presenceLine, statusLabel } from '../lib/presence.js'
 
 // Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
 function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServerSettings, onAddServer, onClose }) {
@@ -148,7 +149,8 @@ function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, can
   )
 }
 
-function VoicePanel({ channelName, ping, reconnecting, isScreenSharing, onOpenChannel, onToggleScreenShare, onLeave }) {
+// isDm: ses özel mesajda ("@Ece"), değilse kanalda ("#genel").
+function VoicePanel({ channelName, isDm, ping, reconnecting, isScreenSharing, onOpenChannel, onToggleScreenShare, onLeave }) {
   return (
     <section className="voice-panel" aria-label="Ses bağlantısı">
       <div className="voice-panel-info">
@@ -157,7 +159,8 @@ function VoicePanel({ channelName, ping, reconnecting, isScreenSharing, onOpenCh
           {reconnecting ? 'Yeniden bağlanıyor…' : 'Ses bağlı'}
         </strong>
         <button type="button" className="voice-panel-channel" onClick={onOpenChannel} title="Kanala git">
-          #{channelName}
+          {isDm ? '@' : '#'}
+          {channelName}
           {typeof ping === 'number' && <span className="voice-panel-ping"> · {ping} ms</span>}
         </button>
       </div>
@@ -175,6 +178,71 @@ function VoicePanel({ channelName, ping, reconnecting, isScreenSharing, onOpenCh
         <PhoneOff className="icon" />
       </button>
     </section>
+  )
+}
+
+// Ana sayfa (özel mesajlar): Arkadaşlar ve konuşmalar, en yeni üstte.
+function DmNav({ home }) {
+  const { dms, activeDmId, friendsActive, incomingCount, onOpenFriends, onOpenDm } = home
+  return (
+    <>
+      <ul className="channel-list">
+        <li className="channel-row">
+          <button
+            type="button"
+            className={'channel-button' + (friendsActive ? ' channel-button--active' : '')}
+            aria-current={friendsActive ? 'page' : undefined}
+            onClick={onOpenFriends}
+          >
+            <Users className="icon channel-hash" />
+            <span className="channel-name">Arkadaşlar</span>
+            {incomingCount > 0 && (
+              <span className="mention-badge" aria-label={`${incomingCount} arkadaşlık isteği`}>
+                {incomingCount}
+              </span>
+            )}
+          </button>
+        </li>
+      </ul>
+      <div className="sidebar-category">
+        <span>Konuşmalar</span>
+      </div>
+      {dms.length === 0 ? (
+        <p className="sidebar-empty">Bir arkadaşına mesaj gönderince konuşma burada görünür.</p>
+      ) : (
+        <ul className="channel-list" aria-label="Konuşmalar">
+          {dms.map((dm) => {
+            const active = dm.id === activeDmId
+            const line = presenceLine(dm)
+            return (
+              <li key={dm.id} className="channel-row">
+                <button
+                  type="button"
+                  className={
+                    'channel-button dm-button' +
+                    (active ? ' channel-button--active' : '') +
+                    (dm.unread > 0 && !active ? ' channel-button--unread' : '')
+                  }
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => onOpenDm(dm)}
+                >
+                  <Avatar name={dm.username} src={dm.avatarUrl} size="sm" status={dm.online ? dm.status : null} />
+                  <span className="dm-text">
+                    <span className="channel-name">{dm.username}</span>
+                    {line && <span className="dm-line">{line}</span>}
+                  </span>
+                  {dm.unread > 0 && !active && (
+                    <span className="mention-badge" aria-label={`${dm.unread} okunmamış mesaj`}>
+                      {dm.unread > 99 ? '99+' : dm.unread}
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </>
   )
 }
 
@@ -325,10 +393,18 @@ export function ChannelSidebar({
   voicePanel,
   userPanel,
   update,
+  home,
 }) {
   return (
-    <aside className="channel-sidebar" aria-label="Kanallar">
-      {server ? (
+    <aside className="channel-sidebar" aria-label={home ? 'Özel mesajlar' : 'Kanallar'}>
+      {home ? (
+        <div className="sidebar-header">
+          <span className="sidebar-server-name">Özel mesajlar</span>
+          <button type="button" className="icon-btn mobile-only" onClick={onClose} aria-label="Kanalları kapat">
+            <X className="icon" />
+          </button>
+        </div>
+      ) : server ? (
         <ServerHeader
           name={server.name}
           permissions={server.permissions || {}}
@@ -348,7 +424,8 @@ export function ChannelSidebar({
       )}
 
       <div className="sidebar-scroll">
-        {server && (
+        {home && <DmNav home={home} />}
+        {!home && server && (
           <div className="sidebar-category">
             <span>Kanallar</span>
             {server.permissions?.manageChannels && (
@@ -364,6 +441,7 @@ export function ChannelSidebar({
             )}
           </div>
         )}
+        {!home && (
         <ul className="channel-list">
           {channels.map((channel) => (
             <ChannelRow
@@ -381,6 +459,7 @@ export function ChannelSidebar({
             />
           ))}
         </ul>
+        )}
       </div>
 
       {update && (

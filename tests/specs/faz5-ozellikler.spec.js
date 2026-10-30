@@ -1,6 +1,6 @@
 // Faz 5: Discord'a yaklaşan özellikler ve bu fazda kapanan hatalar (H28, H33).
 import { test, expect } from '../harness/fixtures.js'
-import { PASSWORD, REGISTER_INVITE_CODE, SERVER_INVITE_CODE, expireInvite } from '../harness/seed.js'
+import { PASSWORD, REGISTER_INVITE_CODE, SERVER_INVITE_CODE, expireCustomStatus, expireInvite } from '../harness/seed.js'
 
 // Hiçbir sunucuya üye olmayan yeni bir kullanıcı (kayıt + giriş).
 async function newUser(disco, username) {
@@ -374,6 +374,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
       username: 'Ece',
       text: '@Mert neredesin',
       replyToUsername: null,
+      dm: false,
     })
   })
 
@@ -722,6 +723,206 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     // Ece'nin menüsünde yetkisi olmayan işlemler yok.
     await ece.page.locator('.sidebar-server-button').click()
     await expect(ece.page.getByRole('menuitem', { name: 'Kanal oluştur' })).toHaveCount(0)
+  })
+
+  test('durum ve etkinlik: durum, özel durum, boşta ve oyun başkalarına görünüyor; görünmez çevrimdışı görünüyor', async ({ disco }) => {
+    const serverId = disco.serverId
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    const eceSeenByMert = async () => (await mert.emitAck('server-presence', { serverId })).members.find((m) => m.username === 'Ece')
+    expect(await eceSeenByMert()).toMatchObject({ online: true, status: 'online', customStatus: null, activity: null })
+
+    expect(await ece.emitAck('set-status', { status: 'uydurma' })).toMatchObject({ success: false })
+    expect(await ece.emitAck('set-status', { status: 'dnd' })).toMatchObject({ success: true })
+    expect(await eceSeenByMert()).toMatchObject({ status: 'dnd' })
+
+    expect(await ece.emitAck('set-custom-status', { text: 'x'.repeat(81) })).toMatchObject({ success: false })
+    expect(await ece.emitAck('set-custom-status', { text: '  sınav haftası  ', expiresInHours: 4 })).toMatchObject({
+      success: true,
+      customStatus: { text: 'sınav haftası' },
+    })
+    const changed = mert.nextEvent('presence-changed')
+    ece.socket.emit('set-activity', { name: 'VALORANT' })
+    await changed
+    expect(await eceSeenByMert()).toMatchObject({ customStatus: 'sınav haftası', activity: 'VALORANT' })
+
+    // Bütün bağlantıları boşta olan "Çevrimiçi" boşta görünüyor; rahatsız
+    // etmeyin boştayken de rahatsız etmeyin.
+    ece.socket.emit('set-idle', { idle: true })
+    await expect.poll(async () => (await eceSeenByMert()).status).toBe('dnd')
+    await ece.emitAck('set-status', { status: 'online' })
+    await expect.poll(async () => (await eceSeenByMert()).status).toBe('idle')
+    ece.socket.emit('set-idle', { idle: false })
+    await expect.poll(async () => (await eceSeenByMert()).status).toBe('online')
+
+    // Görünmez: çevrimdışı; özel durum ve oyun da gizli.
+    await ece.emitAck('set-status', { status: 'invisible' })
+    expect(await eceSeenByMert()).toMatchObject({ online: false, status: 'offline', customStatus: null, activity: null })
+
+    // Girişte kendi durumu ve özel durumu geliyor.
+    const second = await disco.client()
+    const login = await second.login('Ece')
+    expect(login.presence).toMatchObject({ status: 'invisible', customStatus: { text: 'sınav haftası' } })
+
+    // Süresi dolan özel durum gösterilmiyor; bağlantı kapanınca oyun gidiyor.
+    await expireCustomStatus(disco.mongoUri, 'Ece')
+    await ece.emitAck('set-status', { status: 'online' })
+    expect(await eceSeenByMert()).toMatchObject({ customStatus: null, activity: 'VALORANT' })
+    ece.close()
+    await expect.poll(async () => (await eceSeenByMert()).activity).toBe(null)
+  })
+
+  test('durum menüsü: rahatsız etmeyin bildirimi susturuyor, özel durum görünüyor ve kalıcı', async ({ disco }) => {
+    const ece = await disco.user('Ece', { rememberMe: true, storage: { notifySettings: JSON.stringify({ mode: 'all' }) } })
+    await recordNotifications(ece)
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await ece.openChannel('oyun')
+
+    await ece.page.getByRole('button', { name: /^Durumun: Çevrimiçi/ }).click()
+    await ece.page.getByRole('menuitemradio', { name: /Rahatsız etmeyin/ }).click()
+    await expect(ece.page.locator('.user-panel')).toContainText('Rahatsız etmeyin')
+    const eceInMertsList = mert.page.locator('.member-item', { hasText: 'Ece' })
+    await expect(eceInMertsList.locator('.status-dot--dnd')).toHaveCount(1)
+
+    // Bahsedilince sayı çıkıyor ama bildirim yok.
+    const bora = await disco.client('Bora')
+    await bora.joinChannel(disco.serverId, disco.channels.genel)
+    await sendAs(bora, '@Ece genele bak')
+    await expect(ece.channelButton('genel').locator('.mention-badge')).toHaveText('1')
+    await ece.page.waitForTimeout(500)
+    expect(await ece.probe(() => window.__notes)).toEqual([])
+
+    await ece.page.getByRole('button', { name: /^Durumun:/ }).click()
+    await ece.page.getByRole('menuitem', { name: 'Özel durum ayarla' }).click()
+    const dialog = ece.page.getByRole('dialog', { name: 'Özel durum' })
+    await dialog.getByLabel('Ne yapıyorsun?').fill('akşam 9 gibi gelirim')
+    await dialog.getByRole('button', { name: 'Kaydet' }).click()
+    await expect(ece.page.locator('.user-panel')).toContainText('akşam 9 gibi gelirim')
+    await expect(eceInMertsList).toContainText('akşam 9 gibi gelirim')
+
+    // Yeniden açınca ikisi de duruyor.
+    await ece.page.reload()
+    await expect(ece.page.locator('.user-panel')).toContainText('akşam 9 gibi gelirim')
+    await expect(ece.page.getByRole('button', { name: /^Durumun: Rahatsız etmeyin/ })).toBeVisible()
+    await ece.page.getByRole('button', { name: /^Durumun:/ }).click()
+    await ece.page.getByRole('menuitem', { name: 'Özel durumu sil' }).click()
+    await expect(eceInMertsList).not.toContainText('akşam 9 gibi gelirim')
+  })
+
+  test('kullanılmayınca kendiliğinden boşta görünüyor, dokununca geri dönüyor', async ({ disco }) => {
+    const ece = await disco.user('Ece', { storage: { discoIdleAfterMs: '1500' } })
+    const mert = await disco.client('Mert')
+    const eceStatus = async () =>
+      (await mert.emitAck('server-presence', { serverId: disco.serverId })).members.find((m) => m.username === 'Ece').status
+    await expect.poll(eceStatus, { timeout: 10_000 }).toBe('idle')
+    await ece.page.mouse.move(100, 100)
+    await ece.page.mouse.move(300, 200)
+    await expect.poll(eceStatus, { timeout: 10_000 }).toBe('online')
+  })
+
+  test('arkadaşlık ve özel mesaj: istek, kabul, konuşma, okunmamış, üçüncü kişi giremiyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    const yolcu = await newUser(disco, 'Yolcu')
+
+    // Ortak sunucu yok, arkadaş değiller: özel mesaj açılamıyor.
+    expect(await yolcu.emitAck('open-dm', { username: 'Mert' })).toMatchObject({ success: false })
+
+    // İstek (adın büyük/küçük harfi önemli değil), tekrarı reddediliyor.
+    const notified = mert.nextEvent('friends-changed')
+    expect(await yolcu.emitAck('send-friend-request', { username: 'mert' })).toMatchObject({
+      success: true,
+      accepted: false,
+      username: 'Mert',
+    })
+    await notified
+    expect(await yolcu.emitAck('send-friend-request', { username: 'Mert' })).toMatchObject({ success: false })
+    expect(await yolcu.emitAck('send-friend-request', { username: 'Yolcu' })).toMatchObject({ success: false })
+    expect(await mert.emitAck('list-friends')).toMatchObject({ incoming: [{ username: 'Yolcu' }], outgoing: [], friends: [] })
+    expect(await mert.emitAck('respond-friend-request', { username: 'Yolcu', accept: true })).toMatchObject({ success: true })
+    expect((await yolcu.emitAck('list-friends')).friends).toMatchObject([{ username: 'Mert', online: true, status: 'online' }])
+
+    // Özel mesaj: iki taraf açınca aynı konuşma.
+    const opened = await yolcu.emitAck('open-dm', { username: 'Mert' })
+    expect(opened).toMatchObject({ success: true, username: 'Mert' })
+    expect((await mert.emitAck('open-dm', { username: 'Yolcu' })).channelId).toBe(opened.channelId)
+    expect(await ece.emitAck('join-channel', { serverId: null, channelId: opened.channelId })).toMatchObject({ success: false })
+
+    expect(await yolcu.emitAck('join-channel', { serverId: null, channelId: opened.channelId })).toMatchObject({ success: true })
+    const activity = mert.nextEvent('channel-activity', (a) => a.channelId === opened.channelId)
+    yolcu.socket.emit('send-message', { token: yolcu.token, text: 'selam, akşam var mısın' })
+    expect(await activity).toMatchObject({ dm: true, username: 'Yolcu', text: 'selam, akşam var mısın' })
+    expect((await mert.emitAck('list-dms')).dms).toMatchObject([{ id: opened.channelId, username: 'Yolcu', unread: 1 }])
+
+    // Aynı sunucudakiler arkadaş olmadan da yazışabiliyor.
+    expect(await ece.emitAck('open-dm', { username: 'Mert' })).toMatchObject({ success: true })
+
+    // Arkadaşlıktan çıkarma ve istek geri alma.
+    expect(await mert.emitAck('remove-friend', { username: 'Yolcu' })).toMatchObject({ success: true })
+    expect((await yolcu.emitAck('list-friends')).friends).toEqual([])
+    await ece.emitAck('send-friend-request', { username: 'Bora' })
+    expect(await ece.emitAck('remove-friend', { username: 'Bora' })).toMatchObject({ success: true })
+    expect((await ece.emitAck('list-friends')).outgoing).toEqual([])
+  })
+
+  test('özel mesajda sese giren karşıdakini arıyor, çıkınca arama bitiyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    const { channelId } = await mert.emitAck('open-dm', { username: 'Ece' })
+    await mert.emitAck('join-channel', { serverId: null, channelId })
+    const call = ece.nextEvent('dm-call')
+    expect(await mert.emitAck('join-voice', { token: mert.token, channelId })).toMatchObject({ success: true })
+    expect(await call).toEqual({ channelId, from: 'Mert' })
+    const ended = ece.nextEvent('dm-call-ended')
+    mert.socket.emit('leave-voice')
+    expect(await ended).toEqual({ channelId })
+  })
+
+  test('özel mesaj arayüzde: üye listesinden yaz, ana sayfada okunmamış, arkadaş ekle, arama, sunucuya dönüş', async ({ disco }) => {
+    const ece = await disco.user('Ece')
+    const mert = await disco.user('Mert')
+    for (const user of [ece, mert]) await user.openChannel('genel')
+
+    // Ece üye listesinden Mert'e yazıyor.
+    await ece.page.getByRole('button', { name: 'Mert: ses seviyesini ayarla' }).click()
+    await ece.page.getByRole('button', { name: 'Mesaj gönder' }).click()
+    await expect(ece.channelTitle()).toHaveText('Mert')
+    await ece.send('akşam 9da sese gel')
+
+    // Mert'in disko topunda sayı; ana sayfada konuşma okunmamış.
+    const home = mert.page.getByRole('button', { name: /^Özel mesajlar, 1 yeni/ })
+    await expect(home).toBeVisible()
+    await home.click()
+    const conversation = mert.page.getByRole('list', { name: 'Konuşmalar' }).getByRole('button', { name: /Ece/ })
+    await expect(conversation.locator('.mention-badge')).toHaveText('1')
+    await conversation.click()
+    await expect(mert.chat).toContainText('akşam 9da sese gel')
+    await expect(mert.page.getByRole('button', { name: /^Özel mesajlar$/ })).toBeVisible()
+
+    // Arama: Mert "Sesli ara", Ece'de bant çıkıyor, katılınca ikisi seste.
+    await mert.page.getByRole('button', { name: 'Sesli ara' }).click()
+    const banner = ece.page.getByRole('alert').filter({ hasText: 'Mert seni arıyor' })
+    await expect(banner).toBeVisible()
+    await banner.getByRole('button', { name: 'Katıl' }).click()
+    await expect(ece.leaveVoiceButton()).toBeVisible()
+    await expect(ece.voicePanel()).toContainText('@Mert')
+    await ece.leaveVoiceButton().click()
+
+    // Arkadaş ekle: Ece Bora'ya istek gönderiyor, Bora kabul edince listede.
+    await ece.page.getByRole('button', { name: /^Özel mesajlar/ }).click()
+    await ece.page.getByRole('tab', { name: 'Arkadaş ekle' }).click()
+    await ece.page.getByLabel('Kullanıcı adı').fill('bora')
+    await ece.page.getByRole('button', { name: 'İstek gönder' }).click()
+    await expect(ece.page.locator('.friend-add').getByRole('status')).toContainText('İstek gönderildi: Bora')
+    const bora = await disco.client('Bora')
+    await bora.emitAck('respond-friend-request', { username: 'Ece', accept: true })
+    await ece.page.getByRole('tab', { name: 'Tümü' }).click()
+    await expect(ece.page.locator('.friend-row', { hasText: 'Bora' })).toBeVisible()
+
+    // Sunucuya dönünce son kanal açılıyor.
+    await ece.page.getByRole('button', { name: /^Test Sunucusu/ }).click()
+    await expect(ece.channelTitle()).toHaveText('genel')
   })
 
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {

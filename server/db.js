@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema({
   // Avatarın değiştiği an: resmin adresindeki sürüm buradan geliyor (bkz.
   // lib/avatars.js). Bu alan eklenmeden önce yüklenmiş fotoğraflarda boş.
   avatarUpdatedAt: { type: Date, default: null },
+  // Durum (online, idle, dnd, invisible) ve özel durum { text, expiresAt }
+  // (bkz. lib/presence.js).
+  status: { type: String, default: "online" },
+  customStatus: { type: mongoose.Schema.Types.Mixed, default: null },
   // YENİ: Giriş denemesi sınırlama (rate limiting) — 5 yanlış şifreden
   // sonra hesap geçici kilitleniyor (bkz. server.js login işleyicisi).
   // loginLockedUntil geçmişte/null ise hesap kilitli DEĞİL. Alganis
@@ -184,9 +188,19 @@ const ServerMember =
 // geliyor — her kanal bir sunucuya bağlı. allowedRoles boşsa o sunucunun
 // TÜM üyelerine açık demek (env tabanlı eski CHANNEL_N_ROLES ile aynı
 // mantık).
+// Özel mesaj da bir kanal: sunucusu yok (serverId null), dmUsers iki kişi,
+// adı iki kişinin anahtarı (bkz. lib/friends.js).
 const channelSchema = new mongoose.Schema({
-  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
+  serverId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Server",
+    default: null,
+    required: function () {
+      return !this.dmUsers?.length;
+    },
+  },
   name: { type: String, required: true, trim: true },
+  dmUsers: { type: [String], default: undefined, index: true },
   // Eski kısıtlama: platform rolü adları (User.roles). Kanal düzenlenince
   // yerini allowedRoleIds alıyor.
   allowedRoles: { type: [String], default: [] },
@@ -217,6 +231,18 @@ const roleSchema = new mongoose.Schema({
 roleSchema.index({ serverId: 1, name: 1 }, { unique: true });
 const Role = mongoose.models.Role || mongoose.model("Role", roleSchema);
 
+// Arkadaşlık: istek (pending) ya da kabul edilmiş (accepted). pair iki
+// kişinin sırası önemsiz anahtarı; aynı iki kişi için tek kayıt.
+const friendshipSchema = new mongoose.Schema({
+  pair: { type: String, required: true, unique: true },
+  users: { type: [String], required: true, index: true },
+  requester: { type: String, required: true },
+  status: { type: String, enum: ["pending", "accepted"], default: "pending" },
+  createdAt: { type: Date, default: Date.now },
+  acceptedAt: { type: Date, default: null },
+});
+const Friendship = mongoose.models.Friendship || mongoose.model("Friendship", friendshipSchema);
+
 async function connectDB() {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -242,4 +268,5 @@ module.exports = {
   Channel,
   Invite,
   Role,
+  Friendship,
 };

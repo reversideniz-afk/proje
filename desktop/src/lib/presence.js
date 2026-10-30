@@ -25,6 +25,12 @@ export const IDLE_AFTER_MS = (() => {
   }
 })()
 
+// Bir kişinin adının altındaki satır: oyunu, yoksa özel durumu.
+export function presenceLine(person) {
+  if (!person?.online) return null
+  return person.activity ? `${person.activity} oynuyor` : person.customStatus || null
+}
+
 export function statusLabel(status) {
   if (status === 'offline') return 'Çevrimdışı'
   return STATUSES.find((s) => s.id === status)?.label ?? 'Çevrimiçi'

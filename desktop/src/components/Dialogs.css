@@ -123,8 +123,10 @@
   accent-color: var(--accent);
 }
 
-.volume-popup .btn {
-  justify-self: start;
+.volume-popup-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .segmented--choice {

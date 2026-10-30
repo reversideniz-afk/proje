@@ -15,6 +15,7 @@ function typingText(names) {
 export function ChatPanel({
   variant = 'full',
   channelName,
+  isDm = false,
   items,
   avatars,
   nameColors,
@@ -106,6 +107,7 @@ export function ChatPanel({
 
       <Composer
         channelName={channelName}
+        isDm={isDm}
         members={members}
         displayName={displayName}
         onSend={(text) => {

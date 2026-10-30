@@ -1,0 +1,177 @@
+/* Ana sayfa: arkadaşlar. Sekmeler başlığın altında, satırlar üye listesi
+   gibi; "Arkadaş ekle" vurgu renginde. */
+.friends-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sahne);
+}
+
+.friends-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.friends-tab {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ikincil);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.friends-tab:hover {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.friends-tab[aria-selected='true'] {
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.friends-tab--add {
+  color: var(--accent);
+}
+
+.friends-tab--add[aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.friends-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 32px;
+}
+
+.friends-count {
+  margin: 4px 0 8px;
+  color: var(--ikincil);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.friends-empty {
+  margin: 40px auto;
+  max-width: 420px;
+  color: var(--soluk);
+  text-align: center;
+}
+
+.friend-list {
+  display: grid;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.friend-row {
+  --ring-bg: var(--sahne);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--cizgi);
+  border-radius: var(--radius);
+}
+
+.friend-row:hover {
+  --ring-bg: var(--kabin);
+  background: var(--kabin);
+}
+
+.friend-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.friend-text strong {
+  font-weight: 600;
+}
+
+.friend-line {
+  overflow: hidden;
+  color: var(--soluk);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.friend-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.friend-actions .icon-btn {
+  background: var(--loca);
+}
+
+.friend-accept {
+  color: var(--cevrimici);
+}
+
+.friend-add {
+  display: grid;
+  gap: 6px;
+  max-width: 560px;
+}
+
+.friend-add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.friend-add-row .input {
+  flex: 1;
+}
+
+.friend-add-ok {
+  margin: 0;
+  color: var(--cevrimici);
+  font-size: 14px;
+}
+
+/* Kenar çubuğundaki konuşmalar: avatar, ad ve altında oyun ya da özel durum. */
+.dm-button {
+  --ring-bg: var(--loca);
+  height: auto;
+  min-height: 44px;
+  padding-block: 4px;
+}
+
+.dm-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.dm-line {
+  overflow: hidden;
+  color: var(--soluk);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-empty {
+  margin: 4px 12px;
+  color: var(--soluk);
+  font-size: 13px;
+}

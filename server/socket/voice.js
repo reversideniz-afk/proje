@@ -1,5 +1,7 @@
 // Ses: sese katılma/çıkma, WebRTC sinyalleri ve mikrofon/kamera/ekran durumu.
+const { Channel } = require("../db");
 const { checkChannelAccess } = require("../lib/access");
+const { emitToUsers } = require("../lib/friends");
 const { avatarUrlOf } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
@@ -28,7 +30,7 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
         reply({ success: false, message: access.error });
         return;
       }
-      voiceServerId = access.channel.serverId.toString();
+      voiceServerId = access.channel.serverId ? access.channel.serverId.toString() : null;
     }
 
     // Profil fotoğrafının adresi de eş bilgisine ekleniyor: karşı taraf
@@ -73,6 +75,14 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
       serverId: voiceServerId,
     };
     if (voiceServerId) announcePresence([voiceServerId]);
+    // Özel mesajda sese giren karşıdakini arıyor (karşıdaki seste değilse).
+    if (!voiceServerId && !alreadyInRoom) {
+      const channel = await Channel.findById(roomId).select("dmUsers").lean();
+      const other = channel?.dmUsers?.find((u) => u !== username);
+      if (other && !Object.values(voiceRooms[roomId]).some((info) => info.username === other)) {
+        emitToUsers([other], "dm-call", { channelId: roomId, from: username });
+      }
+    }
 
     const existingVoiceUsers = Object.entries(voiceRooms[roomId])
       .filter(([id]) => id !== socket.id)

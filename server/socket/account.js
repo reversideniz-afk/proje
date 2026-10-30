@@ -3,11 +3,12 @@ const bcrypt = require("bcryptjs");
 const { User, BannedIp } = require("../db");
 const { getAccessibleServers } = require("../lib/access");
 const { AVATAR_TYPES, avatarUrl } = require("../lib/avatars");
+const { activeCustomStatus } = require("../lib/presence");
 const { unreadByServer } = require("../lib/unread");
 const { buildIceServers } = require("../lib/ice");
 const { MAX_LOGIN_ATTEMPTS, LOGIN_LOCK_MS, MAX_REGISTER_ATTEMPTS_PER_WINDOW, REGISTER_ATTEMPT_WINDOW_MS, registerAttemptsByIp, bannedIpSet, getClientIp, isLoginBlockedForIp, recordLoginFailure } = require("../lib/limits");
 const { io } = require("../lib/realtime");
-const { notifyAdmins, buildMemberList, announcePresence } = require("../lib/rooms");
+const { notifyAdmins, buildMemberList, announceUserPresence } = require("../lib/rooms");
 const { sessionCache, createSession, findSession, refreshSession, deleteSession, resolveUsername } = require("../lib/sessions");
 const { voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
 const { findUsersByName, isReservedUsername } = require("../lib/users");
@@ -94,6 +95,8 @@ module.exports = function registerAccountHandlers(socket, ctx) {
         })),
         avatarData: user.avatarData || null,
         avatarUrl: user.avatarData ? avatarUrl(user.username, user.avatarUpdatedAt) : null,
+        // Kendi durumun ve özel durumun (bkz. lib/presence.js).
+        presence: { status: user.status || "online", customStatus: activeCustomStatus(user) },
         // YENİ: istemcinin "ben admin miyim (Alganis rolü var mı)"
         // kontrolünü yapıp arayüzü ona göre göstermesi için. Gerçek
         // YETKİ kontrolü her zaman sunucuda, taze bir DB okumasıyla
@@ -153,6 +156,8 @@ module.exports = function registerAccountHandlers(socket, ctx) {
         })),
         avatarData: user.avatarData || null,
         avatarUrl: user.avatarData ? avatarUrl(user.username, user.avatarUpdatedAt) : null,
+        // Kendi durumun ve özel durumun (bkz. lib/presence.js).
+        presence: { status: user.status || "online", customStatus: activeCustomStatus(user) },
         roles: userRoles,
       });
     } catch (err) {
@@ -302,8 +307,8 @@ module.exports = function registerAccountHandlers(socket, ctx) {
       await User.updateOne({ username }, { avatarData: imageData, avatarUpdatedAt });
       const url = avatarUrl(username, avatarUpdatedAt);
       socket.emit("avatar-saved", { avatarData: imageData, avatarUrl: url });
-      // Üye listelerindeki adres değişti: sunuculardaki herkes yenilesin.
-      announcePresence(socket.data.serverIds || []);
+      // Üye listelerindeki adres değişti: sunuculardakiler ve arkadaşlar yenilesin.
+      announceUserPresence(username, socket.data.serverIds || []);
 
       // Şu an bulunduğu metin kanalındaki üye listesini (herkes için)
       // ve varsa ses odasındaki eş bağlantı durumunu anlık güncelle.

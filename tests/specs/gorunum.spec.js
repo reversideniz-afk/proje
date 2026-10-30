@@ -194,4 +194,55 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await mert.page.getByRole('dialog', { name: '#oyun kanalı' }).getByLabel('Müdavim').check()
     await shot(mert, testInfo, '32-kanal-duzenle')
   })
+
+  test('durum ve etkinlik: üye listesinde oyun, özel durum, boşta, rahatsız etmeyin; durum menüsü', async ({ disco }, testInfo) => {
+    await insertChat(disco.mongoUri, disco.channels.genel, CHAT)
+    const ece = await disco.client('Ece')
+    await ece.emitAck('set-custom-status', { text: 'yarın sınav var, akşam gelirim' })
+    const bora = await disco.client('Bora')
+    bora.socket.emit('set-activity', { name: 'VALORANT' })
+    await bora.emitAck('set-status', { status: 'dnd' })
+    const gozcu = await disco.client('Gozcu')
+    gozcu.socket.emit('set-idle', { idle: true })
+
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await expect(mert.page.locator('.member-item', { hasText: 'Bora' })).toContainText('VALORANT')
+    await expect(mert.page.locator('.member-item', { hasText: 'Gozcu' }).locator('.status-dot--idle')).toHaveCount(1)
+    await mert.page.getByRole('button', { name: /^Durumun:/ }).click()
+    await shot(mert, testInfo, '33-durum-menusu')
+  })
+
+  test('özel mesajlar: arkadaşlar sayfası, konuşma, gelen arama', async ({ disco }, testInfo) => {
+    // Mert'in arkadaşları: Ece (oyunda), Bora (özel durumlu); Gozcu'dan istek bekliyor.
+    const mertClient = await disco.client('Mert')
+    for (const friend of ['Ece', 'Bora']) {
+      const client = await disco.client(friend)
+      await client.emitAck('send-friend-request', { username: 'Mert' })
+      await mertClient.emitAck('respond-friend-request', { username: friend, accept: true })
+    }
+    const ece = await disco.client('Ece')
+    ece.socket.emit('set-activity', { name: 'League of Legends' })
+    const bora = await disco.client('Bora')
+    await bora.emitAck('set-custom-status', { text: 'mesaide, 7de dönerim' })
+    await (await disco.client('Gozcu')).emitAck('send-friend-request', { username: 'Mert' })
+    const { channelId } = await ece.emitAck('open-dm', { username: 'Mert' })
+    await ece.emitAck('join-channel', { serverId: null, channelId })
+    for (const text of ['bu akşam ranked var mı?', 'Bora da gelir dedi, **21.00** gibi']) {
+      ece.socket.emit('send-message', { token: ece.token, text })
+      await ece.nextEvent('new-message', (m) => m.text === text)
+    }
+    mertClient.close()
+
+    const mert = await disco.user('Mert')
+    await mert.page.getByRole('button', { name: /^Özel mesajlar/ }).click()
+    await mert.page.getByRole('tab', { name: 'Tümü' }).click()
+    await expect(mert.page.locator('.friend-row', { hasText: 'Ece' })).toContainText('League of Legends oynuyor')
+    await shot(mert, testInfo, '34-arkadaslar')
+    await mert.page.getByRole('list', { name: 'Konuşmalar' }).getByRole('button', { name: /Ece/ }).click()
+    await expect(mert.chat).toContainText('ranked')
+    await ece.emitAck('join-voice', { token: ece.token, channelId })
+    await expect(mert.page.getByRole('alert').filter({ hasText: 'Ece seni arıyor' })).toBeVisible()
+    await shot(mert, testInfo, '35-ozel-mesaj-arama')
+  })
 })

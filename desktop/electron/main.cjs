@@ -21,9 +21,10 @@
 // karar verir: ".cjs" = her zaman eski usül (CommonJS/require),
 // ".mjs" = her zaman yeni usül (ES Modules/import). Bu yüzden Electron
 // tarafındaki dosyaları .cjs yaptık, React tarafı .jsx/.js olarak kaldı.
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu, nativeImage, shell, Tray } = require("electron");
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, Menu, nativeImage, powerMonitor, shell, Tray } = require("electron");
 const path = require("path");
 const { pathToFileURL } = require("url");
+const { createActivityDetector } = require("./activity.cjs");
 const { createPushToTalk, bindingFor } = require("./push-to-talk.cjs");
 // YENİ: Discord'daki gibi uygulama içi otomatik güncelleme. GitHub
 // Releases'i "publish" kaynağı olarak kullanıyor (bkz. package.json
@@ -123,10 +124,20 @@ const pushToTalk = createPushToTalk((pressed) => {
   });
 });
 
+// Oynanan oyun (Ayarlar > Masaüstü'nden kapatılabiliyor, bkz. activity.cjs).
+const activity = createActivityDetector((game) => {
+  mainWindow?.webContents.send("activity-changed", game);
+});
+
 // Testler ana süreçteki parçalara buradan ulaşıyor (sadece test düzeneği
 // DISCO_TEST_HOOKS verince).
 if (process.env.DISCO_TEST_HOOKS) {
-  globalThis.discoTest = { pushToTalk, getTray: () => tray, keycodeFor: (code) => bindingFor(code)?.keycode };
+  globalThis.discoTest = {
+    pushToTalk,
+    activity,
+    getTray: () => tray,
+    keycodeFor: (code) => bindingFor(code)?.keycode,
+  };
 }
 
 function createWindow() {
@@ -268,6 +279,10 @@ app.whenReady().then(() => {
 
   // Bas-konuş tuşu (null: kanca kapalı). Tanınmayan tuşta false döner.
   ipcMain.handle("set-push-to-talk-key", (_event, code) => pushToTalk.setKey(code || null));
+  ipcMain.on("set-activity-detection", (_event, enabled) => activity.setEnabled(!!enabled));
+  // Bilgisayarın kaç saniyedir kullanılmadığı (kendiliğinden "boşta" için;
+  // oyun oynarken Disco'ya dokunulmasa da kişi bilgisayarda).
+  ipcMain.handle("get-system-idle-time", () => powerMonitor.getSystemIdleTime());
   ipcMain.on("set-close-to-tray", (_event, value) => {
     closeToTray = !!value;
   });
@@ -419,6 +434,7 @@ app.on("before-quit", () => {
 // Klavye kancası açık kalırsa süreç kapanmayabiliyor.
 app.on("will-quit", () => {
   pushToTalk.stop();
+  activity.stop();
 });
 
 // Tüm pencereler kapatıldığında uygulamadan çık (macOS hariç —

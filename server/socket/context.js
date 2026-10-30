@@ -5,7 +5,7 @@ const { User, Channel, ChannelMember } = require("../db");
 const { getAccessibleServers, checkChannelAccess, channelViewer, canViewChannel } = require("../lib/access");
 const { createRateLimiter } = require("../lib/limits");
 const { io } = require("../lib/realtime");
-const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
+const { announceUserPresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
 const { resolveUsername } = require("../lib/sessions");
 const { socketsByUsername, textRooms, textRoomName, serverRoomName } = require("../lib/state");
 
@@ -44,6 +44,9 @@ function createConnectionContext(socket) {
         channels
           .filter((c) => canViewChannel(viewer, c))
           .forEach((c) => wantedNotify.add(`member-notify:${c._id}`));
+        // Özel mesajların bildirim odaları da.
+        const dms = await Channel.find({ dmUsers: ctx.username }).select("_id").lean();
+        dms.forEach((c) => wantedNotify.add(`member-notify:${c._id}`));
       } catch (err) {
         console.error("Sunucu odaları alınırken hata:", err.message);
         return;
@@ -74,7 +77,7 @@ function createConnectionContext(socket) {
     socketsByUsername.get(username).add(socket);
     socket.join(`user:${username}`);
     ctx.refreshServerRooms().then(() => {
-      if (!wasOnline) announcePresence(socket.data.serverIds || []);
+      if (!wasOnline) announceUserPresence(username, socket.data.serverIds || []);
     });
   };
 
@@ -84,12 +87,15 @@ function createConnectionContext(socket) {
 
   // Bağlantıyı açık olan metin kanalından ve (varsa) sesten çıkarır; iki
   // kanala da güncel üye listesi gider.
-  ctx.leaveChannels = async () => {
+  // textOnly: sadece metin kanalından çık, ses sürsün (ana sayfaya geçiş).
+  ctx.leaveChannels = async ({ textOnly = false } = {}) => {
     const leftRooms = new Set();
-    if (ctx.voiceRoom && removeVoiceMember(ctx.voiceRoom, socket.id)) {
-      leftRooms.add(ctx.voiceRoom);
+    if (!textOnly) {
+      if (ctx.voiceRoom && removeVoiceMember(ctx.voiceRoom, socket.id)) {
+        leftRooms.add(ctx.voiceRoom);
+      }
+      ctx.voiceRoom = null;
     }
-    ctx.voiceRoom = null;
     if (ctx.textRoom) {
       // Yazarken çıkan ya da bağlantısı kopan kişinin "yazıyor…" göstergesi
       // diğerlerinde takılı kalıyordu (H21).
@@ -130,7 +136,7 @@ function createConnectionContext(socket) {
     sockets?.delete(socket);
     if (sockets && sockets.size === 0) {
       socketsByUsername.delete(ctx.username);
-      announcePresence(socket.data.serverIds || []);
+      announceUserPresence(ctx.username, socket.data.serverIds || []);
     }
     for (const room of [...socket.rooms]) {
       if (room !== socket.id) socket.leave(room);

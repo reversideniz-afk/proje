@@ -117,6 +117,13 @@ export function insertChat(mongoUri, channelId, messages) {
   )
 }
 
+// Bir kişinin özel durumunun süresini geçmişe çeker.
+export function expireCustomStatus(mongoUri, username) {
+  return withDatabase(mongoUri, () =>
+    User.updateOne({ username }, { 'customStatus.expiresAt': new Date(Date.now() - 1000) })
+  )
+}
+
 // Bir davetin süresini geçmişe çeker (süresi dolmuş davet denemesi için).
 export function expireInvite(mongoUri, code) {
   const { Invite } = requireFromServer('./db.js')

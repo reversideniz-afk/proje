@@ -246,6 +246,33 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
     }
   })
 
+  test('oynanan oyun arkadaşlara görünüyor, ayardan kapatılınca kalkıyor', async ({ disco }, testInfo) => {
+    const ece = await disco.client('Ece')
+    const mertSeenByEce = async () =>
+      (await ece.emitAck('server-presence', { serverId: disco.serverId })).members.find((m) => m.username === 'Mert')
+    const { app, page } = await launchDesktopApp(disco, testInfo.outputPath('kullanici-verisi'))
+    try {
+      const mert = new UserSession('Mert', app.context(), page)
+      await mert.login()
+      // Bilgisayarın kendi boşta süresi (Windows) okunabiliyor.
+      expect(typeof (await page.evaluate(() => window.electronAPI.getSystemIdleTime()))).toBe('number')
+
+      // Gerçek program listesi yerine: açık bir oyun.
+      await app.evaluate(() => {
+        globalThis.discoTest.activity.setProcessLister(async () => ['explorer.exe', 'VALORANT-Win64-Shipping.exe'])
+        return globalThis.discoTest.activity.check()
+      })
+      await expect.poll(async () => (await mertSeenByEce()).activity).toBe('VALORANT')
+
+      await page.getByRole('button', { name: 'Ayarlar', exact: true }).click()
+      await page.getByRole('button', { name: 'Masaüstü' }).click()
+      await page.getByRole('switch', { name: /Oynadığın oyunu göster/ }).uncheck()
+      await expect.poll(async () => (await mertSeenByEce()).activity).toBe(null)
+    } finally {
+      await app.close().catch(() => {})
+    }
+  })
+
   test('disco://davet bağlantısı uygulamayı açınca da, uygulama açıkken de davet penceresini açıyor', async ({ disco }, testInfo) => {
     const owner = await disco.client('Alganis')
     const { code } = (await owner.emitAck('create-invite', { serverId: disco.serverId })).invite

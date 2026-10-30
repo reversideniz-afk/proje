@@ -125,6 +125,10 @@ async function checkChannelAccess(username, channelId, serverId) {
       serverId ? { _id: channelId, serverId } : { _id: channelId }
     ).lean();
     if (!channel) return { error: "Böyle bir kanal yok." };
+    // Özel mesaj: sadece iki taraf.
+    if (channel.dmUsers?.length) {
+      return channel.dmUsers.includes(username) ? { channel, roles } : { error: "Bu konuşmaya erişimin yok." };
+    }
     if (!(await canAccessServer(username, roles, channel.serverId))) {
       return { error: "Bu sunucuya erişimin yok." };
     }

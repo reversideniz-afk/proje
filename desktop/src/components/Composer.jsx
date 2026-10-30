@@ -6,6 +6,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { ImagePlus, LoaderCircle, SendHorizontal, Smile, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { COMPOSER_EMOJIS } from '../lib/config.js'
+import { toDative } from '../lib/format.js'
 import { useDismiss } from '../lib/useDismiss.js'
 
 const MENTION_PATTERN = /(^|\s)@([\p{L}\p{N}_.-]*)$/u
@@ -33,8 +34,10 @@ function EmojiPicker({ onPick, onClose }) {
 }
 
 // replyingTo: yanıt verilen mesaj (varsa üstte çubuk çıkıyor, Esc vazgeçiyor).
+// isDm: özel mesaj ("Ece'ye yaz"), değilse kanal ("#genel kanalına yaz").
 export function Composer({
   channelName,
+  isDm = false,
   members,
   displayName,
   onSend,
@@ -251,7 +254,7 @@ export function Composer({
         onSelect={updateCaret}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        placeholder={`#${channelName} kanalına yaz`}
+        placeholder={isDm ? `${toDative(channelName)} yaz` : `#${channelName} kanalına yaz`}
         aria-label="Mesaj yaz"
         role="combobox"
         aria-autocomplete="list"

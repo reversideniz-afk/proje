@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const { User, Message, ChannelMember } = require("../db");
 const { canModerateServer, checkChannelAccess } = require("../lib/access");
 const { io } = require("../lib/realtime");
-const { relayPhoto, announcePresence, buildMemberList } = require("../lib/rooms");
+const { relayPhoto, announceUserPresence, buildMemberList } = require("../lib/rooms");
 const { socketsByUsername, textRooms, textRoomName } = require("../lib/state");
 const { isValidImageDataUri, serializeMessage } = require("../lib/validate");
 
@@ -23,7 +23,8 @@ module.exports = function registerChannelHandlers(socket, ctx) {
       reply({ success: false, message });
     };
     const username = await ctx.authenticate(token);
-    if (typeof serverId !== "string" || typeof channelId !== "string" || !username) {
+    // Özel mesajda serverId null (kanal hiçbir sunucuya ait değil).
+    if ((typeof serverId !== "string" && serverId !== null) || typeof channelId !== "string" || !username) {
       fail("Önce giriş yapman gerekiyor.");
       return;
     }
@@ -63,7 +64,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
       }
     }
     ctx.textRoom = roomId;
-    ctx.serverId = serverId;
+    ctx.serverId = access.channel.serverId ? access.channel.serverId.toString() : null;
     socket.join(textRoomName(roomId));
     if (!textRooms[roomId]) textRooms[roomId] = {};
     textRooms[roomId][socket.id] = { username };
@@ -128,8 +129,8 @@ module.exports = function registerChannelHandlers(socket, ctx) {
 
   // Kanaldan çıkma (metin + ses), uygulama açık kalırken: yeni istemciler
   // tek bağlantıyı kapatmadan kanaldan ayrılıyor.
-  socket.on("leave-channel", async (_payload, ack) => {
-    await ctx.leaveChannels();
+  socket.on("leave-channel", async (payload, ack) => {
+    await ctx.leaveChannels({ textOnly: payload?.textOnly === true });
     if (typeof ack === "function") ack({ success: true });
   });
 
@@ -171,6 +172,8 @@ module.exports = function registerChannelHandlers(socket, ctx) {
         text: trimmedText.slice(0, 200),
         // Yanıt verilen kişi bahsedilmiş sayılıyor (Discord'daki gibi).
         replyToUsername: replyTo?.username || null,
+        // Özel mesaj (sunucusu yok): karşıdakine her mesaj bildirim.
+        dm: !ctx.serverId,
       });
     } catch (err) {
       console.error("Mesaj kaydedilirken hata:", err.message);
@@ -488,10 +491,9 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (ctx.username) {
       const sockets = socketsByUsername.get(ctx.username);
       sockets?.delete(socket);
-      if (sockets && sockets.size === 0) {
-        socketsByUsername.delete(ctx.username);
-        announcePresence(socket.data.serverIds || []);
-      }
+      if (sockets && sockets.size === 0) socketsByUsername.delete(ctx.username);
+      // Çevrimdışı oldu, ya da kalan bağlantılarla boşta/oyun değişmiş olabilir.
+      announceUserPresence(ctx.username, socket.data.serverIds || []);
     }
   });
 };

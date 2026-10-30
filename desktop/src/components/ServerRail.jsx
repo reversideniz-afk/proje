@@ -5,10 +5,26 @@ import { serverInitials } from '../lib/format.js'
 
 // activity: sunucu kimliği -> { unread, mentions } (okunmamış işareti ve
 // bahsedilme sayısı).
-export function ServerRail({ servers, activeServerId, activity, onSelect, onAdd }) {
+// En üstteki disko topu: ana sayfa (özel mesajlar ve arkadaşlar). homeBadge:
+// okunmamış özel mesaj ve gelen arkadaşlık isteği sayısı.
+export function ServerRail({ servers, activeServerId, activity, homeActive, homeBadge = 0, onHome, onSelect, onAdd }) {
   return (
     <nav className="server-rail" aria-label="Sunucular">
-      <img src={logoUrl} alt="Disco" className="server-rail-logo" width="44" height="44" />
+      <button
+        type="button"
+        className={'server-rail-home' + (homeActive ? ' server-rail-home--active' : '')}
+        onClick={onHome}
+        title="Özel mesajlar ve arkadaşlar"
+        aria-label={'Özel mesajlar' + (homeBadge > 0 ? `, ${homeBadge} yeni` : '')}
+        aria-current={homeActive ? 'true' : undefined}
+      >
+        <img src={logoUrl} alt="" className="server-rail-logo" width="44" height="44" />
+        {homeBadge > 0 && (
+          <span className="mention-badge server-rail-badge" aria-hidden="true">
+            {homeBadge > 99 ? '99+' : homeBadge}
+          </span>
+        )}
+      </button>
       <span className="server-rail-divider" aria-hidden="true" />
       {servers.map((server) => {
         const active = server.id === activeServerId

@@ -24,6 +24,7 @@ function groupOnline(online, roles) {
 // Adın altındaki satır: konuşuyorsa o, oyun oynuyorsa oyun, seste ise
 // hangi kanal, yoksa özel durumu.
 function MemberLine({ member, online, channelName, speaking }) {
+  if (!online) return null
   if (member.inVoice && speaking) {
     return (
       <span className="member-item-activity is-speaking" title={`Seste: #${channelName}`}>

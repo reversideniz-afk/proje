@@ -1,8 +1,10 @@
 // Odalara yayınlanan bilgiler: üye listeleri, varlık (kim çevrimiçi, kim
 // seste), ses odasından çıkarma, fotoğraf iletme, erişim yeniden kontrolü.
-const { User, ChannelMember, ServerMember } = require("../db");
+const { User, ChannelMember, ServerMember, Channel } = require("../db");
 const { ADMIN_ROLE } = require("./access");
 const { avatarUrlsFor } = require("./avatars");
+const { announceToFriends, emitToUsers } = require("./friends");
+const { visiblePresence } = require("./presence");
 const { io } = require("./realtime");
 const { socketsByUsername, textRooms, voiceRooms, textRoomName, voiceRoomName, serverRoomName } = require("./state");
 
@@ -37,7 +39,7 @@ function relayPhoto(channelId, serverId, username, imageData, mimeType, senderSo
   });
   io.to(`member-notify:${channelId}`)
     .except(senderSocketIds)
-    .emit("channel-activity", { channelId, serverId, username, text: PHOTO_ACTIVITY_TEXT, ephemeral: true });
+    .emit("channel-activity", { channelId, serverId, username, text: PHOTO_ACTIVITY_TEXT, ephemeral: true, dm: !serverId });
   const others = Object.values(textRooms[channelId] || {}).filter((u) => u.username !== username);
   if (others.length === 0) {
     io.to(senderSocketIds).emit("new-message", {
@@ -82,9 +84,12 @@ async function buildServerPresence(serverId) {
   // Üye olmadan erişen platform yöneticisi seste olabilir; o da görünsün.
   const usernames = [...new Set([...members.map((m) => m.username), ...voiceChannelByUser.keys()])];
   const avatarUrls = await avatarUrlsFor(usernames);
+  const users = await User.find({ username: { $in: usernames } }).select("username status customStatus").lean();
+  const userByName = new Map(users.map((u) => [u.username, u]));
   return usernames.map((username) => ({
     username,
-    online: socketsByUsername.has(username),
+    // online, status, customStatus, activity (görünmez çevrimdışı görünüyor).
+    ...visiblePresence(userByName.get(username), socketsByUsername.get(username)),
     voiceChannelId: voiceChannelByUser.get(username) || null,
     avatarUrl: avatarUrls.get(username) || null,
     // Rol rengi ve üye listesindeki başlık için (bkz. server-roles).
@@ -100,6 +105,22 @@ function announcePresence(serverIds) {
   }
 }
 
+async function endDmCall(roomId) {
+  try {
+    const channel = await Channel.findById(roomId).select("dmUsers").lean();
+    if (channel?.dmUsers) emitToUsers(channel.dmUsers, "dm-call-ended", { channelId: roomId });
+  } catch (err) {
+    console.error("Arama bitişi duyurulurken hata:", err.message);
+  }
+}
+
+// Bir kişinin durumu değişti (bağlandı, çıktı, durum, boşta, oyun): sunucuları
+// ve arkadaşları (aynı sunucuda olmayanlar da) listelerini yenilesin.
+function announceUserPresence(username, serverIds) {
+  announcePresence(serverIds);
+  if (username) announceToFriends(username);
+}
+
 // Bir bağlantıyı ses odasından çıkarıp odadakilere haber veriyor. Bağlantı
 // gerçekten odadaysa true döner; böylece aynı ayrılma iki kez duyurulmuyor.
 function removeVoiceMember(roomId, socketId) {
@@ -108,7 +129,11 @@ function removeVoiceMember(roomId, socketId) {
   const { serverId } = room[socketId];
   delete room[socketId];
   if (serverId) announcePresence([serverId]);
-  if (Object.keys(room).length === 0) delete voiceRooms[roomId];
+  if (Object.keys(room).length === 0) {
+    delete voiceRooms[roomId];
+    // Özel mesajda kimse kalmadı: açılmamış arama da bitti.
+    if (!serverId) endDmCall(roomId);
+  }
   io.to(voiceRoomName(roomId)).except(socketId).emit("voice-user-left", { socketId });
   io.sockets.sockets.get(socketId)?.leave(voiceRoomName(roomId));
   return true;
@@ -152,4 +177,4 @@ async function buildMemberList(channelId) {
   return { online, offline };
 }
 
-module.exports = { notifyAdmins, relayPhoto, refreshUserServerRooms, recheckUserAccess, buildServerPresence, announcePresence, removeVoiceMember, buildMemberList };
+module.exports = { notifyAdmins, relayPhoto, refreshUserServerRooms, recheckUserAccess, buildServerPresence, announcePresence, announceUserPresence, removeVoiceMember, buildMemberList };

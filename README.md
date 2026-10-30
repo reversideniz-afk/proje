@@ -17,14 +17,16 @@ server/
   lib/             paylaşılan parçalar: realtime (Express + Socket.IO), state (bellekteki
                    odalar), sessions, access, users, limits, validate, rooms, ice,
                    avatars (avatar adresleri), unread (okunmamışlar ve bahsedilmeler),
-                   invites (süreli/sınırlı davetler), roles (rol renkleri ve yetkileri)
+                   invites (süreli/sınırlı davetler), roles (rol renkleri ve yetkileri),
+                   presence (durum ve etkinlik), friends (arkadaşlar ve özel mesajlar)
   http/routes.js   istemci dosyaları, durum sayfası, fotoğraf API'si, /davet/KOD
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin, roles (roller ve kanal
-                   düzenleme)
+                   düzenleme), presence (durum, özel durum, boşta, oyun), friends (arkadaşlık
+                   ve özel mesaj)
 desktop/
   electron/        ana süreç (main.cjs: pencere, sistem tepsisi, güncelleme), preload köprüsü,
-                   push-to-talk.cjs (global bas-konuş)
+                   push-to-talk.cjs (global bas-konuş), activity.cjs (oynanan oyun)
   src/App.jsx      uygulamanın durumu ve bağlantı mantığı (bağlantı, ses, istekler)
   src/styles/      base.css: renkler, yazı tipleri, düğme/alan/avatar gibi ortak parçalar
   src/components/  arayüz: AuthScreen, ServerRail, ChannelSidebar, ChannelHeader,
@@ -81,6 +83,26 @@ geçerli, kanal düzenlenince yerini yenisi alıyor. Bir sunucudaki yetkiler tek
 rol silindi ya da alındı) etkilenenler kanaldan ve sesten çıkarılıyor. Rol silinince sadece o
 role açık kanal herkese açılmıyor, sahibe kalıyor. Adın rengi ve üye listesindeki başlık en
 üstteki rolden.
+
+Durum ve etkinlik: kişi sol alttan Çevrimiçi, Boşta, Rahatsız etmeyin ya da Görünmez seçiyor ve
+süreli bir özel durum yazabiliyor (`User.status`, `User.customStatus`). Rahatsız etmeyin'de
+bildirim ve mesaj sesi yok (sayılar yine çıkıyor). Görünmez seçen başkalarına çevrimdışı
+görünüyor, seste ise görünüyor. "Çevrimiçi" seçip 10 dakika kullanılmayan kendiliğinden boşta
+görünüyor: masaüstünde bilgisayarın boşta süresi (`powerMonitor`), web'de sayfadaki klavye ve
+fare. Masaüstü uygulaması çalışan programları bilinen oyunlarla eşleştiriyor
+(`electron/activity.cjs`, Windows'ta `tasklist`); arkadaşlara sadece oyunun adı gidiyor,
+Ayarlar > Masaüstü'nden kapatılabiliyor. Boşta ve oyun bağlantıya ait, kalıcı değil
+(`server/lib/presence.js`).
+
+Özel mesajlar ve arkadaşlar: sunucu şeridinin en üstündeki disko topu ana sayfayı açıyor.
+Arkadaşlık isteği adla gönderiliyor (`Friendship`: istek ya da kabul); arkadaşlar ve aynı
+sunucudakiler özel mesajlaşabiliyor. Özel mesaj iki kişilik bir kanal (`Channel` kaydında
+`serverId` boş, `dmUsers` iki kişi): mesajlar, yanıtlar, tepkiler, fotoğraf, okunmamışlar ve ses
+kanallarla aynı altyapıdan geçiyor; sadece iki taraf girebiliyor. Her özel mesaj bahsedilme gibi
+bildiriliyor. Özel mesajda sese giren karşıdakini arıyor (`dm-call`; arayan çıkınca
+`dm-call-ended`). Ana sayfaya geçmek sesi kapatmıyor; aynı sunucuya dönünce son kanal açılıyor.
+Bir kişinin durumu değişince aynı sunucuda olmayan arkadaşları da haber alıyor
+(`announceUserPresence`).
 
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
@@ -163,7 +185,8 @@ Dosyalar:
   yanıt ve biçimlendirme (kalın, italik, kod, spoiler, alıntı, link; HTML düz metin kalıyor),
   süreli ve sınırlı davet bağlantıları, giriş hassasiyeti (elle, otomatik, bas-konuşta kapalı)
   ve ses işleme ayarları, ekran paylaşımı kalitesi ve yayını büyütme, sunucu rolleri (erişim,
-  yetkiler, arayüz). Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  yetkiler, arayüz), durum ve etkinlik (rahatsız etmeyin, görünmez, özel durum, kendiliğinden
+  boşta), arkadaşlık ve özel mesajlar (istek, konuşma, erişim, arama, arayüz). Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
   değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).
@@ -172,7 +195,8 @@ Dosyalar:
   yeni pencere engeli, tek kopya, tepsiye küçülme, arka planda bas-konuş, `disco://davet`
   bağlantısı, paketlenmiş uygulamadaki gibi `file://`'dan açılınca ses kapısı, ekran paylaşımında
   kaynak seçme penceresi ve kalitenin gerçek yakalamaya uygulanması (bu test sahte izin
-  arayüzünü kapatıyor; yoksa Chromium seçiciyi atlayıp ekranı kendisi seçiyor).
+  arayüzünü kapatıyor; yoksa Chromium seçiciyi atlayıp ekranı kendisi seçiyor), oynanan oyunun
+  görünmesi (program listesi `discoTest.activity` ile sahte veriliyor).
   `desktop/node_modules`
   içindeki Electron kullanılıyor; ana süreç `DISCO_TEST_HOOKS` ile tepsiyi ve klavye kancasını
   testlere açıyor.

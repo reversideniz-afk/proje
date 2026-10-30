@@ -48,6 +48,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Global bas-konuş: tuş atanınca ana süreç işletim sistemi seviyesinde
   // dinliyor ve sadece o tuşun basılıp bırakıldığını bildiriyor.
   setPushToTalkKey: (code) => ipcRenderer.invoke("set-push-to-talk-key", code),
+  // Oynanan oyun: algılamayı aç/kapa, oyun değişince haber al.
+  setActivityDetection: (enabled) => ipcRenderer.send("set-activity-detection", enabled),
+  onActivity: (callback) => {
+    const listener = (_event, game) => callback(game);
+    ipcRenderer.on("activity-changed", listener);
+    return () => ipcRenderer.removeListener("activity-changed", listener);
+  },
+  getSystemIdleTime: () => ipcRenderer.invoke("get-system-idle-time"),
   onPushToTalk: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("push-to-talk", listener);

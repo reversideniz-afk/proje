@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { io } from 'socket.io-client'
-import { AlertTriangle, Compass, Plus, ServerCrash, WifiOff } from 'lucide-react'
+import { AlertTriangle, Compass, Phone, Plus, ServerCrash, WifiOff } from 'lucide-react'
 import './App.css'
 import { AuthScreen, RestoringScreen } from './components/AuthScreen.jsx'
 import { ChannelHeader } from './components/ChannelHeader.jsx'
@@ -9,6 +9,7 @@ import { ChatPanel } from './components/ChatPanel.jsx'
 import {
   ConfirmDialog,
   CreateChannelDialog,
+  CustomStatusDialog,
   EditChannelDialog,
   InviteDialog,
   JoinInviteDialog,
@@ -20,6 +21,7 @@ import {
   VolumePopover,
 } from './components/Dialogs.jsx'
 import { MemberList } from './components/MemberList.jsx'
+import { FriendsPage } from './components/FriendsPage.jsx'
 import { ServerRail } from './components/ServerRail.jsx'
 import { SettingsScreen } from './components/SettingsScreen.jsx'
 import { VoiceStage } from './components/VoiceStage.jsx'
@@ -35,6 +37,7 @@ import {
   screenTrackConstraints,
 } from './lib/screenShare.js'
 import { ensureNotificationPermission, requestAttention, setAttentionBadge, showNotification } from './lib/notify.js'
+import { IDLE_AFTER_MS } from './lib/presence.js'
 import { roleColorOf } from './lib/roles.js'
 import { useSpeakingDetector } from './lib/speaking.js'
 import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
@@ -313,6 +316,20 @@ function App() {
   }, [])
   // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
   const [serverMembers, setServerMembers] = useState([])
+  // Ana sayfa (disko topu): arkadaşlar ve özel mesajlar. Özel mesaj iki
+  // kişilik bir kanal; açılınca aktif kanal o oluyor (sunucusu yok). Ana
+  // sayfaya geçmek sesi kapatmıyor; aynı sunucuya dönünce son kanal açılıyor.
+  const [homeOpen, setHomeOpen] = useState(false)
+  const homeOpenRef = useRef(false)
+  const [activeDm, setActiveDm] = useState(null) // { id, username, ... } | null
+  const [dms, setDms] = useState([])
+  const [friendLists, setFriendLists] = useState({ friends: [], incoming: [], outgoing: [] })
+  const lastServerChannelRef = useRef(null)
+  const [dmCall, setDmCall] = useState(null) // gelen arama: { channelId, from } | null
+  // Olay dinleyicilerinden çağrılan yenilemeler (aşağıda kuruluyor).
+  const refreshDmsRef = useRef(null)
+  const refreshFriendsRef = useRef(null)
+  const answerDmCallRef = useRef(null)
   // Aktif sunucuda kendi yetkilerin ve sunucunun rolleri (sırayla); ikisi
   // de kanal listesiyle birlikte geliyor (bkz. fetchServerChannels).
   const [serverPermissions, setServerPermissions] = useState({})
@@ -1470,7 +1487,8 @@ function App() {
   // mesajlarını izlediğimiz değişiyor. Sesteysek ses olduğu kanalda
   // (voiceChannel) kalıyor, başka kanalın mesajlarına göz atılabiliyor.
   // Bağlantı o an yeniden kuruluyorsa istek bekliyor, bağlanınca gidiyor.
-  const joinChannel = useCallback((channelId) => {
+  // serverId: özel mesajda null (kanal hiçbir sunucuya ait değil).
+  const joinChannel = useCallback((channelId, serverId = activeServerIdRef.current) => {
     // Zaten açık olan kanala tıklamak hiçbir şey yapmıyor; eskiden sesteki
     // kişiyi sesten atıyordu (H4).
     if (channelId === activeChannelRef.current) return
@@ -1492,15 +1510,25 @@ function App() {
     setEnlargedTile(null)
     setActiveChannel(channelId)
     activeChannelRef.current = channelId
-    socketRef.current?.emit(
-      'join-channel',
-      { serverId: activeServerIdRef.current, channelId, token: sessionTokenRef.current },
-      (response) => {
-        if (response?.success && channelId === activeChannelRef.current) {
-          setNewMessagesSince(response.lastReadAt || null)
-        }
+    socketRef.current?.emit('join-channel', { serverId, channelId, token: sessionTokenRef.current }, (response) => {
+      if (response?.success && channelId === activeChannelRef.current) {
+        setNewMessagesSince(response.lastReadAt || null)
       }
-    )
+    })
+  }, [])
+
+  // Sadece metin kanalından çık; ses sürüyor (ana sayfanın arkadaşlar
+  // sayfası için: açık bir kanal yok).
+  const leaveTextChannel = useCallback(() => {
+    socketRef.current?.emit('leave-channel', { textOnly: true })
+    activeChannelRef.current = null
+    setActiveChannel(null)
+    setMessages([])
+    setEphemeralPhotos([])
+    setTypingUsers([])
+    setHasMoreHistory(true)
+    setNewMessagesSince(null)
+    setConnectionError(null)
   }, [])
 
   // Tek bağlantının olay dinleyicileri. Bağlantı uygulama boyunca açık
@@ -1559,6 +1587,8 @@ function App() {
     // 'channel-members' de gönderiyor; liste artık ondan çizilmiyor.)
     socket.on('presence-changed', ({ serverId } = {}) => {
       if (serverId === activeServerIdRef.current) refreshPresenceRef.current?.()
+      // Konuşmalardaki kişilerin durumu da değişmiş olabilir.
+      if (homeOpenRef.current) refreshDmsRef.current?.()
     })
 
     // Okumak için yukarı kaydırmış birini yeni mesaj aşağı çekmesin.
@@ -1603,7 +1633,7 @@ function App() {
       // sesi çalsın — herkese yönelik bir çağrı, sadece belirli bir
       // kişiye değil.
       const isMention = mentionsUser(message.text, myName) || (!!myName && message.replyTo?.username === myName)
-      if (!isOwnMessage && notifySettingsRef.current.sounds) {
+      if (!isOwnMessage && notifySettingsRef.current.sounds && myStatusRef.current !== 'dnd') {
         if (isMention && document.hidden) {
           playMentionSound()
         } else {
@@ -1618,7 +1648,7 @@ function App() {
       const isOwn = photo.username === displayNameRef.current
       scrollChatToBottom(isOwn)
       setEphemeralPhotos((prev) => [...prev, photo])
-      if (!isOwn) playMessageSound()
+      if (!isOwn && notifySettingsRef.current.sounds && myStatusRef.current !== 'dnd') playMessageSound()
     })
 
     // YENİ: Yazıyor göstergesi.
@@ -1658,11 +1688,14 @@ function App() {
     // kanallarının bildirim odalarına seni koyuyor). Açık kanal değilse
     // okunmamış ve bahsedilme işaretleri; görmüyorsan masaüstü bildirimi.
     // ephemeral: tek seferlik fotoğraf; kanalda kalmadığı için sadece bildirim.
-    socket.on('channel-activity', ({ channelId, serverId, username: from, text, replyToUsername, ephemeral }) => {
+    // dm: özel mesaj; her mesajı bahsedilme gibi (sayı, ses, bildirim).
+    socket.on('channel-activity', ({ channelId, serverId, username: from, text, replyToUsername, ephemeral, dm }) => {
       if (from && from === displayNameRef.current) return
-      const mention = mentionsUser(text, displayNameRef.current) || replyToUsername === displayNameRef.current
+      const mention = !!dm || mentionsUser(text, displayNameRef.current) || replyToUsername === displayNameRef.current
       const isActive = channelId === activeChannelRef.current
-      if (!isActive && !ephemeral) {
+      if (dm) {
+        if (!isActive) refreshDmsRef.current?.()
+      } else if (!isActive && !ephemeral) {
         if (!serverId || serverId === activeServerIdRef.current) {
           setUnreadChannels((prev) => (prev.includes(channelId) ? prev : [...prev, channelId]))
           if (mention) setMentionCounts((prev) => ({ ...prev, [channelId]: (prev[channelId] || 0) + 1 }))
@@ -1675,8 +1708,32 @@ function App() {
         }
       }
       if (from && !(isActive && document.hasFocus())) {
-        notifyActivityRef.current?.({ channelId, serverId, from, text, mention, isActive })
+        notifyActivityRef.current?.({ channelId, serverId, from, text, mention, isActive, dm })
       }
+    })
+
+    // Arkadaş listesi değişti (istek, kabul, arkadaşın durumu).
+    socket.on('friends-changed', () => refreshFriendsRef.current?.())
+
+    // Biri özel mesajda seni arıyor (sese girdi, sen yoksun).
+    socket.on('dm-call', ({ channelId, from }) => {
+      setDmCall({ channelId, from })
+      playJoinSound()
+      refreshDmsRef.current?.()
+      if (myStatusRef.current !== 'dnd') {
+        requestAttention()
+        if (notifySettingsRef.current.desktop) {
+          showNotification({
+            title: `${from} seni arıyor`,
+            body: 'Katılmak için tıkla.',
+            tag: `arama-${channelId}`,
+            onClick: () => answerDmCallRef.current?.({ channelId, from }),
+          })
+        }
+      }
+    })
+    socket.on('dm-call-ended', ({ channelId }) => {
+      setDmCall((current) => (current?.channelId === channelId ? null : current))
     })
 
     // ---- Ses (voice) ile ilgili dinleyiciler — 'sese katıl' denene kadar
@@ -2345,6 +2402,120 @@ function App() {
     [leaveChannel, fetchServerChannels]
   )
 
+  // ---- Ana sayfa: arkadaşlar ve özel mesajlar ----
+  const fetchDms = useCallback(async () => {
+    const response = await emitRequest('list-dms')
+    if (response?.success) setDms(response.dms)
+  }, [emitRequest])
+
+  const fetchFriends = useCallback(async () => {
+    const response = await emitRequest('list-friends')
+    if (response?.success) {
+      setFriendLists({ friends: response.friends, incoming: response.incoming, outgoing: response.outgoing })
+    }
+  }, [emitRequest])
+
+  // Ana sayfa arkadaşlar sayfasıyla açılıyor; sesteysen ses sürüyor.
+  const openHome = useCallback(() => {
+    if (!homeOpenRef.current && activeChannelRef.current) lastServerChannelRef.current = activeChannelRef.current
+    homeOpenRef.current = true
+    setHomeOpen(true)
+    setActiveDm(null)
+    if (activeChannelRef.current) leaveTextChannel()
+    setMobileSidebarOpen(false)
+    fetchDms()
+    fetchFriends()
+  }, [leaveTextChannel, fetchDms, fetchFriends])
+
+  const openDm = useCallback(
+    (dm) => {
+      if (!homeOpenRef.current && activeChannelRef.current) lastServerChannelRef.current = activeChannelRef.current
+      homeOpenRef.current = true
+      setHomeOpen(true)
+      setActiveDm(dm)
+      setDms((prev) => prev.map((d) => (d.id === dm.id ? { ...d, unread: 0 } : d)))
+      joinChannel(dm.id, null)
+      setMobileSidebarOpen(false)
+    },
+    [joinChannel]
+  )
+
+  // Arkadaş listesinden ya da üye listesinden "Mesaj gönder".
+  const messageUser = useCallback(
+    async (targetUsername) => {
+      const response = await emitRequest('open-dm', { username: targetUsername })
+      if (!response?.success) {
+        setNotice(response?.message || 'Özel mesaj açılamadı.')
+        return
+      }
+      fetchDms()
+      openDm({ id: response.channelId, username: response.username, unread: 0 })
+    },
+    [emitRequest, fetchDms, openDm]
+  )
+
+  // Girişte (gelen istek ve okunmamış özel mesaj sayısı için) ve
+  // değişince; art arda gelen duyurular tek istekte toplanıyor.
+  useEffect(() => {
+    if (!loggedIn) return
+    fetchDms()
+    fetchFriends()
+    let dmTimer = null
+    let friendTimer = null
+    refreshDmsRef.current = () => {
+      clearTimeout(dmTimer)
+      dmTimer = setTimeout(fetchDms, 200)
+    }
+    refreshFriendsRef.current = () => {
+      clearTimeout(friendTimer)
+      friendTimer = setTimeout(() => {
+        fetchFriends()
+        fetchDms()
+      }, 200)
+    }
+    return () => {
+      clearTimeout(dmTimer)
+      clearTimeout(friendTimer)
+      refreshDmsRef.current = null
+      refreshFriendsRef.current = null
+    }
+  }, [loggedIn, fetchDms, fetchFriends])
+
+  // Gelen aramayı aç: konuşmaya git ve sese gir (başka seste isen oradan çık).
+  const answerDmCall = useCallback(
+    (call) => {
+      setDmCall(null)
+      if (inVoice) leaveVoice()
+      openDm(dms.find((d) => d.id === call.channelId) || { id: call.channelId, username: call.from, unread: 0 })
+      joinVoice()
+    },
+    [inVoice, leaveVoice, openDm, dms, joinVoice]
+  )
+  useEffect(() => {
+    answerDmCallRef.current = answerDmCall
+  }, [answerDmCall])
+
+  // Sunucu şeridinden bir sunucu: ana sayfadan çıkış. Aynı sunucuya
+  // dönünce ses sürüyor ve son kanal yeniden açılıyor.
+  const handleSelectServer = useCallback(
+    (serverId) => {
+      if (homeOpenRef.current) {
+        homeOpenRef.current = false
+        setHomeOpen(false)
+        setActiveDm(null)
+        if (serverId === activeServerIdRef.current) {
+          const last = lastServerChannelRef.current
+          if (last) joinChannel(last)
+          else if (activeChannelRef.current) leaveTextChannel()
+          setMobileSidebarOpen(false)
+          return
+        }
+      }
+      selectServer(serverId)
+    },
+    [selectServer, joinChannel, leaveTextChannel]
+  )
+
   // Kanal açık ve pencere öndeyken "okudum" bildiriliyor: açılınca, yeni
   // mesaj gelince (biraz bekleyerek) ve pencere öne gelince.
   useEffect(() => {
@@ -2383,7 +2554,7 @@ function App() {
   )
 
   useEffect(() => {
-    notifyActivityRef.current = ({ channelId, serverId, from, text, mention, isActive }) => {
+    notifyActivityRef.current = ({ channelId, serverId, from, text, mention, isActive, dm }) => {
       const settings = notifySettingsRef.current
       // Rahatsız etmeyin: sayı ve işaretler yine çıkıyor, ses ve bildirim yok.
       if (myStatusRef.current === 'dnd') return
@@ -2396,13 +2567,111 @@ function App() {
       const channelName = channels.find((c) => c.id === channelId)?.name
       const serverName = myServers.find((s) => s.id === serverId)?.name
       showNotification({
-        title: channelName ? `${from} · #${channelName}` : serverName ? `${from} · ${serverName}` : from,
+        title: dm ? from : channelName ? `${from} · #${channelName}` : serverName ? `${from} · ${serverName}` : from,
         body: text,
         tag: channelId,
-        onClick: () => openChannelFrom(serverId, channelId),
+        onClick: () =>
+          dm
+            ? openDm(dms.find((d) => d.id === channelId) || { id: channelId, username: from, unread: 0 })
+            : openChannelFrom(serverId, channelId),
       })
     }
   })
+
+  // ---- Durum ve etkinlik (bkz. lib/presence.js) ----
+  const changeStatus = useCallback(
+    async (status) => {
+      const previous = myStatusRef.current
+      myStatusRef.current = status
+      setMyStatus(status)
+      const response = await emitRequest('set-status', { status })
+      if (!response?.success) {
+        myStatusRef.current = previous
+        setMyStatus(previous)
+      }
+    },
+    [emitRequest]
+  )
+
+  const saveCustomStatus = useCallback(
+    async ({ text, expiresInHours }) => {
+      setCustomStatusDialog({ busy: true, error: null })
+      const response = await emitRequest('set-custom-status', { text, expiresInHours })
+      if (response?.success) {
+        setMyCustomStatus(response.customStatus)
+        setCustomStatusDialog(null)
+      } else {
+        setCustomStatusDialog({ busy: false, error: response?.message || 'Kaydedilemedi.' })
+      }
+    },
+    [emitRequest]
+  )
+
+  const clearCustomStatus = useCallback(async () => {
+    setMyCustomStatus(null)
+    await emitRequest('set-custom-status', { text: null })
+  }, [emitRequest])
+
+  // Özel durumun süresi dolunca kendi panelinden de kalksın (sunucu artık
+  // kimseye göstermiyor).
+  useEffect(() => {
+    if (!myCustomStatus?.expiresAt) return
+    const left = new Date(myCustomStatus.expiresAt).getTime() - Date.now()
+    const timer = setTimeout(() => setMyCustomStatus(null), Math.max(0, left))
+    return () => clearTimeout(timer)
+  }, [myCustomStatus])
+
+  // Kendiliğinden boşta: bu kadar süre kullanılmayınca. Masaüstünde
+  // bilgisayarın kendisine bakılıyor (oyun oynarken Disco'ya dokunmuyorsun
+  // ama bilgisayardasın); web'de sayfadaki klavye ve fareye.
+  useEffect(() => {
+    if (!loggedIn) return
+    let lastInput = Date.now()
+    const onInput = () => {
+      lastInput = Date.now()
+    }
+    const inputs = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']
+    inputs.forEach((name) => window.addEventListener(name, onInput, { passive: true }))
+    const timer = setInterval(async () => {
+      const systemIdleSeconds = await window.electronAPI?.getSystemIdleTime?.()
+      const idleFor = typeof systemIdleSeconds === 'number' ? systemIdleSeconds * 1000 : Date.now() - lastInput
+      const idle = idleFor >= IDLE_AFTER_MS
+      if (idle === livePresenceRef.current.idle) return
+      livePresenceRef.current.idle = idle
+      socketRef.current?.emit('set-idle', { idle })
+    }, Math.min(30_000, Math.max(250, IDLE_AFTER_MS / 4)))
+    return () => {
+      inputs.forEach((name) => window.removeEventListener(name, onInput))
+      clearInterval(timer)
+    }
+  }, [loggedIn])
+
+  // Masaüstünde oynanan oyun (electron/activity.cjs). Ayardan kapatılınca
+  // algılama duruyor ve oyun herkesten kalkıyor.
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.setActivityDetection) return
+    try {
+      window.localStorage?.setItem('shareActivity', shareActivity ? '1' : '0')
+    } catch {
+      /* kalıcılık olmasa da çalışıyor */
+    }
+    if (!loggedIn) return
+    const live = livePresenceRef.current
+    const unsubscribe = api.onActivity((name) => {
+      live.activity = name
+      socketRef.current?.emit('set-activity', { name })
+    })
+    api.setActivityDetection(shareActivity)
+    return () => {
+      unsubscribe()
+      api.setActivityDetection(false)
+      if (live.activity) {
+        live.activity = null
+        socketRef.current?.emit('set-activity', { name: null })
+      }
+    }
+  }, [loggedIn, shareActivity])
 
   const refreshMyServers = useCallback(async () => {
     const response = await emitRequest('list-my-servers', {
@@ -2666,6 +2935,8 @@ function App() {
       fetchServerChannels(stored)
       return
     }
+    // Ana sayfadayken kendiliğinden başka sunucuya geçilmiyor.
+    if (homeOpenRef.current) return
     selectServer(myServers[0].id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myServers])
@@ -3116,8 +3387,10 @@ function App() {
   // görüntülemek için ada bakıyoruz. activeServer* de aktif sunucunun
   // görüntü adı/sahiplik durumu için.
   const channelNameOf = (channelId) => channels.find((c) => c.id === channelId)?.name ?? '…'
-  const activeChannelName = channels.find((c) => c.id === activeChannel)?.name || ''
-  const voiceChannelName = channels.find((c) => c.id === voiceChannel)?.name || ''
+  const activeChannelName = activeDm ? activeDm.username : channels.find((c) => c.id === activeChannel)?.name || ''
+  // Ses özel mesajdaysa karşıdakinin adı ("@Ece").
+  const voiceDm = dms.find((d) => d.id === voiceChannel) || (activeDm?.id === voiceChannel ? activeDm : null)
+  const voiceChannelName = voiceDm ? voiceDm.username : channels.find((c) => c.id === voiceChannel)?.name || ''
   const activeServer = myServers.find((s) => s.id === activeServerId)
   const activeServerName = activeServer?.name || ''
   const activeServerIsOwner = !!activeServer?.isOwner
@@ -3144,8 +3417,9 @@ function App() {
     : null
 
   // Kenar çubuğunda her kanalın altında o kanalın sesindekiler.
+  // Görünmez durumdakiler çevrimdışı listesinde ama seste görünüyor.
   const voicersByChannel = new Map()
-  for (const member of onlineMembers) {
+  for (const member of [...onlineMembers, ...offlineMembers]) {
     if (!member.voiceChannelId) continue
     const isMe = member.username === displayName
     const peer = peers.find((p) => p.username === member.username)
@@ -3174,12 +3448,15 @@ function App() {
         : { unread: !!s.unread, mentions: s.mentions || 0 },
     ])
   )
-  const membersVisible = !isVoiceView && (membersPanelOpen || mobileMembersOpen)
+  const membersVisible = !homeOpen && !isVoiceView && (membersPanelOpen || mobileMembersOpen)
+  // Ana sayfa simgesindeki sayı: okunmamış özel mesajlar ve gelen istekler.
+  const homeBadge = dms.reduce((sum, d) => sum + (d.unread || 0), 0) + friendLists.incoming.length
 
   const chatPanel = activeChannel && (
     <ChatPanel
       variant={isVoiceView ? 'side' : 'full'}
       channelName={activeChannelName}
+      isDm={!!activeDm}
       items={chatTimeline}
       avatars={avatarByName}
       nameColors={nameColors}
@@ -3212,7 +3489,17 @@ function App() {
         <p className="empty-state-text">Soldan başka bir kanal ya da sunucu seçebilirsin.</p>
       </div>
     )
-  } else if (myServers.length === 0) {
+  } else if (homeOpen && !activeDm) {
+    mainContent = (
+      <FriendsPage
+        friends={friendLists}
+        onSendRequest={(name) => emitRequest('send-friend-request', { username: name })}
+        onRespond={(name, accept) => emitRequest('respond-friend-request', { username: name, accept })}
+        onRemove={(name) => emitRequest('remove-friend', { username: name })}
+        onMessage={messageUser}
+      />
+    )
+  } else if (myServers.length === 0 && !homeOpen) {
     mainContent = (
       <div className="empty-state">
         <Compass className="icon empty-state-icon" />
@@ -3308,9 +3595,12 @@ function App() {
       <div className={'nav-drawer' + (mobileSidebarOpen ? ' nav-drawer--open' : '')}>
         <ServerRail
           servers={myServers}
-          activeServerId={activeServerId}
+          activeServerId={homeOpen ? null : activeServerId}
           activity={serverActivity}
-          onSelect={selectServer}
+          homeActive={homeOpen}
+          homeBadge={homeBadge}
+          onHome={openHome}
+          onSelect={handleSelectServer}
           onAdd={() => openServerModal()}
         />
         <ChannelSidebar
@@ -3340,10 +3630,20 @@ function App() {
           voicePanel={
             inVoice && {
               channelName: voiceChannelName,
+              isDm: !!voiceDm,
               ping: averagePing,
               reconnecting,
               isScreenSharing,
               onOpenChannel: () => {
+                if (voiceDm) {
+                  openDm(voiceDm)
+                  return
+                }
+                if (homeOpenRef.current) {
+                  homeOpenRef.current = false
+                  setHomeOpen(false)
+                  setActiveDm(null)
+                }
                 joinChannel(voiceChannel)
                 setMobileSidebarOpen(false)
               },
@@ -3360,6 +3660,11 @@ function App() {
             isDeafened,
             pttEnabled,
             pttKey,
+            status: myStatus,
+            customStatus: myCustomStatus?.text || null,
+            onSetStatus: changeStatus,
+            onEditCustomStatus: () => setCustomStatusDialog({ busy: false, error: null }),
+            onClearCustomStatus: clearCustomStatus,
             onToggleMic: toggleMic,
             onToggleDeafen: toggleDeafen,
             onOpenSettings: () => openSettings(),
@@ -3370,6 +3675,18 @@ function App() {
               : updateInfo && updateProgress !== null
                 ? { ready: false, progress: updateProgress }
                 : null
+          }
+          home={
+            homeOpen
+              ? {
+                  dms,
+                  activeDmId: activeDm?.id || null,
+                  friendsActive: !activeDm,
+                  incomingCount: friendLists.incoming.length,
+                  onOpenFriends: openHome,
+                  onOpenDm: openDm,
+                }
+              : null
           }
         />
       </div>
@@ -3385,14 +3702,17 @@ function App() {
 
       <main className="main-panel">
         <ChannelHeader
-          title={activeChannel && !connectionError ? activeChannelName : activeServerName || 'Disco'}
+          title={
+            activeChannel && !connectionError ? activeChannelName : homeOpen ? 'Arkadaşlar' : activeServerName || 'Disco'
+          }
           isChannel={!!activeChannel && !connectionError}
-          voiceCount={voiceCountHere}
+          isDm={!!activeDm}
+          voiceCount={homeOpen ? 0 : voiceCountHere}
           showJoinVoice={!!activeChannel && !connectionError && !inVoice}
           onJoinVoice={joinVoice}
           membersOpen={isNarrow() ? mobileMembersOpen : membersPanelOpen}
           onToggleMembers={
-            activeChannel && !connectionError && !isVoiceView
+            activeChannel && !connectionError && !isVoiceView && !homeOpen
               ? () => (isNarrow() ? setMobileMembersOpen((open) => !open) : setMembersPanelOpen((open) => !open))
               : null
           }
@@ -3403,6 +3723,20 @@ function App() {
           <div className="status-banner status-banner--warn reconnecting-banner" role="status">
             <WifiOff className="icon" />
             Bağlantı koptu, yeniden bağlanılıyor…
+          </div>
+        )}
+        {dmCall && voiceChannel !== dmCall.channelId && (
+          <div className="status-banner call-banner" role="alert">
+            <Phone className="icon" />
+            <span className="call-banner-text">
+              <strong>{dmCall.from}</strong> seni arıyor
+            </span>
+            <button type="button" className="btn btn--small" onClick={() => answerDmCall(dmCall)}>
+              Katıl
+            </button>
+            <button type="button" className="btn btn--ghost btn--small" onClick={() => setDmCall(null)}>
+              Yok say
+            </button>
           </div>
         )}
         {notice && notice !== connectionError && (
@@ -3469,6 +3803,8 @@ function App() {
                   onCloseToTrayChange: setCloseToTray,
                   openAtLogin,
                   onOpenAtLoginChange: changeOpenAtLogin,
+                  shareActivity,
+                  onShareActivityChange: setShareActivity,
                 }
               : null
           }
@@ -3551,6 +3887,11 @@ function App() {
           y={volumePopup.y}
           volume={peerVolumes[volumePopup.username] ?? 100}
           onChange={(value) => setPeerVolume(volumePopup.username, value)}
+          onMessage={() => {
+            const target = volumePopup.username
+            setVolumePopup(null)
+            messageUser(target)
+          }}
           onClose={() => setVolumePopup(null)}
         />
       )}
@@ -3596,6 +3937,16 @@ function App() {
           onSave={handleSaveChannel}
           onDelete={handleDeleteChannel}
           onClose={() => setEditChannelDialog(null)}
+        />
+      )}
+
+      {customStatusDialog && (
+        <CustomStatusDialog
+          current={myCustomStatus?.text}
+          busy={customStatusDialog.busy}
+          error={customStatusDialog.error}
+          onSave={saveCustomStatus}
+          onClose={() => setCustomStatusDialog(null)}
         />
       )}
 

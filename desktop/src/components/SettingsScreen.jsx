@@ -372,6 +372,7 @@ function NotificationsPage({ notifications }) {
 
 function DesktopPage({ desktop }) {
   return (
+    <>
     <Section title="Pencere">
       <Toggle
         label="Kapatınca arka planda çalışmaya devam et"
@@ -387,6 +388,15 @@ function DesktopPage({ desktop }) {
         onChange={desktop.onOpenAtLoginChange}
       />
     </Section>
+    <Section title="Etkinlik">
+      <Toggle
+        label="Oynadığın oyunu göster"
+        hint="Bilinen bir oyun açıkken arkadaşların üye listesinde “… oynuyor” görür. Bilgisayarındaki diğer programlar hiçbir yere gönderilmez."
+        checked={desktop.shareActivity}
+        onChange={desktop.onShareActivityChange}
+      />
+    </Section>
+    </>
   )
 }
 
