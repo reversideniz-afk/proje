@@ -85,3 +85,14 @@ export function playScreenShareSound() {
     playTone(ctx, 880, 0.07, 0.14, 0.1, 'triangle')
   })
 }
+
+// Ses efektleri panelinden çalınan bir efekt (bkz. lib/soundboard.js);
+// diğer efektlerle aynı motordan ve çıkış cihazından.
+export function playSoundEffect(sound) {
+  withAudioContext((ctx) => {
+    const out = ctx.createGain()
+    out.gain.value = 0.9
+    out.connect(ctx.destination)
+    sound.play(ctx, out)
+  })
+}

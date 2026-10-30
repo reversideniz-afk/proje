@@ -41,7 +41,16 @@ import { ensureNotificationPermission, requestAttention, setAttentionBadge, show
 import { IDLE_AFTER_MS } from './lib/presence.js'
 import { roleColorOf } from './lib/roles.js'
 import { useSpeakingDetector } from './lib/speaking.js'
-import { setEffectsOutputDevice, playMentionSound, playJoinSound, playLeaveSound, playMessageSound, playScreenShareSound } from './lib/sounds.js'
+import { soundById } from './lib/soundboard.js'
+import {
+  setEffectsOutputDevice,
+  playMentionSound,
+  playJoinSound,
+  playLeaveSound,
+  playMessageSound,
+  playScreenShareSound,
+  playSoundEffect,
+} from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
 
 const TYPING_HEARTBEAT_MS = 4000
@@ -849,6 +858,17 @@ function App() {
   // kapatıp, tekrar bastığında herkesi KENDİ ayarladığın ses seviyesine
   // geri getiriyor (0'a sıfırlamıyor, gerçek tercihini unutmuyor).
   const [isDeafened, setIsDeafened] = useState(false)
+  const isDeafenedRef = useRef(false)
+  useEffect(() => {
+    isDeafenedRef.current = isDeafened
+  }, [isDeafened])
+  // Biri ses efekti çalınca sahnede kısa not: { key, username, sound }
+  const [soundToast, setSoundToast] = useState(null)
+  useEffect(() => {
+    if (!soundToast) return
+    const timer = setTimeout(() => setSoundToast(null), 2500)
+    return () => clearTimeout(timer)
+  }, [soundToast])
 
   // Her uzak ses akışı için (ya da akış değiştiğinde) bir kazanç (gain)
   // düğümü kuruyoruz — bu, kişi bazlı ses seviyesinin gerçek mekanizması.
@@ -1682,6 +1702,15 @@ function App() {
     // YENİ: Mesaj(lar) silindiğinde, listeden kaldır.
     socket.on('messages-deleted', ({ messageIds }) => {
       setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)))
+    })
+
+    // Seste biri ses efekti çaldı (sağırlaştırılmışsan ya da ayarda
+    // kapattıysan sadece not çıkıyor).
+    socket.on('sound-played', ({ soundId, username: from }) => {
+      const sound = soundById(soundId)
+      if (!sound) return
+      if (!isDeafenedRef.current && voiceSettingsRef.current.playSoundboard) playSoundEffect(sound)
+      setSoundToast({ key: Date.now(), username: from, sound })
     })
 
     // Bir mesaj sabitlendi ya da sabitlemesi kalktı.
@@ -3658,8 +3687,10 @@ function App() {
             onToggleDeafen: toggleDeafen,
             onToggleCamera: toggleCamera,
             onToggleScreenShare: toggleScreenShare,
+            onPlaySound: (soundId) => emitRequest('play-sound', { soundId }),
             onLeave: leaveVoice,
           }}
+          soundToast={soundToast}
         />
         {voiceChatOpen && chatPanel}
       </div>

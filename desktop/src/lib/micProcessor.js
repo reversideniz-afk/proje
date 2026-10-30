@@ -12,6 +12,8 @@ export const DEFAULT_VOICE_SETTINGS = {
   autoGainControl: true,
   autoSensitivity: true,
   thresholdDb: -50,
+  // Seste başkalarının çaldığı ses efektlerini duy (bkz. lib/soundboard.js).
+  playSoundboard: true,
 }
 
 // Seçili cihaz ve tarayıcının ses işlemesi (gürültü bastırma, yankı

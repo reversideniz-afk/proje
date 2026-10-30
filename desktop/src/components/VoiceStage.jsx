@@ -1,10 +1,24 @@
 // Ses sahnesi: seste olan herkesin kutucuğu ve altta ortada ses kontrolleri.
-import { useEffect, useRef, useState } from 'react'
-import { Headphones, HeadphoneOff, Mic, MicOff, Monitor, MonitorOff, PhoneOff, Video, VideoOff, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Headphones,
+  HeadphoneOff,
+  Mic,
+  MicOff,
+  Monitor,
+  MonitorOff,
+  PartyPopper,
+  PhoneOff,
+  Video,
+  VideoOff,
+  X,
+} from 'lucide-react'
 import { RemoteCameraTile } from './RemoteCameraTile.jsx'
 import { RemoteScreenTile } from './RemoteScreenTile.jsx'
 import { StageTile } from './StageTile.jsx'
 import { formatKeyCode } from '../lib/format.js'
+import { SOUNDS } from '../lib/soundboard.js'
+import { useDismiss } from '../lib/useDismiss.js'
 import './VoiceStage.css'
 
 function LocalVideo({ videoRef, stream, className }) {
@@ -26,8 +40,13 @@ function VoiceControls({
   onToggleDeafen,
   onToggleCamera,
   onToggleScreenShare,
+  onPlaySound,
   onLeave,
 }) {
+  const [soundboardOpen, setSoundboardOpen] = useState(false)
+  const soundboardRef = useRef(null)
+  const closeSoundboard = useCallback(() => setSoundboardOpen(false), [])
+  useDismiss(soundboardRef, soundboardOpen, closeSoundboard)
   const micTitle = pttEnabled
     ? `Bas-konuş açık (${formatKeyCode(pttKey)}) — konuşmak için tuşu basılı tut`
     : isMicOn
@@ -72,6 +91,38 @@ function VoiceControls({
       >
         {isScreenSharing ? <MonitorOff className="icon" /> : <Monitor className="icon" />}
       </button>
+      {onPlaySound && (
+        <div className="soundboard" ref={soundboardRef}>
+          <button
+            type="button"
+            className="voice-control"
+            onClick={() => setSoundboardOpen((open) => !open)}
+            title="Ses efektleri"
+            aria-label="Ses efektleri"
+            aria-expanded={soundboardOpen}
+          >
+            <PartyPopper className="icon" />
+          </button>
+          {soundboardOpen && (
+            <div className="popover soundboard-panel" role="menu" aria-label="Ses efektleri">
+              {SOUNDS.map((sound) => (
+                <button
+                  key={sound.id}
+                  type="button"
+                  role="menuitem"
+                  className="soundboard-sound"
+                  onClick={() => onPlaySound(sound.id)}
+                >
+                  <span className="soundboard-emoji" aria-hidden="true">
+                    {sound.emoji}
+                  </span>
+                  {sound.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <button
         type="button"
         className="voice-control voice-control--leave leave-voice-button"
@@ -133,6 +184,7 @@ export function VoiceStage({
   outputDeviceId,
   mediaError,
   onDismissMediaError,
+  soundToast,
   controls,
 }) {
   const gridRef = useRef(null)
@@ -225,6 +277,12 @@ export function VoiceStage({
           </div>
         )}
       </div>
+      {soundToast && (
+        <div key={soundToast.key} className="stage-toast" role="status">
+          <span aria-hidden="true">{soundToast.sound.emoji}</span>
+          <strong>{soundToast.username}</strong> {soundToast.sound.label}
+        </div>
+      )}
       {mediaError && (
         <div className="stage-error" role="alert">
           <span>{mediaError}</span>

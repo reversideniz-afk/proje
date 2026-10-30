@@ -111,6 +111,12 @@ görebildiğin bütün kanallarında (özel mesajda o konuşmada) arıyor; `from
 süzüyor (`socket/messages.js`). Bir sonuca tıklayınca o kanal açılıyor, mesaj yüklenmemişse
 eski mesajlar yüklenerek bulunuyor ve vurgulanıyor.
 
+Ses efektleri paneli: seste kontrollerdeki düğmeden alkış, davul, korna gibi kısa efektler
+çalınıyor; mikrofondan gitmiyor, sesteki herkesin hoparlöründe çalıyor (hepsi Web Audio ile
+üretiliyor, ses dosyası yok: `lib/soundboard.js`). Sunucu sadece hangi efektin çalındığını
+iletiyor (`play-sound`, kişi başı 1,5 saniyede bir). Sağırlaştırılmışken ya da Ayarlar > Ses ve
+görüntü'den kapatılınca sadece kimin çaldığı görünüyor.
+
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
 yapan bağlantı erişebildiği bütün kanalların bildirim odalarına giriyor; başka kanaldaki
@@ -194,7 +200,7 @@ Dosyalar:
   ve ses işleme ayarları, ekran paylaşımı kalitesi ve yayını büyütme, sunucu rolleri (erişim,
   yetkiler, arayüz), durum ve etkinlik (rahatsız etmeyin, görünmez, özel durum, kendiliğinden
   boşta), arkadaşlık ve özel mesajlar (istek, konuşma, erişim, arama, arayüz), sabitleme ve
-  mesajlarda arama. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  mesajlarda arama, ses efektleri. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
   değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).

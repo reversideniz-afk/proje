@@ -258,4 +258,18 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await expect(mert.page.getByRole('complementary', { name: 'Arama sonuçları' })).toContainText('turnuvada')
     await shot(mert, testInfo, '36-arama')
   })
+
+  test('ses efektleri paneli ve kimin çaldığı notu', async ({ disco }, testInfo) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.client('Ece')
+    await ece.joinChannel(disco.serverId, disco.channels.genel)
+    await ece.emitAck('join-voice', { token: ece.token, channelId: disco.channels.genel })
+    await mert.openChannel('genel')
+    await mert.page.getByRole('button', { name: 'Sese katıl', exact: true }).click()
+    await expect(mert.leaveVoiceButton()).toBeVisible()
+    await ece.emitAck('play-sound', { soundId: 'tada' })
+    await expect(mert.page.locator('.stage-toast')).toContainText('Ta-da')
+    await mert.page.getByRole('button', { name: 'Ses efektleri' }).click()
+    await shot(mert, testInfo, '37-ses-efektleri')
+  })
 })

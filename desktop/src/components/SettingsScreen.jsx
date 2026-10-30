@@ -233,6 +233,12 @@ function AudioPage({ audio }) {
           </button>
         </div>
         <p className="field-hint">Test sesini duyuyorsan sesli sohbetin sesi de bu cihazdan gelir.</p>
+        <Toggle
+          label="Ses efektlerini çal"
+          hint="Seste biri ses efektleri panelinden bir şey çalınca duyarsın. Kapalıyken sadece kimin çaldığı görünür."
+          checked={voice.playSoundboard}
+          onChange={(playSoundboard) => onVoiceChange({ playSoundboard })}
+        />
       </Section>
       <Section
         title="Ekran paylaşımı"

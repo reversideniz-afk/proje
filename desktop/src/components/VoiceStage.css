@@ -379,6 +379,76 @@
   background: var(--tehlike-hover);
 }
 
+/* Ses efektleri paneli: kontrollerin üstünde açılan ızgara. */
+.soundboard {
+  position: relative;
+}
+
+.soundboard-panel {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  width: 340px;
+  translate: -50% 0;
+}
+
+.soundboard-sound {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 10px 4px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--kabin);
+  color: var(--ikincil);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.soundboard-sound:hover {
+  background: var(--kabin-hover);
+  color: var(--metin);
+}
+
+.soundboard-emoji {
+  font-size: 24px;
+  line-height: 1;
+}
+
+/* Biri efekt çalınca sahnenin üstünde kısa bir not. */
+.stage-toast {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  background: var(--loca);
+  box-shadow: var(--shadow-pop);
+  font-size: 14px;
+  translate: -50% 0;
+  animation: rise-in 0.18s var(--ease-out);
+}
+
+@media (max-width: 760px) {
+  .soundboard-panel {
+    position: fixed;
+    right: 8px;
+    bottom: 84px;
+    left: 8px;
+    width: auto;
+    translate: none;
+  }
+}
+
 .stage-error {
   position: absolute;
   right: 16px;
@@ -437,4 +507,10 @@
   .stage-strip > .tile {
     width: 120px;
   }
+}
+
+/* Açık panelin düğmesi: basılı görünüyor (Spot ışığı sadece canlı için). */
+.voice-control[aria-expanded='true'] {
+  background: var(--kabin-hover);
+  color: var(--metin);
 }

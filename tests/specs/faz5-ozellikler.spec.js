@@ -990,6 +990,34 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect(alganis.page.getByRole('complementary', { name: 'Sabitlenmiş mesajlar' })).toContainText('mercimek çorbası')
   })
 
+  test('ses efektleri: sesteki herkese gidiyor; seste olmayan, bilinmeyen ses ve art arda çalma reddediliyor', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    for (const client of [mert, ece]) await client.joinChannel(disco.serverId, disco.channels.genel)
+    expect(await mert.emitAck('play-sound', { soundId: 'alkis' })).toMatchObject({ success: false })
+    for (const client of [mert, ece]) await client.emitAck('join-voice', { token: client.token, channelId: disco.channels.genel })
+
+    const heard = ece.nextEvent('sound-played')
+    expect(await mert.emitAck('play-sound', { soundId: 'alkis' })).toMatchObject({ success: true })
+    expect(await heard).toEqual({ soundId: 'alkis', username: 'Mert' })
+    expect(await mert.emitAck('play-sound', { soundId: 'davul' })).toMatchObject({ success: false, message: 'Biraz bekle.' })
+    expect(await ece.emitAck('play-sound', { soundId: 'uydurma' })).toMatchObject({ success: false })
+  })
+
+  test('ses efektleri arayüzde: panelden çalınca karşıda çalıyor ve kimin çaldığı görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    await joinVoiceTogether(mert, ece)
+    const tonesBefore = await ece.probe(() => window.__disco.tones.length)
+
+    await mert.page.getByRole('button', { name: 'Ses efektleri' }).click()
+    await mert.page.getByRole('menuitem', { name: /Ba dum tss/ }).click()
+    await expect(ece.page.locator('.stage-toast')).toContainText('Mert')
+    await expect(ece.page.locator('.stage-toast')).toContainText('Ba dum tss')
+    // Efekt karşıda çaldı (iki davul vuruşu iki tonla üretiliyor).
+    await expect.poll(() => ece.probe(() => window.__disco.tones.length)).toBeGreaterThanOrEqual(tonesBefore + 2)
+  })
+
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {
     const ece = await disco.user('Ece', {
       storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -30 }) },

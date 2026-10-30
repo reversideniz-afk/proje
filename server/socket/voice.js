@@ -2,6 +2,7 @@
 const { Channel } = require("../db");
 const { checkChannelAccess } = require("../lib/access");
 const { emitToUsers } = require("../lib/friends");
+const { SOUND_IDS, SOUND_COOLDOWN_MS } = require("../lib/soundboard");
 const { avatarUrlOf } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
@@ -103,6 +104,20 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
       const memberList = await buildMemberList(changedRoomId);
       io.to(textRoomName(changedRoomId)).emit("channel-members", memberList);
     }
+    reply({ success: true });
+  });
+
+  // ---- Ses efektleri paneli: seste olan herkesin hoparlöründe çalıyor ----
+  socket.on("play-sound", ({ soundId } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    if (!ctx.username || !ctx.voiceRoom) return reply({ success: false, message: "Önce sese katıl." });
+    if (!SOUND_IDS.includes(soundId)) return reply({ success: false, message: "Böyle bir ses yok." });
+    const now = Date.now();
+    if (now - (socket.data.lastSoundAt || 0) < SOUND_COOLDOWN_MS) {
+      return reply({ success: false, message: "Biraz bekle." });
+    }
+    socket.data.lastSoundAt = now;
+    io.to(voiceRoomName(ctx.voiceRoom)).emit("sound-played", { soundId, username: ctx.username });
     reply({ success: true });
   });
 
