@@ -4,10 +4,10 @@
 // üstüne gelince, klavyeyle odaklanınca, sağ tıklayınca ve dokunmatikte
 // uzun basınca görünüyor (H15; eskiden sadece sağ tıkla açılıyordu).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, CornerUpLeft, Info, Pencil, Pin, PinOff, Reply, SmilePlus, Trash2, X } from 'lucide-react'
+import { CalendarDays, ChartColumn, Check, Copy, CornerUpLeft, Info, Pencil, Pin, PinOff, Reply, SmilePlus, Trash2, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { QUICK_REACTIONS } from '../lib/config.js'
-import { formatDayLabel, formatFullDate, formatMessageTime, isSameDay } from '../lib/format.js'
+import { formatDayLabel, formatEventTime, formatFullDate, formatMessageTime, formatRelative, isSameDay } from '../lib/format.js'
 import { renderMarkdown } from '../lib/markdown.jsx'
 import { mentionsUser } from '../lib/mentions.jsx'
 import { userColor } from '../lib/userColor.js'
@@ -82,6 +82,101 @@ function EditBox({ initialText, onSave, onCancel }) {
   )
 }
 
+// Anket: seçeneğe basınca oy (tek seçimlide başka seçeneğe geçer, aynısına
+// basınca geri alınır); çubuk oyların payı. Açan kişi bitirebilir.
+function PollCard({ item, displayName, canClose, onVote, onClose }) {
+  const { poll } = item
+  const total = poll.options.reduce((sum, o) => sum + o.votes.length, 0)
+  const voters = new Set(poll.options.flatMap((o) => o.votes)).size
+  return (
+    <div className="plan-card poll-card" role="group" aria-label={`Anket: ${poll.question}`}>
+      <p className="plan-card-title">
+        <ChartColumn className="icon" aria-hidden="true" />
+        {poll.question}
+      </p>
+      <ul className="poll-options">
+        {poll.options.map((option, index) => {
+          const mine = option.votes.includes(displayName)
+          const share = total ? Math.round((option.votes.length / total) * 100) : 0
+          return (
+            <li key={index}>
+              <button
+                type="button"
+                className={'poll-option' + (mine ? ' poll-option--mine' : '')}
+                aria-pressed={mine}
+                disabled={poll.closed}
+                onClick={() => onVote(item.id, index)}
+                title={option.votes.length ? option.votes.join(', ') : 'Henüz oy yok'}
+              >
+                <span className="poll-bar" style={{ '--share': `${share}%` }} aria-hidden="true" />
+                <span className="poll-option-text">{option.text}</span>
+                <span className="poll-option-count">
+                  {option.votes.length} · %{share}
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="plan-card-foot">
+        <span>
+          {voters} kişi oy verdi · {poll.multiple ? 'birden fazla seçilebilir' : 'tek seçim'}
+          {poll.closed && ' · anket bitti'}
+        </span>
+        {canClose && !poll.closed && (
+          <button type="button" className="btn btn--ghost btn--small" onClick={() => onClose(item.id)}>
+            Anketi bitir
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Etkinlik: tarih, açıklama, katılıyorum / belki (tekrar basınca geri alınır).
+function EventCard({ item, displayName, onRsvp }) {
+  const { event } = item
+  const start = new Date(event.startsAt)
+  const choice = event.going.includes(displayName) ? 'going' : event.maybe.includes(displayName) ? 'maybe' : 'none'
+  return (
+    <div className="plan-card event-card" role="group" aria-label={`Etkinlik: ${event.title}`}>
+      <div className="event-date" aria-hidden="true">
+        <span className="event-month">{start.toLocaleDateString('tr-TR', { month: 'short' })}</span>
+        <span className="event-day">{start.getDate()}</span>
+      </div>
+      <div className="event-body">
+        <p className="plan-card-title">
+          <CalendarDays className="icon" aria-hidden="true" />
+          {event.title}
+        </p>
+        <time className="event-when" dateTime={event.startsAt} title={formatFullDate(event.startsAt)}>
+          {formatEventTime(start)} · {formatRelative(start)}
+        </time>
+        {event.description && <p className="event-description">{event.description}</p>}
+        <div className="event-rsvp" role="group" aria-label="Katılım">
+          <button
+            type="button"
+            className="event-rsvp-option"
+            aria-pressed={choice === 'going'}
+            onClick={() => onRsvp(item.id, choice === 'going' ? 'none' : 'going')}
+          >
+            Katılıyorum · {event.going.length}
+          </button>
+          <button
+            type="button"
+            className="event-rsvp-option"
+            aria-pressed={choice === 'maybe'}
+            onClick={() => onRsvp(item.id, choice === 'maybe' ? 'none' : 'maybe')}
+          >
+            Belki · {event.maybe.length}
+          </button>
+        </div>
+        {event.going.length > 0 && <p className="event-people">Geliyor: {event.going.join(', ')}</p>}
+      </div>
+    </div>
+  )
+}
+
 // colorOf: kişinin adının rengi (rol rengi, yoksa kişiye özel renk).
 function MessageItem({
   item,
@@ -106,6 +201,9 @@ function MessageItem({
   onReply,
   onJumpTo,
   onTogglePin,
+  onVotePoll,
+  onClosePoll,
+  onRsvpEvent,
 }) {
   const pressTimer = useRef(null)
   const isOwn = item.username === displayName
@@ -186,6 +284,16 @@ function MessageItem({
 
         {isEditing ? (
           <EditBox initialText={item.text} onSave={(text) => onSaveEdit(item.id, text)} onCancel={onCancelEdit} />
+        ) : item.poll ? (
+          <PollCard
+            item={item}
+            displayName={displayName}
+            canClose={isOwn || canModerate}
+            onVote={onVotePoll}
+            onClose={onClosePoll}
+          />
+        ) : item.event ? (
+          <EventCard item={item} displayName={displayName} onRsvp={onRsvpEvent} />
         ) : isPhoto ? (
           <div className="chat-photo-wrap">
             <img
@@ -262,7 +370,7 @@ function MessageItem({
               {item.pinned ? <PinOff className="icon" /> : <Pin className="icon" />}
             </button>
           )}
-          {isOwn && (
+          {isOwn && !item.poll && !item.event && (
             <button type="button" className="icon-btn" title="Düzenle" aria-label="Düzenle" onClick={onStartEdit}>
               <Pencil className="icon" />
             </button>
@@ -317,6 +425,9 @@ export function MessageList({
   onOpenPhoto,
   onReply,
   onTogglePin,
+  onVotePoll,
+  onClosePoll,
+  onRsvpEvent,
   containerRef,
 }) {
   const colorOf = (name) => nameColors?.get(name) || userColor(name)
@@ -397,6 +508,9 @@ export function MessageList({
           avatarUrl={avatars.get(item.username)}
           colorOf={colorOf}
           onTogglePin={onTogglePin}
+          onVotePoll={onVotePoll}
+          onClosePoll={onClosePoll}
+          onRsvpEvent={onRsvpEvent}
           grouped={grouped}
           displayName={displayName}
           canModerate={canModerate}

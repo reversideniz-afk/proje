@@ -3,7 +3,7 @@
 // harfli isimlerde de çalışıyor ve imlecin olduğu yerdeki kelimeye bakıyor
 // (H22; eskiden sadece metnin sonunda ve İngilizce harflerle çalışıyordu).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ImagePlus, LoaderCircle, SendHorizontal, Smile, X } from 'lucide-react'
+import { CalendarPlus, ChartColumn, ImagePlus, LoaderCircle, Plus, SendHorizontal, Smile, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { COMPOSER_EMOJIS } from '../lib/config.js'
 import { toDative } from '../lib/format.js'
@@ -46,7 +46,13 @@ export function Composer({
   isSendingPhoto,
   replyingTo,
   onCancelReply,
+  onCreatePoll,
+  onCreateEvent,
 }) {
+  const [plusOpen, setPlusOpen] = useState(false)
+  const plusRef = useRef(null)
+  const closePlus = useCallback(() => setPlusOpen(false), [])
+  useDismiss(plusRef, plusOpen, closePlus)
   const [text, setText] = useState('')
   const [caret, setCaret] = useState(0)
   const [highlight, setHighlight] = useState(0)
@@ -229,16 +235,61 @@ export function Composer({
           if (file) onPhotoFile(file)
         }}
       />
-      <button
-        type="button"
-        className="icon-btn composer-attach"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={isSendingPhoto}
-        aria-label="Fotoğraf paylaş"
-        title="Fotoğraf paylaş (kaydedilmez, sadece o an kanaldakiler görür)"
-      >
-        {isSendingPhoto ? <LoaderCircle className="icon composer-spinner" /> : <ImagePlus className="icon" />}
-      </button>
+      <div className="composer-plus" ref={plusRef}>
+        <button
+          type="button"
+          className="icon-btn composer-attach"
+          onClick={() => setPlusOpen((open) => !open)}
+          disabled={isSendingPhoto}
+          aria-label="Ekle"
+          aria-haspopup="menu"
+          aria-expanded={plusOpen}
+          title="Fotoğraf, anket ya da etkinlik ekle"
+        >
+          {isSendingPhoto ? <LoaderCircle className="icon composer-spinner" /> : <Plus className="icon" />}
+        </button>
+        {plusOpen && (
+          <div className="popover composer-plus-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                setPlusOpen(false)
+                fileInputRef.current?.click()
+              }}
+            >
+              <ImagePlus className="icon" /> Fotoğraf paylaş
+            </button>
+            {onCreatePoll && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setPlusOpen(false)
+                  onCreatePoll()
+                }}
+              >
+                <ChartColumn className="icon" /> Anket oluştur
+              </button>
+            )}
+            {onCreateEvent && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setPlusOpen(false)
+                  onCreateEvent()
+                }}
+              >
+                <CalendarPlus className="icon" /> Etkinlik planla
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       <textarea
         ref={textareaRef}
         className="composer-input"

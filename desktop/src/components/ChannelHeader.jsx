@@ -20,8 +20,9 @@ function SearchBox({ scopeLabel, onSearch, onClear }) {
       <input
         type="search"
         value={value}
-        placeholder={`${scopeLabel} içinde ara`}
+        placeholder="Ara"
         aria-label={`${scopeLabel} içinde ara`}
+        title={`${scopeLabel} içinde ara (from:Ece ile kişiye göre)`}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {

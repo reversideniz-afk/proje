@@ -53,6 +53,30 @@ const User = mongoose.models.User || mongoose.model("User", userSchema);
 
 // YENİ: Sohbet mesajları — kalıcı, hiç silinmiyor. Her kanalın kendi
 // mesaj geçmişi "channel" alanına göre ayrılıyor.
+// Anket: soru, seçenekler ve her seçeneğe oy verenler; multiple ise birden
+// fazla seçenek seçilebiliyor, closed ise oylama bitti.
+const pollSchema = new mongoose.Schema(
+  {
+    question: String,
+    multiple: { type: Boolean, default: false },
+    closed: { type: Boolean, default: false },
+    options: [new mongoose.Schema({ text: String, votes: { type: [String], default: [] } }, { _id: false })],
+  },
+  { _id: false }
+);
+
+// Etkinlik: başlık, başlangıç, açıklama; katılıyorum ve belki diyenler.
+const eventSchema = new mongoose.Schema(
+  {
+    title: String,
+    startsAt: Date,
+    description: { type: String, default: "" },
+    going: { type: [String], default: [] },
+    maybe: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 const messageSchema = new mongoose.Schema({
   // ESKİ: kanal ismi düz metin olarak tutuluyordu — çoklu sunucuya
   // geçişte iki farklı sunucunun aynı isimde kanal açması çakışma
@@ -86,6 +110,9 @@ const messageSchema = new mongoose.Schema({
   // Sabitlenmiş mesaj: kim, ne zaman (bkz. toggle-pin).
   pinnedAt: { type: Date, default: null },
   pinnedBy: { type: String, default: null },
+  // Anket ya da etkinlik mesajı (bkz. socket/plans.js); metin başlığı.
+  poll: { type: pollSchema, default: undefined },
+  event: { type: eventSchema, default: undefined },
 });
 // Kanalın son mesajları ve "şu andan sonraki mesajlar" sorguları için.
 messageSchema.index({ channelId: 1, createdAt: -1 });

@@ -2,6 +2,7 @@
 // varsa kanalın altında), altta "Ses bağlı" paneli ve kullanıcı paneli.
 import { useCallback, useRef, useState } from 'react'
 import {
+  CalendarDays,
   ChevronDown,
   Hash,
   Headphones,
@@ -24,7 +25,7 @@ import {
 } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { useDismiss } from '../lib/useDismiss.js'
-import { formatKeyCode } from '../lib/format.js'
+import { formatEventTime, formatKeyCode } from '../lib/format.js'
 import { STATUSES, presenceLine, statusLabel } from '../lib/presence.js'
 
 // Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
@@ -394,6 +395,8 @@ export function ChannelSidebar({
   userPanel,
   update,
   home,
+  events,
+  onOpenEvent,
 }) {
   return (
     <aside className="channel-sidebar" aria-label={home ? 'Özel mesajlar' : 'Kanallar'}>
@@ -425,6 +428,28 @@ export function ChannelSidebar({
 
       <div className="sidebar-scroll">
         {home && <DmNav home={home} />}
+        {!home && events?.length > 0 && (
+          <>
+            <div className="sidebar-category">
+              <span>Yaklaşan</span>
+            </div>
+            <ul className="channel-list" aria-label="Yaklaşan etkinlikler">
+              {events.slice(0, 3).map((event) => (
+                <li key={event.id} className="channel-row">
+                  <button type="button" className="channel-button dm-button" onClick={() => onOpenEvent(event)}>
+                    <CalendarDays className="icon channel-hash" />
+                    <span className="dm-text">
+                      <span className="channel-name">{event.title}</span>
+                      <span className="dm-line">
+                        {formatEventTime(event.startsAt)} · {event.going.length} kişi
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
         {!home && server && (
           <div className="sidebar-category">
             <span>Kanallar</span>

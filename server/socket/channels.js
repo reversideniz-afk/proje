@@ -261,10 +261,13 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (!trimmed || trimmed.length > 2000) return;
 
     try {
+      // Anket ve etkinlik mesajları düzenlenmiyor (başlıkları kartın parçası).
       const message = await Message.findOne({
         _id: messageId,
         channelId: ctx.textRoom,
         username,
+        poll: { $exists: false },
+        event: { $exists: false },
       });
       if (!message) return;
       message.text = trimmed;

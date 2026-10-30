@@ -1018,6 +1018,90 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect.poll(() => ece.probe(() => window.__disco.tones.length)).toBeGreaterThanOrEqual(tonesBefore + 2)
   })
 
+  test('anket ve etkinlik: tek seçimde oy değişiyor, çokta ayrı; biten ankete oy yok; katılım ve yaklaşanlar', async ({ disco }) => {
+    const mert = await disco.client('Mert')
+    const ece = await disco.client('Ece')
+    for (const client of [mert, ece]) await client.joinChannel(disco.serverId, disco.channels.genel)
+    expect(await mert.emitAck('create-poll', { question: 'Tek seçenek', options: ['Sadece bu'] })).toMatchObject({ success: false })
+
+    const posted = ece.nextEvent('new-message', (m) => m.poll)
+    const { messageId } = await mert.emitAck('create-poll', { question: 'Cumartesi ne oynayalım?', options: ['Valorant', 'CS2', 'LoL'] })
+    expect((await posted).poll).toMatchObject({ question: 'Cumartesi ne oynayalım?', multiple: false, closed: false })
+    const votes = async (client, index) => {
+      const updated = mert.nextEvent('poll-updated')
+      await client.emitAck('vote-poll', { messageId, optionIndex: index })
+      return (await updated).poll.options.map((o) => o.votes)
+    }
+    expect(await votes(ece, 0)).toEqual([['Ece'], [], []])
+    expect(await votes(ece, 1)).toEqual([[], ['Ece'], []])
+    expect(await votes(ece, 1)).toEqual([[], [], []])
+    expect(await votes(mert, 2)).toEqual([[], [], ['Mert']])
+
+    // Sadece açan bitiriyor; biten ankete oy verilmiyor; anket düzenlenmiyor.
+    expect(await ece.emitAck('close-poll', { messageId })).toMatchObject({ success: false })
+    expect(await mert.emitAck('close-poll', { messageId })).toMatchObject({ success: true })
+    expect(await ece.emitAck('vote-poll', { messageId, optionIndex: 0 })).toMatchObject({ success: false, message: 'Anket bitti.' })
+    mert.socket.emit('edit-message', { token: mert.token, messageId, newText: 'değişti' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(ece.received('message-edited')).toEqual([])
+
+    // Çok seçimli.
+    const multi = await mert.emitAck('create-poll', { question: 'Hangi akşamlar uygun?', options: ['Cuma', 'Cumartesi'], multiple: true })
+    await ece.emitAck('vote-poll', { messageId: multi.messageId, optionIndex: 0 })
+    const both = mert.nextEvent('poll-updated', (u) => u.messageId === multi.messageId && u.poll.options[1].votes.length > 0)
+    await ece.emitAck('vote-poll', { messageId: multi.messageId, optionIndex: 1 })
+    expect((await both).poll.options.map((o) => o.votes)).toEqual([['Ece'], ['Ece']])
+
+    // Etkinlik: geçmiş tarih reddediliyor; açan "katılıyorum"; katılım değişiyor.
+    const past = new Date(Date.now() - 3_600_000).toISOString()
+    expect(await mert.emitAck('create-event', { title: 'Dün', startsAt: past })).toMatchObject({ success: false })
+    const startsAt = new Date(Date.now() + 2 * 3_600_000).toISOString()
+    const event = await mert.emitAck('create-event', { title: 'Valorant turnuvası', startsAt, description: '5v5, herkes gelsin' })
+    expect(event).toMatchObject({ success: true })
+    const listed = await ece.emitAck('list-events', { serverId: disco.serverId })
+    expect(listed.events).toMatchObject([{ id: event.messageId, title: 'Valorant turnuvası', going: ['Mert'], maybe: [] }])
+    const maybe = mert.nextEvent('event-updated')
+    await ece.emitAck('rsvp-event', { messageId: event.messageId, choice: 'maybe' })
+    expect((await maybe).event).toMatchObject({ going: ['Mert'], maybe: ['Ece'] })
+    const going = mert.nextEvent('event-updated')
+    await ece.emitAck('rsvp-event', { messageId: event.messageId, choice: 'going' })
+    expect((await going).event).toMatchObject({ going: ['Mert', 'Ece'], maybe: [] })
+  })
+
+  test('anket ve etkinlik arayüzde: + menüsünden oluşturuluyor, oy ve katılım karşıda görünüyor', async ({ disco }) => {
+    const mert = await disco.user('Mert')
+    const ece = await disco.user('Ece')
+    for (const user of [mert, ece]) await user.openChannel('genel')
+
+    await mert.page.getByRole('button', { name: 'Ekle', exact: true }).click()
+    await mert.page.getByRole('menuitem', { name: 'Anket oluştur' }).click()
+    const pollDialog = mert.page.getByRole('dialog', { name: 'Anket oluştur' })
+    await pollDialog.getByLabel('Soru').fill('Cumartesi ne oynayalım?')
+    await pollDialog.getByLabel('Seçenek 1', { exact: true }).fill('Valorant')
+    await pollDialog.getByLabel('Seçenek 2', { exact: true }).fill('CS2')
+    await pollDialog.getByRole('button', { name: 'Anketi gönder' }).click()
+
+    const elcePoll = ece.page.getByRole('group', { name: 'Anket: Cumartesi ne oynayalım?' })
+    await elcePoll.getByRole('button', { name: /Valorant/ }).click()
+    await expect(elcePoll.getByRole('button', { name: /Valorant/ })).toHaveAttribute('aria-pressed', 'true')
+    await expect(mert.page.getByRole('group', { name: 'Anket: Cumartesi ne oynayalım?' })).toContainText('1 · %100')
+
+    const when = new Date(Date.now() + 2 * 86_400_000)
+    const pad = (n) => String(n).padStart(2, '0')
+    const local = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T20:00`
+    await mert.page.getByRole('button', { name: 'Ekle', exact: true }).click()
+    await mert.page.getByRole('menuitem', { name: 'Etkinlik planla' }).click()
+    const eventDialog = mert.page.getByRole('dialog', { name: 'Etkinlik planla' })
+    await eventDialog.getByLabel('Ne yapılacak').fill('Valorant turnuvası')
+    await eventDialog.getByLabel('Ne zaman').fill(local)
+    await eventDialog.getByRole('button', { name: 'Etkinliği paylaş' }).click()
+
+    const eceEvent = ece.page.getByRole('group', { name: 'Etkinlik: Valorant turnuvası' })
+    await eceEvent.getByRole('button', { name: /Belki/ }).click()
+    await expect(mert.page.getByRole('group', { name: 'Etkinlik: Valorant turnuvası' })).toContainText('Belki · 1')
+    await expect(ece.page.getByRole('list', { name: 'Yaklaşan etkinlikler' })).toContainText('Valorant turnuvası')
+  })
+
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {
     const ece = await disco.user('Ece', {
       storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -30 }) },

@@ -41,7 +41,28 @@ function serializeMessage(msg) {
       ? { id: msg.replyTo.messageId?.toString() || null, username: msg.replyTo.username, text: msg.replyTo.text }
       : null,
     pinned: msg.pinnedAt ? { by: msg.pinnedBy, at: msg.pinnedAt } : null,
+    poll: msg.poll ? serializePoll(msg.poll) : null,
+    event: msg.event ? serializeEvent(msg.event) : null,
   };
 }
 
-module.exports = { pickVoiceState, isValidImageDataUri, serializeMessage };
+function serializePoll(poll) {
+  return {
+    question: poll.question,
+    multiple: !!poll.multiple,
+    closed: !!poll.closed,
+    options: (poll.options || []).map((o) => ({ text: o.text, votes: o.votes || [] })),
+  };
+}
+
+function serializeEvent(event) {
+  return {
+    title: event.title,
+    startsAt: event.startsAt,
+    description: event.description || "",
+    going: event.going || [],
+    maybe: event.maybe || [],
+  };
+}
+
+module.exports = { pickVoiceState, isValidImageDataUri, serializeMessage, serializePoll, serializeEvent };

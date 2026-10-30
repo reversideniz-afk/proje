@@ -12,6 +12,7 @@ const registerRoleHandlers = require("./roles");
 const registerPresenceHandlers = require("./presence");
 const registerFriendHandlers = require("./friends");
 const registerMessageHandlers = require("./messages");
+const registerPlanHandlers = require("./plans");
 
 // Bağlantı kurulurken (el sıkışmada) gönderilen oturum anahtarı geçerliyse
 // bağlantı o kullanıcıya bağlanıyor; olaylarda ayrıca anahtar gerekmiyor.
@@ -38,4 +39,5 @@ io.on("connection", (socket) => {
   registerPresenceHandlers(socket, ctx);
   registerFriendHandlers(socket, ctx);
   registerMessageHandlers(socket, ctx);
+  registerPlanHandlers(socket, ctx);
 });

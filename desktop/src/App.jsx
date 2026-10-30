@@ -11,9 +11,11 @@ import {
   CreateChannelDialog,
   CustomStatusDialog,
   EditChannelDialog,
+  EventDialog,
   InviteDialog,
   JoinInviteDialog,
   PhotoLightbox,
+  PollDialog,
   RoleDialog,
   ScreenShareDialog,
   SecurityAlertDialog,
@@ -28,7 +30,7 @@ import { SettingsScreen } from './components/SettingsScreen.jsx'
 import { VoiceStage } from './components/VoiceStage.jsx'
 import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
-import { describeMediaError, formatKeyCode } from './lib/format.js'
+import { describeMediaError, formatEventTime, formatKeyCode } from './lib/format.js'
 import { mentionsUser } from './lib/mentions.jsx'
 import { DEFAULT_VOICE_SETTINGS, createMicProcessor, gateSettings, micConstraints } from './lib/micProcessor.js'
 import {
@@ -418,6 +420,11 @@ function App() {
   // Sağdaki mesaj paneli: arama sonuçları ya da kanalın sabitlenmiş
   // mesajları. { kind: 'search' | 'pins', query, messages, loading, error }
   const [messagePanel, setMessagePanel] = useState(null)
+  // Anket ya da etkinlik penceresi: { kind: 'poll' | 'event', busy, error } | null
+  const [planDialog, setPlanDialog] = useState(null)
+  // Aktif sunucunun yaklaşan etkinlikleri (kenar çubuğunda, hatırlatma için).
+  const [upcomingEvents, setUpcomingEvents] = useState([])
+  const remindedEventsRef = useRef(new Set())
   const refreshPinsRef = useRef(null)
   // Arama ya da sabitlenmiş mesajdan gidilen mesaj: yüklenmemişse eski
   // mesajlar yüklenerek bulunuyor. { channelId, messageId, createdAt }
@@ -1713,6 +1720,17 @@ function App() {
       setSoundToast({ key: Date.now(), username: from, sound })
     })
 
+    // Ankette oy ya da etkinlikte katılım değişti.
+    socket.on('poll-updated', ({ messageId, poll }) => {
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, poll } : m)))
+    })
+    socket.on('event-updated', ({ messageId, event }) => {
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, event } : m)))
+    })
+    socket.on('events-changed', ({ serverId } = {}) => {
+      if (serverId === activeServerIdRef.current) refreshServerDataRef.current?.()
+    })
+
     // Bir mesaj sabitlendi ya da sabitlemesi kalktı.
     socket.on('message-pin-changed', ({ messageId, pinned }) => {
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pinned } : m)))
@@ -2359,15 +2377,17 @@ function App() {
 
   const fetchServerChannels = useCallback(
     async (serverId) => {
-      const [response, rolesResponse] = await Promise.all([
+      const [response, rolesResponse, eventsResponse] = await Promise.all([
         emitRequest('server-channels', { token: sessionTokenRef.current, serverId }),
         emitRequest('server-roles', { serverId }),
+        emitRequest('list-events', { serverId }),
       ])
       if (serverId !== activeServerIdRef.current) return
       const list = response?.success ? response.channels || [] : []
       setChannels(list)
       setServerPermissions(response?.success ? response.permissions || {} : {})
       setServerRoles(rolesResponse?.success ? rolesResponse.roles : [])
+      setUpcomingEvents(eventsResponse?.success ? eventsResponse.events : [])
       // Okunmamışlar ve bahsedilmeler sunucudan (uygulama kapalıyken gelenler dahil).
       const others = list.filter((c) => c.id !== activeChannelRef.current)
       setUnreadChannels(others.filter((c) => c.unread).map((c) => c.id))
@@ -3386,6 +3406,18 @@ function App() {
     loadOlderRef.current = handleLoadOlderMessages
   })
 
+  // ---- Anketler ve etkinlikler ----
+  const createPlan = async (data) => {
+    const kind = planDialog?.kind
+    setPlanDialog((prev) => prev && { ...prev, busy: true, error: null })
+    const response = await emitRequest(kind === 'poll' ? 'create-poll' : 'create-event', data)
+    if (response?.success) setPlanDialog(null)
+    else setPlanDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Gönderilemedi.' })
+  }
+  const votePoll = (messageId, optionIndex) => emitRequest('vote-poll', { messageId, optionIndex })
+  const closePoll = (messageId) => emitRequest('close-poll', { messageId })
+  const rsvpEvent = (messageId, choice) => emitRequest('rsvp-event', { messageId, choice })
+
   // ---- Arama ve sabitlenmiş mesajlar (sağdaki panel) ----
   const searchMessages = async (query) => {
     setMessagePanel({ kind: 'search', query, messages: [], loading: true })
@@ -3450,6 +3482,38 @@ function App() {
     setPendingJump(null)
     setNotice('Mesaj bulunamadı; silinmiş olabilir.')
   }, [pendingJump, activeChannel, messages, isLoadingOlder, hasMoreHistory])
+
+  // Hatırlatma: katılıyorum ya da belki dediğin etkinlik başlarken (uygulama
+  // açıksa) ses ve bildirim; bildirime tıklayınca etkinlik mesajına gidiliyor.
+  const jumpToMessageRef = useRef(null)
+  useEffect(() => {
+    jumpToMessageRef.current = jumpToMessage
+  })
+  useEffect(() => {
+    const timers = []
+    for (const event of upcomingEvents) {
+      const mine = event.going.includes(displayName) || event.maybe.includes(displayName)
+      const wait = new Date(event.startsAt).getTime() - Date.now()
+      if (!mine || wait < 0 || wait > 24 * 3_600_000 || remindedEventsRef.current.has(event.id)) continue
+      timers.push(
+        setTimeout(() => {
+          remindedEventsRef.current.add(event.id)
+          if (myStatusRef.current === 'dnd') return
+          if (notifySettingsRef.current.sounds) playMentionSound()
+          requestAttention()
+          if (notifySettingsRef.current.desktop) {
+            showNotification({
+              title: `${event.title} başlıyor`,
+              body: formatEventTime(event.startsAt),
+              tag: `etkinlik-${event.id}`,
+              onClick: () => jumpToMessageRef.current?.(event),
+            })
+          }
+        }, wait)
+      )
+    }
+    return () => timers.forEach(clearTimeout)
+  }, [upcomingEvents, displayName])
 
   // Kanal değişince o kanalın sabitlenmiş mesajları kapanıyor; sunucu ya da
   // ana sayfa değişince arama da.
@@ -3589,6 +3653,11 @@ function App() {
       displayName={displayName}
       canModerate={canModerateActiveServer}
       onTogglePin={canPinHere ? togglePin : null}
+      onCreatePoll={() => setPlanDialog({ kind: 'poll', busy: false, error: null })}
+      onCreateEvent={() => setPlanDialog({ kind: 'event', busy: false, error: null })}
+      onVotePoll={votePoll}
+      onClosePoll={closePoll}
+      onRsvpEvent={rsvpEvent}
       hasMoreHistory={hasMoreHistory}
       isLoadingOlder={isLoadingOlder}
       onLoadOlder={handleLoadOlderMessages}
@@ -3825,6 +3894,8 @@ function App() {
                 ? { ready: false, progress: updateProgress }
                 : null
           }
+          events={upcomingEvents}
+          onOpenEvent={(event) => jumpToMessage(event)}
           home={
             homeOpen
               ? {
@@ -4111,6 +4182,13 @@ function App() {
           onDelete={handleDeleteChannel}
           onClose={() => setEditChannelDialog(null)}
         />
+      )}
+
+      {planDialog?.kind === 'poll' && (
+        <PollDialog busy={planDialog.busy} error={planDialog.error} onCreate={createPlan} onClose={() => setPlanDialog(null)} />
+      )}
+      {planDialog?.kind === 'event' && (
+        <EventDialog busy={planDialog.busy} error={planDialog.error} onCreate={createPlan} onClose={() => setPlanDialog(null)} />
       )}
 
       {customStatusDialog && (

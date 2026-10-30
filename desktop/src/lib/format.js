@@ -1,6 +1,28 @@
 // Görüntülemek için biçimlendirme: tuş adları, mesaj saati ve günü, medya hataları,
 // sunucu simgesindeki harfler.
 
+// Etkinlik zamanı: "Cumartesi 2 Kasım 21:00".
+export function formatEventTime(date) {
+  return new Date(date).toLocaleString('tr-TR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// Şimdiye göre: "yarın", "3 gün sonra", "2 saat sonra", "10 dakika önce".
+export function formatRelative(date, now = new Date()) {
+  const diff = new Date(date).getTime() - now.getTime()
+  const rtf = new Intl.RelativeTimeFormat('tr', { numeric: 'auto' })
+  const minutes = Math.round(diff / 60_000)
+  if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
+  const hours = Math.round(diff / 3_600_000)
+  if (Math.abs(hours) < 24) return rtf.format(hours, 'hour')
+  return rtf.format(Math.round(diff / 86_400_000), 'day')
+}
+
 // Bir ada yönelme eki: "Ece" -> "Ece'ye", "Mert" -> "Mert'e", "Bora" ->
 // "Bora'ya" (son ünlüye göre e/a, ünlüyle bitiyorsa araya y).
 export function toDative(name) {

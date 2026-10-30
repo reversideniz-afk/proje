@@ -32,6 +32,11 @@ export function ChatPanel({
   onTyping,
   onPhotoFile,
   isSendingPhoto,
+  onCreatePoll,
+  onCreateEvent,
+  onVotePoll,
+  onClosePoll,
+  onRsvpEvent,
   onReact,
   onEdit,
   onDelete,
@@ -85,6 +90,9 @@ export function ChatPanel({
           displayName={displayName}
           canModerate={canModerate}
           onTogglePin={onTogglePin}
+          onVotePoll={onVotePoll}
+          onClosePoll={onClosePoll}
+          onRsvpEvent={onRsvpEvent}
           onReact={onReact}
           onEdit={onEdit}
           onDelete={onDelete}
@@ -121,6 +129,8 @@ export function ChatPanel({
         onTyping={onTyping}
         onPhotoFile={onPhotoFile}
         isSendingPhoto={isSendingPhoto}
+        onCreatePoll={onCreatePoll}
+        onCreateEvent={onCreateEvent}
       />
 
       {dragging && (

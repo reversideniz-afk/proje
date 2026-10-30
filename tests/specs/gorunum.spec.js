@@ -272,4 +272,30 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await mert.page.getByRole('button', { name: 'Ses efektleri' }).click()
     await shot(mert, testInfo, '37-ses-efektleri')
   })
+
+  test('anket ve etkinlik kartları, yaklaşan etkinlikler', async ({ disco }, testInfo) => {
+    const ece = await disco.client('Ece')
+    const bora = await disco.client('Bora')
+    for (const client of [ece, bora]) await client.joinChannel(disco.serverId, disco.channels.genel)
+    const poll = await ece.emitAck('create-poll', {
+      question: 'Cumartesi ne oynayalım?',
+      options: ['Valorant', 'CS2', 'League of Legends'],
+    })
+    await ece.emitAck('vote-poll', { messageId: poll.messageId, optionIndex: 0 })
+    await bora.emitAck('vote-poll', { messageId: poll.messageId, optionIndex: 0 })
+    const startsAt = new Date(Date.now() + 2 * 86_400_000)
+    startsAt.setHours(21, 0, 0, 0)
+    const event = await ece.emitAck('create-event', {
+      title: 'Valorant turnuvası',
+      startsAt: startsAt.toISOString(),
+      description: '5v5, kaybeden takım pizzaları ısmarlar.',
+    })
+    await bora.emitAck('rsvp-event', { messageId: event.messageId, choice: 'maybe' })
+
+    const mert = await disco.user('Mert')
+    await mert.openChannel('genel')
+    await mert.page.getByRole('group', { name: 'Anket: Cumartesi ne oynayalım?' }).getByRole('button', { name: /CS2/ }).click()
+    await expect(mert.page.getByRole('group', { name: 'Anket: Cumartesi ne oynayalım?' })).toContainText('3 kişi oy verdi')
+    await shot(mert, testInfo, '38-anket-etkinlik')
+  })
 })

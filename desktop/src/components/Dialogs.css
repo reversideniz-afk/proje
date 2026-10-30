@@ -268,3 +268,18 @@
 .dialog-actions-start {
   margin-right: auto;
 }
+
+/* Anket penceresinde seçenek satırları. */
+.poll-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.poll-dialog-option .input {
+  flex: 1;
+}
+
+.poll-dialog-add {
+  justify-self: start;
+}

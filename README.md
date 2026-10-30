@@ -23,7 +23,7 @@ server/
   socket/          connection (el sıkışma), context (bağlantı başına durum: ctx) ve olay
                    grupları: account, servers, channels, voice, admin, roles (roller ve kanal
                    düzenleme), presence (durum, özel durum, boşta, oyun), friends (arkadaşlık
-                   ve özel mesaj), messages (sabitleme ve arama)
+                   ve özel mesaj), messages (sabitleme ve arama), plans (anket ve etkinlik)
 desktop/
   electron/        ana süreç (main.cjs: pencere, sistem tepsisi, güncelleme), preload köprüsü,
                    push-to-talk.cjs (global bas-konuş), activity.cjs (oynanan oyun)
@@ -117,6 +117,13 @@ Ses efektleri paneli: seste kontrollerdeki düğmeden alkış, davul, korna gibi
 iletiyor (`play-sound`, kişi başı 1,5 saniyede bir). Sağırlaştırılmışken ya da Ayarlar > Ses ve
 görüntü'den kapatılınca sadece kimin çaldığı görünüyor.
 
+Anket ve etkinlik: yazma alanındaki "+" menüsünden. Anket (soru, 2-6 seçenek, tek ya da çok
+seçim) ve etkinlik (başlık, tarih, açıklama) kanala özel bir mesaj olarak gidiyor
+(`Message.poll` / `Message.event`, metni başlığı; arama ve bildirimler onunla çalışıyor). Oy
+ve katılım (katılıyorum, belki) herkeste anında güncelleniyor; anketi açan bitirebiliyor.
+Sunucunun yaklaşan etkinlikleri kanal listesinin üstünde; katılıyorum ya da belki diyene
+başlarken (uygulama açıksa) ses ve bildirimle hatırlatılıyor (`socket/plans.js`).
+
 Okunmamışlar kalıcı: sunucu her kanal için kişinin en son ne zaman okuduğunu tutuyor
 (`ChannelMember.lastReadAt`; istemci kanal açık ve pencere öndeyken bildiriyor). Giriş
 yapan bağlantı erişebildiği bütün kanalların bildirim odalarına giriyor; başka kanaldaki
@@ -200,7 +207,7 @@ Dosyalar:
   ve ses işleme ayarları, ekran paylaşımı kalitesi ve yayını büyütme, sunucu rolleri (erişim,
   yetkiler, arayüz), durum ve etkinlik (rahatsız etmeyin, görünmez, özel durum, kendiliğinden
   boşta), arkadaşlık ve özel mesajlar (istek, konuşma, erişim, arama, arayüz), sabitleme ve
-  mesajlarda arama, ses efektleri. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
+  mesajlarda arama, ses efektleri, anket ve etkinlik. Hassasiyet testleri mikrofonu bilinen seviyede sürekli bir tonla
   değiştiriyor (`useSyntheticMic`) ve karşı tarafın hoparlöründen ölçüyor.
 - `specs/gorunum.spec.js` — ana ekranların masaüstü ve telefon ekran görüntüleri; rapora
   ekleniyor (`npm run test:gorunum`, sonra `npm run report`).

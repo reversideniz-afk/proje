@@ -2,7 +2,7 @@
 // kanal oluştur, onay, güvenlik uyarısı, kişi ses seviyesi, ekran seçimi,
 // fotoğraf büyütme.
 import { useEffect, useId, useRef, useState } from 'react'
-import { Check, Copy, MessageSquare, Monitor, RotateCcw, ShieldAlert } from 'lucide-react'
+import { Check, Copy, MessageSquare, Monitor, Plus, RotateCcw, ShieldAlert, X } from 'lucide-react'
 import { Dialog } from './Dialog.jsx'
 import { Toggle } from './Toggle.jsx'
 import { serverInitials } from '../lib/format.js'
@@ -479,6 +479,150 @@ export function PhotoLightbox({ src, onClose }) {
     <div className="photo-lightbox" role="dialog" aria-label="Fotoğraf" onClick={onClose}>
       <img src={src} alt="Paylaşılan fotoğraf" />
     </div>
+  )
+}
+
+// Anket oluşturma: soru, 2-6 seçenek, birden fazla seçilebilsin mi.
+export function PollDialog({ busy, error, onCreate, onClose }) {
+  const [question, setQuestion] = useState('')
+  const [options, setOptions] = useState(['', ''])
+  const [multiple, setMultiple] = useState(false)
+  const filled = options.map((o) => o.trim()).filter(Boolean)
+  return (
+    <Dialog title="Anket oluştur" onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onCreate({ question: question.trim(), options: filled, multiple })
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="poll-question">
+            Soru
+          </label>
+          <input
+            id="poll-question"
+            className="input"
+            maxLength={200}
+            placeholder="Ör. Cumartesi ne oynayalım?"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="field">
+          <span className="field-label">Seçenekler</span>
+          {options.map((option, index) => (
+            <div key={index} className="poll-dialog-option">
+              <input
+                className="input"
+                maxLength={80}
+                aria-label={`Seçenek ${index + 1}`}
+                value={option}
+                onChange={(e) => setOptions((prev) => prev.map((o, i) => (i === index ? e.target.value : o)))}
+              />
+              {options.length > 2 && (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setOptions((prev) => prev.filter((_, i) => i !== index))}
+                  aria-label={`Seçenek ${index + 1}: kaldır`}
+                >
+                  <X className="icon" />
+                </button>
+              )}
+            </div>
+          ))}
+          {options.length < 6 && (
+            <button type="button" className="btn btn--ghost btn--small poll-dialog-add" onClick={() => setOptions((prev) => [...prev, ''])}>
+              <Plus className="icon" />
+              Seçenek ekle
+            </button>
+          )}
+        </div>
+        <Toggle label="Birden fazla seçilebilsin" checked={multiple} onChange={setMultiple} />
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !question.trim() || filled.length < 2}>
+            Anketi gönder
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
+// Etkinlik planlama: başlık, tarih ve saat, açıklama.
+export function EventDialog({ busy, error, onCreate, onClose }) {
+  const [title, setTitle] = useState('')
+  const [when, setWhen] = useState('')
+  const [description, setDescription] = useState('')
+  return (
+    <Dialog title="Etkinlik planla" onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onCreate({ title: title.trim(), startsAt: new Date(when).toISOString(), description: description.trim() })
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="event-title">
+            Ne yapılacak
+          </label>
+          <input
+            id="event-title"
+            className="input"
+            maxLength={100}
+            placeholder="Ör. Valorant turnuvası"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="event-when">
+            Ne zaman
+          </label>
+          <input id="event-when" className="input" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="event-description">
+            Açıklama (isteğe bağlı)
+          </label>
+          <textarea
+            id="event-description"
+            className="input"
+            rows={3}
+            maxLength={500}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <p className="field-hint">Katılıyorum ya da belki diyenlere başlarken hatırlatma gider.</p>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !title.trim() || !when}>
+            Etkinliği paylaş
+          </button>
+        </div>
+      </form>
+    </Dialog>
   )
 }
 
