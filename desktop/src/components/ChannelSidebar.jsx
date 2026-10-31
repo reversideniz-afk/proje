@@ -27,6 +27,7 @@ import { Avatar } from './Avatar.jsx'
 import { useDismiss } from '../lib/useDismiss.js'
 import { formatEventTime, formatKeyCode } from '../lib/format.js'
 import { STATUSES, presenceLine, statusLabel } from '../lib/presence.js'
+import { IS_DESKTOP_APP } from '../lib/config.js'
 
 // Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
 function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServerSettings, onAddServer, onClose }) {
@@ -492,7 +493,7 @@ export function ChannelSidebar({
           {update.ready ? (
             <button type="button" className="update-banner-button" onClick={update.onInstall}>
               <Download className="icon" />
-              Güncelleme hazır, yeniden başlat
+              {IS_DESKTOP_APP ? 'Güncelleme hazır, yeniden başlat' : 'Güncelleme hazır, yenile'}
             </button>
           ) : (
             <span className="update-banner-progress">

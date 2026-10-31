@@ -15,8 +15,19 @@ const { pickVoiceState } = require("../lib/validate");
 // sürümler sese katılırken channelId göndermiyor; onları sessizce bozuk
 // bir sese sokmak yerine sohbette güncellemelerini söylüyoruz (eski
 // istemci yanıt beklemiyor, sistem mesajlarını sohbette gösteriyor).
-const LEGACY_VOICE_MESSAGE =
-  "Sesli sohbet için Disco'yu güncellemen gerekiyor. Sol alttaki ⚙️ Ayarlar'dan \"Güncellemeleri kontrol et\"e bas, güncelleme inince \"Yeniden başlat\"a tıkla.";
+// Masaüstü uygulaması dosyadan açıldığı için web adresinden gelmiyor; web
+// ve telefondaki eski sürüm ise önbellekte duran kopya, yeniden açınca
+// yenisi geliyor.
+const LEGACY_VOICE_MESSAGES = {
+  desktop:
+    "Sesli sohbet için Disco'yu güncellemen gerekiyor. Sol alttaki ⚙️ Ayarlar'dan \"Güncellemeleri kontrol et\"e bas, güncelleme inince \"Yeniden başlat\"a tıkla.",
+  web: "Sesli sohbet için Disco'nun yeni sürümü gerekiyor. Uygulamayı ya da tarayıcı sekmesini tamamen kapatıp yeniden aç; yeni sürüm kendiliğinden yüklenir.",
+};
+
+function legacyVoiceMessage(socket) {
+  const fromWeb = /^https?:\/\//.test(socket.handshake.headers.origin || "");
+  return LEGACY_VOICE_MESSAGES[fromWeb ? "web" : "desktop"];
+}
 
 module.exports = function registerVoiceHandlers(socket, ctx) {
   // ---- Sese katılma ----
@@ -26,8 +37,9 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
   socket.on("join-voice", async ({ token, channelId, state } = {}, ack) => {
     const reply = typeof ack === "function" ? ack : () => {};
     if (typeof channelId !== "string") {
-      socket.emit("new-message", { username: "Sistem", text: LEGACY_VOICE_MESSAGE, createdAt: new Date() });
-      reply({ success: false, message: LEGACY_VOICE_MESSAGE });
+      const message = legacyVoiceMessage(socket);
+      socket.emit("new-message", { username: "Sistem", text: message, createdAt: new Date() });
+      reply({ success: false, message });
       return;
     }
     const username = await ctx.authenticate(token);

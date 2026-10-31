@@ -54,9 +54,20 @@ import {
   playSoundEffect,
 } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
+import { startWebUpdates } from './lib/webUpdate.js'
 
 const TYPING_HEARTBEAT_MS = 4000
 const TYPING_EXPIRY_MS = 6000
+// Web'de yeni sürüm sayfa açıldıktan bu kadar süre içinde gelirse (yani
+// kişi uygulamayı az önce açtıysa) beklemeden yenileniyor.
+const JUST_OPENED_MS = 30_000
+
+// Hazır güncellemeyi kur: masaüstünde uygulama yeniden başlıyor, web'de
+// sayfa yeni sürümle yenileniyor.
+function installUpdate() {
+  if (window.electronAPI) window.electronAPI.installUpdate()
+  else window.location.reload()
+}
 
 function App() {
   // YENİ: Arayüz yakınlaştırma — tüm pencereyi büyütüp küçültüyor.
@@ -369,6 +380,17 @@ function App() {
   useEffect(() => {
     voiceChannelRef.current = voiceChannel
   }, [voiceChannel])
+
+  // Web/PWA'da yeni sürüm devreye girince (bkz. lib/webUpdate.js): uygulama
+  // az önce açıldıysa ve seste değilsen sayfa hemen yenileniyor; yoksa
+  // masaüstündeki gibi "güncelleme hazır" düğmesi çıkıyor, seste kimse
+  // kopmuyor.
+  useEffect(() => {
+    startWebUpdates(() => {
+      if (!voiceChannelRef.current && performance.now() < JUST_OPENED_MS) window.location.reload()
+      else setUpdateReady(true)
+    })
+  }, [])
   const [connectionError, setConnectionError] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState('connected')
   // Kısa süreli bilgi şeridi (ör. "Bu sunucudan çıkarıldın.") — 8 saniyede
@@ -3889,7 +3911,7 @@ function App() {
           }}
           update={
             updateReady
-              ? { ready: true, onInstall: () => window.electronAPI?.installUpdate() }
+              ? { ready: true, onInstall: installUpdate }
               : updateInfo && updateProgress !== null
                 ? { ready: false, progress: updateProgress }
                 : null
@@ -4067,7 +4089,7 @@ function App() {
             ready: updateReady,
             version: updateInfo?.version,
             message: updateCheckMessage,
-            onInstall: () => window.electronAPI?.installUpdate(),
+            onInstall: installUpdate,
             onCheck: () => {
               setUpdateCheckMessage('Kontrol ediliyor…')
               window.electronAPI?.checkForUpdates()

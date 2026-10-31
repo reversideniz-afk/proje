@@ -26,12 +26,13 @@ export default defineConfig({
       },
     },
     // YENİ: Web/PWA sürümü için — "ana ekrana ekle" ve temel çevrimdışı
-    // önbellekleme desteği. NOT: Electron paketlemesini ETKİLEMİYOR —
-    // registerType:'autoUpdate' ile eklenen kayıt kodu zaten
-    // "serviceWorker" var mı diye kontrol ediyor, file:// üzerinden
-    // (Electron) çalışırken servis çalışanı kaydı sessizce atlanıyor.
+    // önbellekleme desteği. Kayıt ve güncelleme src/lib/webUpdate.js'te;
+    // masaüstü uygulamasında (Electron) kayıt atlanıyor. autoUpdate: yeni
+    // service worker beklemeden devreye giriyor, sayfayı ne zaman
+    // yenileyeceğine uygulama karar veriyor.
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false,
       manifest: {
         name: 'Disco',
         short_name: 'Disco',
@@ -56,6 +57,11 @@ export default defineConfig({
       // olurdu. Service worker sadece UYGULAMA KABUĞUNU (HTML/CSS/JS)
       // önbelleğe alıp "ana ekrana ekle" kriterini karşılıyor.
       workbox: {
+        // Yeni service worker beklemeden devreye girip açık sayfaları
+        // devralıyor. Eklenti bunları injectRegister kapalıyken kendisi
+        // açmıyor; kapalı kalırsa yeni sürüm sonsuza dek bekliyordu.
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
         navigateFallbackDenylist: [/^\/socket\.io\//],
       },

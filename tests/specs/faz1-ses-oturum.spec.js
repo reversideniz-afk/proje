@@ -89,10 +89,19 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
 
     // 1.1.0 sese channelId'siz giriyordu; bağlantı düzeni yeni istemcilerle
     // anlaşamadığı için sessizce bozuk bir sese girmesin.
+    // Masaüstü uygulaması dosyadan açılıyor (web adresi yok): Ayarlar'dan
+    // güncellemesi söyleniyor.
     const notice = eski.nextEvent('new-message')
     const response = await eski.emitAck('join-voice', { token: eski.token })
     expect(response.success).toBe(false)
-    expect(await notice).toMatchObject({ username: 'Sistem', text: expect.stringContaining('güncelle') })
+    expect(await notice).toMatchObject({ username: 'Sistem', text: expect.stringContaining('Güncellemeleri kontrol et') })
+
+    // Web ve telefonda eski sürüm önbellekteki kopya: yeniden açması yetiyor.
+    const eskiWeb = await disco.client('Bora', { headers: { origin: 'http://127.0.0.1:5173' } })
+    await eskiWeb.joinChannel(disco.serverId, disco.channels.genel)
+    const webNotice = eskiWeb.nextEvent('new-message')
+    expect((await eskiWeb.emitAck('join-voice', { token: eskiWeb.token })).success).toBe(false)
+    expect((await webNotice).text).toContain('kapatıp yeniden aç')
 
     const existing = ece.nextEvent('existing-voice-users')
     await ece.emitAck('join-voice', { token: ece.token, channelId: disco.channels.genel })
