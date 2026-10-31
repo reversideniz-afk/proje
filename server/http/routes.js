@@ -2,7 +2,8 @@
 // fotoğraf paylaşımı API'si.
 const express = require("express");
 const path = require("path");
-const { Channel, User } = require("../db");
+const mongoose = require("mongoose");
+const { Channel, User, Server: ServerModel } = require("../db");
 const { AVATAR_TYPES, avatarVersion } = require("../lib/avatars");
 const { createRateLimiter } = require("../lib/limits");
 const { app } = require("../lib/realtime");
@@ -111,23 +112,40 @@ app.post(
 // önbellekte kalabiliyor; resim değişince istemciler yeni sürümlü adresi
 // alıyor. Avatarlar sohbette herkese görünen bilgiler, giriş istemiyor
 // (<img> etiketi başlıkta anahtar gönderemiyor).
+// Kayıtlı bir data: adresindeki resmi gönderir (avatar ve sunucu simgesi).
+function sendStoredImage(req, res, dataUri, updatedAt) {
+  const match = /^data:([a-z/+.-]+);base64,(.+)$/.exec(dataUri || "");
+  if (!match || !AVATAR_TYPES.includes(match[1])) return res.status(404).end();
+  res.set("Content-Type", match[1]);
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.set(
+    "Cache-Control",
+    req.query.v === avatarVersion(updatedAt) ? "public, max-age=31536000, immutable" : "no-cache"
+  );
+  res.send(Buffer.from(match[2], "base64"));
+}
+
 app.get("/api/avatars/:username", async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username })
       .select("avatarData avatarUpdatedAt")
       .lean();
-    const match = /^data:([a-z/+.-]+);base64,(.+)$/.exec(user?.avatarData || "");
-    if (!match || !AVATAR_TYPES.includes(match[1])) return res.status(404).end();
-    res.set("Content-Type", match[1]);
-    res.set("X-Content-Type-Options", "nosniff");
-    res.set("Content-Security-Policy", "default-src 'none'; sandbox");
-    res.set(
-      "Cache-Control",
-      req.query.v === avatarVersion(user.avatarUpdatedAt) ? "public, max-age=31536000, immutable" : "no-cache"
-    );
-    res.send(Buffer.from(match[2], "base64"));
+    sendStoredImage(req, res, user?.avatarData, user?.avatarUpdatedAt);
   } catch (err) {
     console.error("Avatar okunurken hata:", err.message);
+    res.status(500).end();
+  }
+});
+
+// Sunucu simgeleri: avatarlar gibi herkese açık ve sürümlü adresle.
+app.get("/api/server-icons/:serverId", async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.serverId)) return res.status(404).end();
+  try {
+    const server = await ServerModel.findById(req.params.serverId).select("iconData iconUpdatedAt").lean();
+    sendStoredImage(req, res, server?.iconData, server?.iconUpdatedAt);
+  } catch (err) {
+    console.error("Sunucu simgesi okunurken hata:", err.message);
     res.status(500).end();
   }
 });

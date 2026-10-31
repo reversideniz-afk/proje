@@ -32,8 +32,8 @@ import { Avatar } from './Avatar.jsx'
 import { ScreenQualityFields } from './Dialogs.jsx'
 import { Toggle } from './Toggle.jsx'
 import { ZoomControl } from './ZoomControl.jsx'
-import { IS_DESKTOP_APP, THEMES } from '../lib/config.js'
-import { formatKeyCode } from '../lib/format.js'
+import { IS_DESKTOP_APP, THEMES, assetUrl } from '../lib/config.js'
+import { formatKeyCode, serverInitials } from '../lib/format.js'
 import { describeInvite, inviteLink } from '../lib/invites.js'
 import { roleColorOf } from '../lib/roles.js'
 import './SettingsScreen.css'
@@ -137,6 +137,55 @@ function PasswordSection({ onChangePassword }) {
           </button>
         </div>
       </form>
+    </Section>
+  )
+}
+
+// Sunucu simgesi (sadece sahibi): şeritte baş harflerin yerine görünüyor.
+function ServerIconSection({ server }) {
+  const fileRef = useRef(null)
+  const [state, setState] = useState({ busy: false, error: null })
+
+  const apply = async (file) => {
+    setState({ busy: true, error: null })
+    const response = await server.onSetIcon(file)
+    setState({ busy: false, error: response?.success ? null : response?.message || 'Simge değiştirilemedi, tekrar dene.' })
+  }
+
+  return (
+    <Section title="Sunucu simgesi" description="Kare olmayan resimler ortasından kırpılır.">
+      <div className="settings-profile">
+        <span className="settings-server-icon" aria-hidden="true">
+          {server.iconUrl ? <img src={assetUrl(server.iconUrl)} alt="" draggable="false" /> : serverInitials(server.name)}
+        </span>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file) apply(file)
+          }}
+        />
+        <div className="settings-row">
+          <button type="button" className="btn btn--secondary" onClick={() => fileRef.current?.click()} disabled={state.busy}>
+            <ImagePlus className="icon" />
+            {state.busy ? 'Yükleniyor…' : 'Simge yükle'}
+          </button>
+          {server.iconUrl && (
+            <button type="button" className="btn btn--ghost" onClick={() => apply(null)} disabled={state.busy}>
+              Simgeyi kaldır
+            </button>
+          )}
+        </div>
+      </div>
+      {state.error && (
+        <p className="form-error" role="alert">
+          {state.error}
+        </p>
+      )}
     </Section>
   )
 }
@@ -556,6 +605,7 @@ function ServerPage({ server }) {
   return (
     <>
       {permissions.isOwner && <ServerNameSection key={server.id} server={server} />}
+      {permissions.isOwner && <ServerIconSection server={server} />}
       {permissions.createInvites && (
       <Section title="Davetler" description="Davet bağlantısı oluştur; süreli ya da kullanım sayısı sınırlı olabilir.">
         <div className="settings-row">

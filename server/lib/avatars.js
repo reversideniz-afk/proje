@@ -42,4 +42,10 @@ async function avatarUrlOf(username) {
   return (await avatarUrlsFor([username])).get(username) || null;
 }
 
-module.exports = { AVATAR_TYPES, avatarVersion, avatarUrl, avatarUrlsFor, avatarUrlOf };
+// Sunucu simgesi de aynı şekilde sürümlü bir adresle veriliyor.
+function serverIconUrl(server) {
+  if (!server?.iconUpdatedAt) return null;
+  return `/api/server-icons/${server._id}?v=${avatarVersion(server.iconUpdatedAt)}`;
+}
+
+module.exports = { AVATAR_TYPES, avatarVersion, avatarUrl, avatarUrlsFor, avatarUrlOf, serverIconUrl };

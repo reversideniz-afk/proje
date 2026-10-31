@@ -56,6 +56,7 @@ import {
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
 import { startWebUpdates } from './lib/webUpdate.js'
 import { useSwipeDrawers } from './lib/useSwipeDrawers.js'
+import { squareImage } from './lib/images.js'
 
 const TYPING_HEARTBEAT_MS = 4000
 const TYPING_EXPIRY_MS = 6000
@@ -3309,20 +3310,8 @@ function App() {
     setAvatarUploadError(null)
     setIsUploadingAvatar(true)
 
-    const reader = new FileReader()
-    reader.onload = () => {
-      const img = new Image()
-      img.onload = () => {
-        const size = 256
-        const canvas = document.createElement('canvas')
-        canvas.width = size
-        canvas.height = size
-        const ctx = canvas.getContext('2d')
-        const scale = Math.max(size / img.width, size / img.height)
-        const drawWidth = img.width * scale
-        const drawHeight = img.height * scale
-        ctx.drawImage(img, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight)
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+    squareImage(file).then(
+      (dataUrl) => {
         socketRef.current?.emit('set-avatar', {
           token: sessionTokenRef.current,
           imageData: dataUrl,
@@ -3331,18 +3320,27 @@ function App() {
         // NOT: isUploadingAvatar burada değil, sunucudan 'avatar-saved'
         // gelince kapatılıyor — gerçekten kaydedildiğinden emin olalım diye.
         setTimeout(() => setIsUploadingAvatar(false), 8000) // yanıt hiç gelmezse takılı kalmasın
-      }
-      img.onerror = () => {
-        setAvatarUploadError('Resim okunamadı, tekrar dener misin?')
+      },
+      (err) => {
+        setAvatarUploadError(err.message)
         setIsUploadingAvatar(false)
       }
-      img.src = reader.result
+    )
+  }
+
+  // Sunucu simgesi (sahibi): profil fotoğrafı gibi kare küçük bir JPEG.
+  // file null ise simge kaldırılıyor. Sonuç { success, message } döner.
+  const setServerIcon = async (file) => {
+    const serverId = activeServerIdRef.current
+    if (!file) return emitRequest('set-server-icon', { serverId, imageData: null })
+    if (!file.type.startsWith('image/')) return { success: false, message: 'Sadece görsel dosyaları kullanılabilir.' }
+    if (file.size > MAX_PHOTO_BYTES) return { success: false, message: 'Resim çok büyük (en fazla 10 MB olabilir).' }
+    try {
+      const imageData = await squareImage(file)
+      return emitRequest('set-server-icon', { serverId, imageData, mimeType: 'image/jpeg' })
+    } catch (err) {
+      return { success: false, message: err.message }
     }
-    reader.onerror = () => {
-      setAvatarUploadError('Dosya okunamadı, tekrar dener misin?')
-      setIsUploadingAvatar(false)
-    }
-    reader.readAsDataURL(file)
   }
 
   // YENİ: Alganis rolü için üye/rol yönetimi — Ayarlar panelindeki
@@ -4149,7 +4147,9 @@ function App() {
               ? {
                   id: activeServerId,
                   name: activeServerName,
+                  iconUrl: activeServer?.iconUrl || null,
                   onRename: renameServer,
+                  onSetIcon: setServerIcon,
                   permissions: serverPermissions,
                   roles: serverRoles,
                   members: serverMembers,

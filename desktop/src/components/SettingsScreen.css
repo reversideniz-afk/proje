@@ -137,6 +137,26 @@
   background: var(--gece);
 }
 
+/* Sunucu simgesinin önizlemesi: şeritteki düğmenin büyüğü. */
+.settings-server-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--kabin);
+  color: var(--metin);
+  font: 600 18px/1 var(--font-display);
+}
+
+.settings-server-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .settings-profile-text {
   display: grid;
   gap: 2px;

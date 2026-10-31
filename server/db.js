@@ -181,6 +181,11 @@ const serverSchema = new mongoose.Schema({
   ownerUsername: { type: String, required: true },
   // Bu sunucuya katılmak için paylaşılan davet kodu/linki.
   inviteCode: { type: String, required: true, unique: true },
+  // Sunucu simgesi (küçük data: adresi, profil fotoğrafı gibi). Listelere
+  // sadece adresi gidiyor (bkz. lib/avatars.js serverIconUrl); simge
+  // yokken iconUpdatedAt de boş.
+  iconData: { type: String, default: null },
+  iconUpdatedAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 const Server = mongoose.models.Server || mongoose.model("Server", serverSchema);

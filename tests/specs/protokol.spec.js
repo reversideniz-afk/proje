@@ -143,7 +143,7 @@ test.describe('Protokol', { tag: '@temel' }, () => {
     const mert = await disco.client('Mert')
     const mine = await mert.emitAck('list-my-servers', { token: mert.token })
     expect(mine.servers).toEqual([
-      { id: disco.serverId, name: 'Test Sunucusu', isOwner: false, unread: false, mentions: 0 },
+      { id: disco.serverId, name: 'Test Sunucusu', isOwner: false, iconUrl: null, unread: false, mentions: 0 },
     ])
 
     expect((await mert.emitAck('get-server-invite', { token: mert.token, serverId: disco.serverId })).success).toBe(false)

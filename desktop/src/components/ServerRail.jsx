@@ -1,6 +1,7 @@
 // En soldaki sunucu şeridi: her sunucu bir simge, en altta "sunucu ekle".
 import { Plus } from 'lucide-react'
 import logoUrl from '../assets/logo.png'
+import { assetUrl } from '../lib/config.js'
 import { serverInitials } from '../lib/format.js'
 
 // activity: sunucu kimliği -> { unread, mentions } (okunmamış işareti ve
@@ -44,7 +45,11 @@ export function ServerRail({ servers, activeServerId, activity, homeActive, home
             aria-current={active ? 'true' : undefined}
             onClick={() => onSelect(server.id)}
           >
-            {serverInitials(server.name)}
+            {server.iconUrl ? (
+              <img className="server-rail-image" src={assetUrl(server.iconUrl)} alt="" draggable="false" />
+            ) : (
+              serverInitials(server.name)
+            )}
             {mentions > 0 && !active && (
               <span className="mention-badge server-rail-badge" aria-hidden="true">
                 {mentions > 99 ? '99+' : mentions}

@@ -4,6 +4,13 @@
 // Sunucu adresi vite.config.js'ten geliyor (varsayılan: Render).
 export const SERVER_URL = import.meta.env.VITE_SERVER_URL
 
+// Sunucu resimleri (avatar, sunucu simgesi) adresle veriyor ("/api/...");
+// eski oturumdan kalmış data: adresleri de olduğu gibi çalışıyor.
+export function assetUrl(url) {
+  if (!url) return null
+  return url.startsWith('/') ? `${SERVER_URL}${url}` : url
+}
+
 // YENİ: Mesaj tepkileri için hızlı seçim listesi.
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉']
 

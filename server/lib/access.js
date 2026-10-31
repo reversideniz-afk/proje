@@ -21,14 +21,16 @@ function isPlatformAdmin(userRoles) {
 
 // Kullanıcının erişebildiği TÜM sunucular — üye olduğu sunucular, ya da
 // platform adminse (Alganis) hepsi.
+// Simgenin kendisi (iconData) listelere gitmiyor, sadece adresi.
 async function getAccessibleServers(username, userRoles) {
   if (isPlatformAdmin(userRoles)) {
-    return ServerModel.find({}).sort({ createdAt: 1 }).lean();
+    return ServerModel.find({}).select("-iconData").sort({ createdAt: 1 }).lean();
   }
   const memberships = await ServerMember.find({ username }).select("serverId").lean();
   const serverIds = memberships.map((m) => m.serverId);
   if (serverIds.length === 0) return [];
   return ServerModel.find({ _id: { $in: serverIds } })
+    .select("-iconData")
     .sort({ createdAt: 1 })
     .lean();
 }

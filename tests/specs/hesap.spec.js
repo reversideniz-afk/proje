@@ -70,4 +70,46 @@ test.describe('Hesap ve sunucu ayarları', { tag: '@faz5' }, () => {
     expect(response).toMatchObject({ success: false, message: 'Bu işlemi yapma yetkin yok.' })
     await expect(rail.getByRole('button', { name: 'Cuma Ekibi' })).toBeVisible()
   })
+
+  test('sunucu simgesini sahibi yüklüyor, herkesin şeridinde görünüyor; kaldırınca baş harfler dönüyor', async ({ disco }) => {
+    const alganis = await disco.user('Alganis')
+    const mert = await disco.user('Mert')
+    await alganis.openChannel('genel')
+    await mert.openChannel('genel')
+
+    await openSettingsPage(alganis, 'Sunucu ayarları')
+    const settings = alganis.page.getByRole('dialog', { name: 'Ayarlar' })
+    await settings.locator('input[type="file"]').setInputFiles({ name: 'simge.png', mimeType: 'image/png', buffer: RED_PIXEL })
+
+    // Mert'in şeridinde baş harflerin yerinde simge: 256 piksellik kare.
+    const serverButton = mert.page.getByRole('navigation', { name: 'Sunucular' }).getByRole('button', { name: 'Test Sunucusu' })
+    const icon = serverButton.locator('img')
+    await expect(icon).toHaveAttribute('src', /\/api\/server-icons\//)
+    await expect.poll(() => icon.evaluate((img) => img.complete && img.naturalWidth)).toBe(256)
+    await expect(settings.locator('.settings-server-icon img')).toBeVisible()
+
+    await settings.getByRole('button', { name: 'Simgeyi kaldır' }).click()
+    await expect(icon).toHaveCount(0)
+    await expect(serverButton).toHaveText('TS')
+
+    // Sahip olmayan değiştiremiyor; sahibi de dış adres ya da resim olmayan
+    // bir şey koyamıyor.
+    const ece = await disco.client('Ece')
+    const icon64 = `data:image/png;base64,${RED_PIXEL.toString('base64')}`
+    expect(await ece.emitAck('set-server-icon', { serverId: disco.serverId, imageData: icon64, mimeType: 'image/png' })).toMatchObject({
+      success: false,
+      message: 'Bu işlemi yapma yetkin yok.',
+    })
+    const owner = await disco.client('Alganis')
+    for (const imageData of ['https://ornek.invalid/simge.png', 'data:image/svg+xml;base64,PHN2Zy8+']) {
+      const mimeType = imageData.includes('svg') ? 'image/svg+xml' : 'image/png'
+      expect((await owner.emitAck('set-server-icon', { serverId: disco.serverId, imageData, mimeType })).success).toBe(false)
+    }
+  })
 })
+
+// 1x1 kırmızı PNG.
+const RED_PIXEL = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+  'base64'
+)

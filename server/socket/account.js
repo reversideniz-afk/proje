@@ -2,7 +2,7 @@
 const bcrypt = require("bcryptjs");
 const { User, BannedIp } = require("../db");
 const { getAccessibleServers } = require("../lib/access");
-const { AVATAR_TYPES, avatarUrl } = require("../lib/avatars");
+const { AVATAR_TYPES, avatarUrl, serverIconUrl } = require("../lib/avatars");
 const { activeCustomStatus } = require("../lib/presence");
 const { unreadByServer } = require("../lib/unread");
 const { buildIceServers } = require("../lib/ice");
@@ -91,6 +91,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === user.username,
+          iconUrl: serverIconUrl(s),
           ...unread.get(s._id.toString()),
         })),
         avatarData: user.avatarData || null,
@@ -152,6 +153,7 @@ module.exports = function registerAccountHandlers(socket, ctx) {
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === user.username,
+          iconUrl: serverIconUrl(s),
           ...unread.get(s._id.toString()),
         })),
         avatarData: user.avatarData || null,

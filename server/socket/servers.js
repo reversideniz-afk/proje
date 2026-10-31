@@ -11,11 +11,12 @@ const {
   channelViewer,
   canViewChannel,
 } = require("../lib/access");
-const { avatarUrlsFor } = require("../lib/avatars");
+const { AVATAR_TYPES, avatarUrlsFor, serverIconUrl } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { refreshUserServerRooms, recheckUserAccess, buildServerPresence } = require("../lib/rooms");
 const { serverRoomName } = require("../lib/state");
 const { unreadByChannel, unreadByServer } = require("../lib/unread");
+const { isValidImageDataUri } = require("../lib/validate");
 const {
   EXPIRY_HOURS,
   MAX_USES,
@@ -132,6 +133,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
           id: server._id.toString(),
           name: server.name,
           isOwner: server.ownerUsername === username,
+          iconUrl: serverIconUrl(server),
         },
       });
     } catch (err) {
@@ -240,6 +242,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
           id: s._id.toString(),
           name: s.name,
           isOwner: s.ownerUsername === username,
+          iconUrl: serverIconUrl(s),
           ...unread.get(s._id.toString()),
         })),
       });
@@ -372,6 +375,30 @@ module.exports = function registerServerHandlers(socket, ctx) {
       reply({ success: true, name: trimmedName });
     } catch (err) {
       console.error("Sunucu adı değiştirilirken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- Sunucu simgesi (sahibi): profil fotoğrafıyla aynı kurallar (sadece
+  // raster resim, data: adresi, ~500 KB). imageData null ise kaldırılıyor.
+  socket.on("set-server-icon", async ({ serverId, imageData, mimeType } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    const removing = imageData === null;
+    if (!removing && (!isValidImageDataUri(imageData, mimeType) || !AVATAR_TYPES.includes(mimeType))) {
+      return reply({ success: false, message: "Sadece PNG, JPEG, GIF ya da WebP resim kullanılabilir." });
+    }
+    if (!removing && imageData.length > 700_000) {
+      return reply({ success: false, message: "Simge çok büyük (en fazla ~500 KB)." });
+    }
+    try {
+      const { server, error } = await requireServerPermission(ctx.username, serverId, "isOwner");
+      if (error) return reply({ success: false, message: error });
+      const update = removing ? { iconData: null, iconUpdatedAt: null } : { iconData: imageData, iconUpdatedAt: new Date() };
+      await ServerModel.updateOne({ _id: server._id }, update);
+      io.to(serverRoomName(server._id.toString())).emit("server-list-changed");
+      reply({ success: true, iconUrl: serverIconUrl({ _id: server._id, ...update }) });
+    } catch (err) {
+      console.error("Sunucu simgesi kaydedilirken hata:", err.message);
       reply({ success: false, message: "Sunucu hatası, tekrar dene." });
     }
   });
