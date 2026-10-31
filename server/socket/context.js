@@ -145,6 +145,13 @@ function createConnectionContext(socket) {
     socket.data.username = null;
   };
 
+  // Oturum sunucu tarafından kapatıldı (ör. şifre başka cihazda değişti):
+  // istemci giriş ekranına dönüyor.
+  socket.data.endSession = async (message) => {
+    socket.emit("session-ended", { message });
+    await ctx.unbindUser();
+  };
+
   // Hız sınırı (bkz. RATE_LIMITS): sınırı aşan olay işlenmeden atılıyor.
   const rateLimit = createRateLimiter();
 

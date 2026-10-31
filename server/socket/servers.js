@@ -357,6 +357,25 @@ module.exports = function registerServerHandlers(socket, ctx) {
     }
   });
 
+  // ---- Sunucunun adını değiştirme (sahibi): üyelerin listesi yenileniyor.
+  socket.on("rename-server", async ({ serverId, name } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    if (!trimmedName || trimmedName.length > 50) {
+      return reply({ success: false, message: "Sunucu adı 1-50 karakter olmalı." });
+    }
+    try {
+      const { server, error } = await requireServerPermission(ctx.username, serverId, "isOwner");
+      if (error) return reply({ success: false, message: error });
+      await ServerModel.updateOne({ _id: server._id }, { name: trimmedName });
+      io.to(serverRoomName(server._id.toString())).emit("server-list-changed");
+      reply({ success: true, name: trimmedName });
+    } catch (err) {
+      console.error("Sunucu adı değiştirilirken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
   // ---- YENİ: Bir sunucunun üye listesi — sadece sahibi ya da platform
   // admini görebilir (bugünkü platform-geneli "Üye Yönetimi"nden AYRI,
   // sadece BU sunucuya özel). ----

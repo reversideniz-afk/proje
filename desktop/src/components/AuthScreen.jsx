@@ -39,7 +39,7 @@ export function RestoringScreen() {
   )
 }
 
-function PasswordField({ id, label, value, onChange, autoComplete, showPassword, onToggleShow, hint }) {
+export function PasswordField({ id, label, value, onChange, autoComplete, showPassword, onToggleShow, hint }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>

@@ -9,8 +9,8 @@ const { buildIceServers } = require("../lib/ice");
 const { MAX_LOGIN_ATTEMPTS, LOGIN_LOCK_MS, MAX_REGISTER_ATTEMPTS_PER_WINDOW, REGISTER_ATTEMPT_WINDOW_MS, registerAttemptsByIp, bannedIpSet, getClientIp, isLoginBlockedForIp, recordLoginFailure } = require("../lib/limits");
 const { io } = require("../lib/realtime");
 const { notifyAdmins, buildMemberList, announceUserPresence } = require("../lib/rooms");
-const { sessionCache, createSession, findSession, refreshSession, deleteSession, resolveUsername } = require("../lib/sessions");
-const { voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
+const { sessionCache, createSession, findSession, refreshSession, deleteSession, deleteOtherSessions, resolveUsername } = require("../lib/sessions");
+const { socketsByUsername, voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
 const { findUsersByName, isReservedUsername } = require("../lib/users");
 const { isValidImageDataUri } = require("../lib/validate");
 
@@ -179,6 +179,45 @@ module.exports = function registerAccountHandlers(socket, ctx) {
     } catch (err) {
       console.error("Oturum silinirken hata:", err.message);
       reply({ success: false });
+    }
+  });
+
+  // ---- Şifre değiştirme: mevcut şifre doğrulanıyor. Değişince kişinin
+  // diğer bütün oturumları kapanıyor (şifre çalındıysa eski oturumlar da
+  // gitsin); token ile gelen bu cihazın oturumu kalıyor. Yanlış mevcut
+  // şifre, girişteki gibi bu bağlantının deneme sayacına yazılıyor.
+  socket.on("change-password", async ({ token, currentPassword, newPassword } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    if (!ctx.username) return reply({ success: false, message: "Önce giriş yapman gerekiyor." });
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string" || !currentPassword) {
+      return reply({ success: false, message: "Eksik bilgi." });
+    }
+    if (newPassword.length < 6 || newPassword.length > 200) {
+      return reply({ success: false, message: "Yeni şifre en az 6 karakter olmalı." });
+    }
+    const ip = getClientIp(socket);
+    if (isLoginBlockedForIp(ip)) {
+      return reply({ success: false, message: "Bu bağlantıdan çok fazla yanlış deneme yapıldı, biraz sonra tekrar dene." });
+    }
+    try {
+      const user = await User.findOne({ username: ctx.username });
+      if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+        recordLoginFailure(ip);
+        return reply({ success: false, message: "Mevcut şifre yanlış." });
+      }
+      user.passwordHash = await bcrypt.hash(newPassword, 10);
+      await user.save();
+
+      const keepToken = typeof token === "string" && (await resolveUsername(token)) === ctx.username ? token : null;
+      await deleteOtherSessions(ctx.username, keepToken);
+      const message = "Şifren başka bir cihazda değiştirildi. Yeni şifrenle tekrar giriş yap.";
+      for (const other of [...(socketsByUsername.get(ctx.username) || [])]) {
+        if (other !== socket) await other.data.endSession?.(message);
+      }
+      reply({ success: true });
+    } catch (err) {
+      console.error("Şifre değiştirilirken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
     }
   });
 

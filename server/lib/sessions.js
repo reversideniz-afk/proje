@@ -82,6 +82,15 @@ async function deleteSession(token) {
   await Session.deleteMany({ token: { $in: [hashToken(token), token] } });
 }
 
+// Kişinin keepToken dışındaki bütün oturumlarını siler (şifre değişince).
+async function deleteOtherSessions(username, keepToken) {
+  for (const [token, cached] of sessionCache) {
+    if (cached.username === username && token !== keepToken) sessionCache.delete(token);
+  }
+  const keep = keepToken ? [hashToken(keepToken), keepToken] : [];
+  await Session.deleteMany({ username, token: { $nin: keep } });
+}
+
 async function resolveUsername(token) {
   // YENİ (SADECE TEST İÇİN): ALLOW_TEST_TOKENS Render'da HİÇBİR ZAMAN
   // ayarlanmayacak — canlı sunucuda etkisiz.
@@ -119,4 +128,4 @@ async function resolveUsername(token) {
   return cached.username;
 }
 
-module.exports = { REMEMBER_ME_DURATION_MS, SESSION_DURATION_MS, SESSION_REFRESH_INTERVAL_MS, sessionCache, hashToken, sessionDuration, createSession, findSession, refreshSession, deleteSession, resolveUsername };
+module.exports = { REMEMBER_ME_DURATION_MS, SESSION_DURATION_MS, SESSION_REFRESH_INTERVAL_MS, sessionCache, hashToken, sessionDuration, createSession, findSession, refreshSession, deleteSession, deleteOtherSessions, resolveUsername };

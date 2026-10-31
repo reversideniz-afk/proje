@@ -120,6 +120,13 @@
   gap: 12px;
 }
 
+/* Şifre ve sunucu adı gibi kısa formlar. */
+.settings-form {
+  display: grid;
+  gap: 14px;
+  max-width: 380px;
+}
+
 .settings-profile {
   --ring-bg: var(--sahne);
   display: flex;

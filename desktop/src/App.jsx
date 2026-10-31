@@ -409,6 +409,8 @@ function App() {
   const refreshServerMembersRef = useRef(null)
   // Aynısı, sağdaki üye listesi (kim çevrimiçi, kim seste) için.
   const refreshPresenceRef = useRef(null)
+  // Oturum sunucu tarafından kapatıldı (şifre başka cihazda değişti): çıkış.
+  const endSessionRef = useRef(null)
 
   // YENİ: üye listesi (Discord tarzı, sağda) — online (metin kanalına
   // bağlı herkes, seste olanlar ayrıca işaretli) + offline (daha önce
@@ -1859,6 +1861,12 @@ function App() {
       refreshServerDataRef.current?.()
     })
 
+    // Şifre başka bir cihazda değiştirildi: bu cihazdaki oturum kapandı,
+    // giriş ekranında nedeni yazıyor.
+    socket.on('session-ended', ({ message } = {}) => {
+      endSessionRef.current?.(message)
+    })
+
     // Sunucudaki biri kanal ekledi ya da sunucuya biri katıldı/çıkarıldı:
     // listeler anında yenilensin (H16; eskiden sunucu değiştirip geri
     // gelene kadar görünmüyordu).
@@ -2905,6 +2913,19 @@ function App() {
     [emitRequest, fetchServerInvites]
   )
 
+  // Sunucunun adı (sahibi): sunucu bütün üyelere listeyi yenilet diyor.
+  const renameServer = useCallback(
+    (name) => emitRequest('rename-server', { serverId: activeServerIdRef.current, name }),
+    [emitRequest]
+  )
+
+  const changePassword = useCallback(
+    // Anahtar: sunucu bu cihazın oturumunu açık bıraksın, diğerlerini kapatsın.
+    (currentPassword, newPassword) =>
+      emitRequest('change-password', { token: sessionTokenRef.current, currentPassword, newPassword }),
+    [emitRequest]
+  )
+
   const openServerInvitePopover = useCallback(async () => {
     const response = await emitRequest('get-server-invite', {
       token: sessionTokenRef.current,
@@ -3072,6 +3093,18 @@ function App() {
     // açık kalıyor, yeniden bağlanırken de artık anahtar gönderilmiyor.
     leaveChannel()
     emitRequest('logout', { token: sessionTokenRef.current })
+    clearLocalSession()
+  }
+  // Sunucu oturumu kendisi kapattı (şifre başka cihazda değişti): sunucuya
+  // çıkış gitmiyor, aynı anahtarı kullanan başka bir pencere varsa onun
+  // (yani şifreyi değiştiren cihazın) oturumunu silmesin.
+  endSessionRef.current = (message) => {
+    leaveChannel()
+    clearLocalSession()
+    setLoginError(message || 'Oturumun kapatıldı, tekrar giriş yap.')
+  }
+  // Giriş ekranına dönüş: anahtar ve hesabın bilgileri temizleniyor.
+  function clearLocalSession() {
     sessionTokenRef.current = null
     window.localStorage?.removeItem('rememberedSessionToken')
     setLoggedIn(false)
@@ -4040,6 +4073,7 @@ function App() {
             onAvatarFile: uploadAvatar,
             isUploadingAvatar,
             avatarError: avatarUploadError,
+            onChangePassword: changePassword,
           }}
           audio={{
             screenQuality,
@@ -4113,7 +4147,9 @@ function App() {
           server={
             showsServerSettings
               ? {
+                  id: activeServerId,
                   name: activeServerName,
+                  onRename: renameServer,
                   permissions: serverPermissions,
                   roles: serverRoles,
                   members: serverMembers,

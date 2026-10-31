@@ -110,6 +110,8 @@ const EVENT_GROUPS = {
   login: "auth",
   register: "auth",
   "resume-session": "auth",
+  // Mevcut şifreyi tahmin etmeyi de girişle aynı sınır yavaşlatıyor.
+  "change-password": "auth",
   // Davet kodu tahmin etmeyi yavaşlatmak için girişle aynı sıkı sınır.
   "invite-info": "auth",
   "join-server-by-invite": "auth",

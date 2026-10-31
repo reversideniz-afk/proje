@@ -27,6 +27,7 @@ import {
   Volume2,
   X,
 } from 'lucide-react'
+import { PasswordField } from './AuthScreen.jsx'
 import { Avatar } from './Avatar.jsx'
 import { ScreenQualityFields } from './Dialogs.jsx'
 import { Toggle } from './Toggle.jsx'
@@ -82,7 +83,117 @@ function AccountPage({ account }) {
           </p>
         )}
       </Section>
+      <PasswordSection onChangePassword={account.onChangePassword} />
     </>
+  )
+}
+
+// Şifre değiştirme: mevcut şifre doğrulanıyor; değişince diğer cihazlardaki
+// oturumlar kapanıyor, bu cihaz girişli kalıyor.
+function PasswordSection({ onChangePassword }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [repeat, setRepeat] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [state, setState] = useState({ busy: false, error: null, done: false })
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (next.length < 6) return setState({ busy: false, error: 'Yeni şifre en az 6 karakter olmalı.', done: false })
+    if (next !== repeat) return setState({ busy: false, error: 'Yeni şifreler aynı değil.', done: false })
+    setState({ busy: true, error: null, done: false })
+    const response = await onChangePassword(current, next)
+    if (!response?.success) {
+      setState({ busy: false, error: response?.message || 'Şifre değiştirilemedi, tekrar dene.', done: false })
+      return
+    }
+    setCurrent('')
+    setNext('')
+    setRepeat('')
+    setState({ busy: false, error: null, done: true })
+  }
+
+  const fieldProps = { showPassword, onToggleShow: () => setShowPassword((show) => !show) }
+  return (
+    <Section title="Şifre" description="Şifreni değiştirince diğer cihazlardaki oturumların kapanır; bu cihazda girişli kalırsın.">
+      <form className="settings-form" onSubmit={submit}>
+        <PasswordField id="settings-current-password" label="Mevcut şifre" value={current} onChange={setCurrent} autoComplete="current-password" {...fieldProps} />
+        <PasswordField id="settings-new-password" label="Yeni şifre" value={next} onChange={setNext} autoComplete="new-password" hint="En az 6 karakter." {...fieldProps} />
+        <PasswordField id="settings-repeat-password" label="Yeni şifre (tekrar)" value={repeat} onChange={setRepeat} autoComplete="new-password" {...fieldProps} />
+        {state.error && (
+          <p className="form-error" role="alert">
+            {state.error}
+          </p>
+        )}
+        {state.done && (
+          <p className="form-success" role="status">
+            Şifren değiştirildi. Diğer cihazlardaki oturumların kapatıldı.
+          </p>
+        )}
+        <div className="settings-row">
+          <button type="submit" className="btn" disabled={state.busy}>
+            <KeyRound className="icon" />
+            {state.busy ? 'Değiştiriliyor…' : 'Şifreyi değiştir'}
+          </button>
+        </div>
+      </form>
+    </Section>
+  )
+}
+
+// Sunucunun adı (sadece sahibi). Değişince bütün üyelerde güncelleniyor.
+function ServerNameSection({ server }) {
+  const [name, setName] = useState(server.name)
+  const [state, setState] = useState({ busy: false, error: null, done: false })
+  const trimmed = name.trim()
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!trimmed || trimmed === server.name) return
+    setState({ busy: true, error: null, done: false })
+    const response = await server.onRename(trimmed)
+    setState(
+      response?.success
+        ? { busy: false, error: null, done: true }
+        : { busy: false, error: response?.message || 'Ad değiştirilemedi, tekrar dene.', done: false }
+    )
+  }
+
+  return (
+    <Section title="Sunucu adı">
+      <form className="settings-form" onSubmit={submit}>
+        <div className="field">
+          <label className="field-label" htmlFor="settings-server-name">
+            Ad
+          </label>
+          <input
+            id="settings-server-name"
+            className="input"
+            value={name}
+            maxLength={50}
+            onChange={(e) => {
+              setName(e.target.value)
+              setState({ busy: false, error: null, done: false })
+            }}
+          />
+        </div>
+        {state.error && (
+          <p className="form-error" role="alert">
+            {state.error}
+          </p>
+        )}
+        {state.done && (
+          <p className="form-success" role="status">
+            Sunucunun adı değiştirildi.
+          </p>
+        )}
+        <div className="settings-row">
+          <button type="submit" className="btn" disabled={state.busy || !trimmed || trimmed === server.name}>
+            {state.busy ? 'Kaydediliyor…' : 'Kaydet'}
+          </button>
+        </div>
+      </form>
+    </Section>
   )
 }
 
@@ -444,6 +555,7 @@ function ServerPage({ server }) {
   const { permissions } = server
   return (
     <>
+      {permissions.isOwner && <ServerNameSection key={server.id} server={server} />}
       {permissions.createInvites && (
       <Section title="Davetler" description="Davet bağlantısı oluştur; süreli ya da kullanım sayısı sınırlı olabilir.">
         <div className="settings-row">
