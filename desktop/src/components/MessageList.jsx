@@ -206,6 +206,7 @@ function MessageItem({
   onRsvpEvent,
 }) {
   const pressTimer = useRef(null)
+  const pressStart = useRef(null)
   const isOwn = item.username === displayName
   const isPhoto = item.kind === 'photo'
   const reactions = groupReactions(item.reactions)
@@ -225,9 +226,15 @@ function MessageItem({
   const startLongPress = (e) => {
     if (e.pointerType !== 'touch') return
     clearTimeout(pressTimer.current)
+    pressStart.current = { x: e.clientX, y: e.clientY }
     pressTimer.current = setTimeout(onActivate, LONG_PRESS_MS)
   }
   const cancelLongPress = () => clearTimeout(pressTimer.current)
+  // Parmak kayıyorsa (ör. çekmeceyi açmak için) uzun basma sayılmıyor.
+  const moveLongPress = (e) => {
+    const start = pressStart.current
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 8) cancelLongPress()
+  }
 
   return (
     <article
@@ -245,6 +252,7 @@ function MessageItem({
         onActivate()
       }}
       onPointerDown={startLongPress}
+      onPointerMove={moveLongPress}
       onPointerUp={cancelLongPress}
       onPointerLeave={cancelLongPress}
       onPointerCancel={cancelLongPress}

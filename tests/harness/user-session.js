@@ -159,6 +159,27 @@ export class UserSession {
       .toBeGreaterThan(0.01)
   }
 
+  // Telefonda parmakla kaydırma: tarayıcıya gerçek dokunma olayları gidiyor
+  // (CDP). stepMs: adımlar arası bekleme (yavaş kaydırma). release: false
+  // parmağı ekranda bırakıyor; sonra liftFinger() ile kaldırılıyor.
+  async swipe({ from, to, steps = 10, stepMs = 0, release = true }) {
+    this.cdp ??= await this.context.newCDPSession(this.page)
+    const point = (i) => ({
+      x: from.x + ((to.x - from.x) * i) / steps,
+      y: from.y + ((to.y - from.y) * i) / steps,
+    })
+    await this.cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(0)] })
+    for (let i = 1; i <= steps; i++) {
+      if (stepMs) await this.page.waitForTimeout(stepMs)
+      await this.cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(i)] })
+    }
+    if (release) await this.liftFinger()
+  }
+
+  liftFinger() {
+    return this.cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+
   // Sayfadaki gözlem kaydından (bkz. instrument.js) bir değer okur.
   probe(fn) {
     return this.page.evaluate(fn)

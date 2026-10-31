@@ -55,6 +55,7 @@ import {
 } from './lib/sounds.js'
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
 import { startWebUpdates } from './lib/webUpdate.js'
+import { useSwipeDrawers } from './lib/useSwipeDrawers.js'
 
 const TYPING_HEARTBEAT_MS = 4000
 const TYPING_EXPIRY_MS = 6000
@@ -442,6 +443,17 @@ function App() {
   // Sağdaki mesaj paneli: arama sonuçları ya da kanalın sabitlenmiş
   // mesajları. { kind: 'search' | 'pins', query, messages, loading, error }
   const [messagePanel, setMessagePanel] = useState(null)
+  // Telefonda sağa/sola kaydırınca kanal ve üye çekmeceleri (sağdaki çekmece
+  // açıksa mesaj panelini de gösteriyor olabilir; kaydırınca o da kapanıyor).
+  useSwipeDrawers({
+    navOpen: mobileSidebarOpen,
+    membersOpen: mobileMembersOpen || !!messagePanel,
+    onNav: setMobileSidebarOpen,
+    onMembers: (open) => {
+      setMobileMembersOpen(open)
+      if (!open) setMessagePanel(null)
+    },
+  })
   // Anket ya da etkinlik penceresi: { kind: 'poll' | 'event', busy, error } | null
   const [planDialog, setPlanDialog] = useState(null)
   // Aktif sunucunun yaklaşan etkinlikleri (kenar çubuğunda, hatırlatma için).
@@ -3658,7 +3670,9 @@ function App() {
         : { unread: !!s.unread, mentions: s.mentions || 0 },
     ])
   )
-  const membersVisible = !homeOpen && !isVoiceView && (membersPanelOpen || mobileMembersOpen)
+  // Telefonda üye çekmecesi kapalıyken de duruyor ki kaydırınca parmağı
+  // takip ederek açılabilsin.
+  const membersVisible = !homeOpen && !isVoiceView && (membersPanelOpen || mobileMembersOpen || isNarrow())
   // Ana sayfa simgesindeki sayı: okunmamış özel mesajlar ve gelen istekler.
   const homeBadge = dms.reduce((sum, d) => sum + (d.unread || 0), 0) + friendLists.incoming.length
 
@@ -3932,15 +3946,16 @@ function App() {
           }
         />
       </div>
-      {(mobileSidebarOpen || mobileMembersOpen) && (
-        <div
-          className="mobile-backdrop"
-          onClick={() => {
-            setMobileSidebarOpen(false)
-            setMobileMembersOpen(false)
-          }}
-        />
-      )}
+      {/* Telefonda hep duruyor (kaydırırken çekmeceyle birlikte koyulaşıyor),
+          sadece bir çekmece açıkken görünüyor ve dokunulabiliyor. */}
+      <div
+        className={'mobile-backdrop' + (mobileSidebarOpen || mobileMembersOpen ? ' mobile-backdrop--open' : '')}
+        aria-hidden="true"
+        onClick={() => {
+          setMobileSidebarOpen(false)
+          setMobileMembersOpen(false)
+        }}
+      />
 
       <main className="main-panel">
         <ChannelHeader

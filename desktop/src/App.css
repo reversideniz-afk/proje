@@ -1078,7 +1078,14 @@ li.member-item:has(.member-item-button) {
     inset: 0;
     z-index: 25;
     background: rgb(8 6 12 / 64%);
-    animation: fade-in 0.2s ease-out;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s var(--ease-out);
+  }
+
+  .mobile-backdrop--open {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .channel-header {
@@ -1097,10 +1104,12 @@ li.member-item:has(.member-item-button) {
     width: min(300px, 86vw);
     padding-top: env(safe-area-inset-top);
     background: var(--loca);
+    transition: transform 0.22s var(--ease-out), visibility 0.22s;
   }
 
   .member-drawer:not(.member-drawer--open) {
-    display: none;
+    transform: translateX(100%);
+    visibility: hidden;
   }
 
   .member-list-panel {

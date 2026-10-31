@@ -93,11 +93,13 @@ export const test = base.extend({
       // desktopApp: Electron'un preload köprüsünü (window.electronAPI) taklit
       // eder; yakınlaştırma çağrıları window.__disco.zoomFactors'a düşer.
       // path: uygulamanın açılacağı adres (ör. "/?davet=KOD").
-      async user(name, { login = true, rememberMe = false, viewport, storage, desktopApp, path } = {}) {
+      // phone: dokunmatik telefon ekranı (390x844, dokunma olayları açık).
+      async user(name, { login = true, rememberMe = false, viewport, storage, desktopApp, path, phone } = {}) {
         const context = await browser.newContext({
           permissions: ['microphone', 'camera'],
           locale: 'tr-TR',
-          viewport: viewport || { width: 1280, height: 800 },
+          viewport: viewport || (phone ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
+          ...(phone ? { hasTouch: true, isMobile: true } : {}),
         })
         await context.addInitScript(instrumentPage)
         if (desktopApp) {
