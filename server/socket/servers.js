@@ -1,7 +1,7 @@
 // Sunucular: oluşturma, silme, davetle katılma, kanal ve üye işlemleri,
 // varlık listesi.
 const crypto = require("crypto");
-const { User, Message, ChannelMember, Server: ServerModel, ServerMember, ServerBan, Channel, Invite, Role } = require("../db");
+const { User, Message, ChannelMember, Server: ServerModel, ServerMember, ServerBan, Channel, ChannelCategory, Invite, Role } = require("../db");
 const {
   isPlatformAdmin,
   getAccessibleServers,
@@ -91,6 +91,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
       await Message.deleteMany({ channelId: { $in: channelIds } });
       await ChannelMember.deleteMany({ channelId: { $in: channelIds } });
       await Channel.deleteMany({ serverId });
+      await ChannelCategory.deleteMany({ serverId });
       await Role.deleteMany({ serverId });
       await Invite.deleteMany({ serverId });
       await ServerBan.deleteMany({ serverId });
@@ -290,7 +291,14 @@ module.exports = function registerServerHandlers(socket, ctx) {
         return callback({ success: false, message: "Bu sunucuya erişimin yok." });
       }
       const server = await ServerModel.findById(serverId).lean();
-      const channels = await Channel.find({ serverId }).sort({ createdAt: 1 }).lean();
+      // Görüntülenme sırası: önce kategorisiz kanallar, sonra kategoriler
+      // sırayla; her grubun içinde position, eşitse oluşturulma sırası.
+      const categories = await ChannelCategory.find({ serverId }).sort({ position: 1, createdAt: 1 }).lean();
+      const categoryOrder = new Map(categories.map((c, i) => [c._id.toString(), i]));
+      const groupOf = (c) => (c.categoryId && categoryOrder.has(c.categoryId.toString()) ? categoryOrder.get(c.categoryId.toString()) : -1);
+      const channels = (await Channel.find({ serverId }).sort({ position: 1, createdAt: 1 }).lean()).sort(
+        (a, b) => groupOf(a) - groupOf(b)
+      );
       const viewer = await channelViewer(username, userRoles, [server._id]);
       const accessible = channels.filter((c) => canViewChannel(viewer, c));
       const unread = await unreadByChannel(username, accessible.map((c) => c._id));
@@ -301,9 +309,11 @@ module.exports = function registerServerHandlers(socket, ctx) {
         permissions: await serverPermissions(username, userRoles, server),
         // Susturulduysa bitişi: yazma alanı o zamana kadar kapalı.
         timeoutUntil: await activeTimeout(server._id, username),
+        categories: categories.map((c) => ({ id: c._id.toString(), name: c.name })),
         channels: accessible.map((c) => ({
           id: c._id.toString(),
           name: c.name,
+          categoryId: groupOf(c) >= 0 ? c.categoryId.toString() : null,
           allowedRoleIds: (c.allowedRoleIds || []).map(String),
           legacyRoles: c.allowedRoles || [],
           ...(unread.get(c._id.toString()) || { unread: false, mentions: 0 }),
@@ -337,7 +347,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
   // ---- YENİ: Bir sunucuya kanal ekleme — sadece sahibi ya da platform
   // admini. v1'de yeni sunucularda kanal-başına rol kısıtlaması yok
   // (allowedRoles her zaman boş = sunucunun tüm üyelerine açık).
-  socket.on("create-channel", async ({ token, serverId, name }, callback) => {
+  // categoryId: kanal o kategorinin sonuna (yoksa kategorisiz kısmın sonuna).
+  socket.on("create-channel", async ({ token, serverId, name, categoryId = null }, callback) => {
     const username = await ctx.authenticate(token);
     if (typeof callback !== "function") return;
     if (!username) return callback({ success: false, message: "Önce giriş yapman gerekiyor." });
@@ -351,7 +362,11 @@ module.exports = function registerServerHandlers(socket, ctx) {
     try {
       const { error } = await requireServerPermission(username, serverId, "manageChannels");
       if (error) return callback({ success: false, message: error });
-      const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [] });
+      if (categoryId !== null && !(typeof categoryId === "string" && (await ChannelCategory.exists({ _id: categoryId, serverId }).catch(() => null)))) {
+        return callback({ success: false, message: "Böyle bir kategori yok." });
+      }
+      const position = await Channel.countDocuments({ serverId, categoryId });
+      const channel = await Channel.create({ serverId, name: trimmedName, allowedRoles: [], categoryId, position });
       // Yeni kanal sunucudaki herkesin listesine anında düşsün (H16).
       // Sunucudakiler yeni kanalın bildirim odasına da girsin.
       for (const id of io.sockets.adapter.rooms.get(serverRoomName(serverId)) || []) {

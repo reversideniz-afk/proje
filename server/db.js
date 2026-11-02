@@ -255,10 +255,25 @@ const channelSchema = new mongoose.Schema({
   allowedRoles: { type: [String], default: [] },
   // Sunucuya özel roller: boşsa (ve allowedRoles da boşsa) herkese açık.
   allowedRoleIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+  // Kategorisi (boşsa listenin en üstündeki kategorisiz kısım) ve o
+  // kısımdaki sırası (eşitse oluşturulma sırası; bkz. lib/categories.js).
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "ChannelCategory", default: null },
+  position: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
 });
 channelSchema.index({ serverId: 1, name: 1 }, { unique: true });
 const Channel = mongoose.models.Channel || mongoose.model("Channel", channelSchema);
+
+// Kanal kategorisi: kanal listesinde başlık, altındaki kanallarla birlikte
+// daraltılabiliyor.
+const channelCategorySchema = new mongoose.Schema({
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true, index: true },
+  name: { type: String, required: true, trim: true },
+  position: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now },
+});
+const ChannelCategory =
+  mongoose.models.ChannelCategory || mongoose.model("ChannelCategory", channelCategorySchema);
 
 // Sunucuya özel rol: ad, renk, üye listesinde ayrı gösterme, yetkiler
 // (bkz. lib/roles.js). position küçük olan üstte: adın rengi ve üye
@@ -316,6 +331,7 @@ module.exports = {
   ServerMember,
   ServerBan,
   Channel,
+  ChannelCategory,
   Invite,
   Role,
   Friendship,

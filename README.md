@@ -84,6 +84,14 @@ rol silindi ya da alındı) etkilenenler kanaldan ve sesten çıkarılıyor. Rol
 role açık kanal herkese açılmıyor, sahibe kalıyor. Adın rengi ve üye listesindeki başlık en
 üstteki rolden.
 
+Kanal kategorileri (`ChannelCategory`, kanalda `categoryId` ve `position`; `socket/categories.js`):
+"Kanalları yönet" yetkisi olan sunucu menüsünden kategori oluşturuyor, başlıktaki düğmelerle
+kategoriye kanal açıyor ve kategoriyi düzenliyor ya da siliyor (kanalları silinmiyor, listenin
+üstündeki kategorisiz kısma geçiyor). Kanallar ve kategoriler sürükleyip bırakılarak taşınıyor;
+telefonda kanalın kategorisi düzenleme penceresinden seçiliyor. Herkes kategoriyi başlığına
+tıklayıp kendi ekranında daraltabiliyor (tarayıcıda saklanıyor, açık kanal görünür kalıyor). Sunucu
+kanalları görüntülenme sırasıyla veriyor: önce kategorisizler, sonra kategoriler sırayla.
+
 Moderasyon (Ayarlar > Üyeler, "Üyeleri yönet" yetkisi; `server/lib/moderation.js`): yasaklanan
 çıkarılıyor ve davetle ya da sabit kodla geri giremiyor (`ServerBan`, yasak Ayarlar'dan
 kaldırılabiliyor). Susturulan (5 dakika, 1 saat, 1 gün, 1 hafta; `ServerMember.timeoutUntil`) o

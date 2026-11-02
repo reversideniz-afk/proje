@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react'
 import {
   CalendarDays,
   ChevronDown,
+  FolderPlus,
   Hash,
   Headphones,
   HeadphoneOff,
@@ -30,7 +31,7 @@ import { STATUSES, presenceLine, statusLabel } from '../lib/presence.js'
 import { IS_DESKTOP_APP } from '../lib/config.js'
 
 // Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
-function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServerSettings, onAddServer, onClose }) {
+function ServerHeader({ name, permissions, onInvite, onCreateChannel, onCreateCategory, onOpenServerSettings, onAddServer, onClose }) {
   const canOpenSettings = permissions.isOwner || permissions.createInvites || permissions.kickMembers
   const hasActions = permissions.createInvites || permissions.manageChannels || canOpenSettings
   const [menuOpen, setMenuOpen] = useState(false)
@@ -70,6 +71,11 @@ function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServ
               <Plus className="icon" /> Kanal oluştur
             </button>
           )}
+          {permissions.manageChannels && (
+            <button type="button" role="menuitem" className="menu-item" onClick={run(onCreateCategory)}>
+              <FolderPlus className="icon" /> Kategori oluştur
+            </button>
+          )}
           {canOpenSettings && (
             <button type="button" role="menuitem" className="menu-item" onClick={run(onOpenServerSettings)}>
               <Settings className="icon" /> Sunucu ayarları
@@ -85,10 +91,11 @@ function ServerHeader({ name, permissions, onInvite, onCreateChannel, onOpenServ
   )
 }
 
-// onEdit: sadece "Kanalları yönet" yetkisi olana.
-function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice, onEdit }) {
+// onEdit: sadece "Kanalları yönet" yetkisi olana. dragProps: sürükleyip
+// bırakma (aynı yetki; bkz. ChannelList).
+function ChannelRow({ channel, active, unread, mentions, isMyVoice, voicers, canJoinVoice, onOpen, onJoinVoice, onEdit, dragProps }) {
   return (
-    <li className="channel-row">
+    <li {...dragProps} className={'channel-row' + (dragProps?.className ? ` ${dragProps.className}` : '')}>
       <button
         type="button"
         className={
@@ -375,6 +382,162 @@ function UserPanel({
   )
 }
 
+// Daraltılan kategoriler kişinin kendi tarayıcısında (cihazına özel).
+const COLLAPSED_KEY = 'collapsedCategories'
+
+function readCollapsed() {
+  try {
+    return new Set(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) || '[]'))
+  } catch {
+    return new Set()
+  }
+}
+
+// Kanal listesi: önce kategorisiz kanallar ("Kanallar" başlığı), sonra
+// kategoriler. Başlığa tıklayınca kategori daralıyor (açık kanal yine
+// görünüyor). "Kanalları yönet" yetkisi olan kanalları ve kategorileri
+// sürükleyerek taşıyor: kanalı bir kanalın üstüne bırakınca onun önüne,
+// başlığa bırakınca o kategorinin sonuna; kategoriyi bir kategorinin önüne
+// ya da en sona. Telefonda sürükleme yok, kategori kanal düzenleme
+// penceresinden seçiliyor.
+function ChannelList({ channels, categories, manage, activeChannel, myVoiceChannel, onCreateChannel, onEditCategory, onMoveChannel, onMoveCategory, renderChannel }) {
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [drag, setDrag] = useState(null) // { kind: 'channel' | 'category', id }
+  const [dropTarget, setDropTarget] = useState(null) // anahtar: 'channel:<id>', 'category:<id>', 'top', 'end'
+
+  const toggle = (id) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+      } catch {
+        // Saklanamıyorsa bu oturumluk kalıyor.
+      }
+      return next
+    })
+
+  // Bırakma hedefi: accepts(drag) doğruysa üstüne gelince işaretleniyor.
+  const dropZone = (key, accepts, onDrop) =>
+    manage && {
+      onDragOver: (e) => {
+        if (!drag || !accepts(drag)) return
+        e.preventDefault()
+        if (dropTarget !== key) setDropTarget(key)
+      },
+      onDragLeave: () => setDropTarget((current) => (current === key ? null : current)),
+      onDrop: (e) => {
+        e.preventDefault()
+        if (drag && accepts(drag)) onDrop(drag)
+        setDrag(null)
+        setDropTarget(null)
+      },
+    }
+  const dragSource = (kind, id) =>
+    manage && {
+      draggable: true,
+      onDragStart: (e) => {
+        e.stopPropagation()
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', id)
+        setDrag({ kind, id })
+      },
+      onDragEnd: () => {
+        setDrag(null)
+        setDropTarget(null)
+      },
+    }
+  const isChannel = (d) => d.kind === 'channel'
+
+  const channelRow = (channel) =>
+    renderChannel(channel, {
+      ...dragSource('channel', channel.id),
+      ...dropZone(`channel:${channel.id}`, (d) => isChannel(d) && d.id !== channel.id, (d) =>
+        onMoveChannel(d.id, channel.categoryId || null, channel.id)
+      ),
+      className: dropTarget === `channel:${channel.id}` ? 'is-drop-target' : '',
+    })
+
+  const groups = [
+    { category: null, channels: channels.filter((c) => !c.categoryId) },
+    ...categories.map((category) => ({ category, channels: channels.filter((c) => c.categoryId === category.id) })),
+  ]
+
+  return (
+    <>
+      <div
+        className={'sidebar-category' + (dropTarget === 'top' ? ' is-drop-target' : '')}
+        {...dropZone('top', isChannel, (d) => onMoveChannel(d.id, null, null))}
+      >
+        <span>Kanallar</span>
+        {manage && (
+          <button type="button" className="icon-btn icon-btn--small" onClick={() => onCreateChannel(null)} aria-label="Kanal oluştur" title="Kanal oluştur">
+            <Plus className="icon" />
+          </button>
+        )}
+      </div>
+      <ul className="channel-list">{groups[0].channels.map(channelRow)}</ul>
+      {groups.slice(1).map(({ category, channels: inCategory }) => {
+        // Görebildiği kanalı olmayan kategori sadece yönetene görünüyor.
+        if (inCategory.length === 0 && !manage) return null
+        const isCollapsed = collapsed.has(category.id)
+        const shown = isCollapsed ? inCategory.filter((c) => c.id === activeChannel || c.id === myVoiceChannel) : inCategory
+        const key = `category:${category.id}`
+        return (
+          <section key={category.id} className="channel-category" aria-label={`${category.name} kategorisi`}>
+            <div
+              className={'sidebar-category' + (dropTarget === key ? ' is-drop-target' : '')}
+              {...dragSource('category', category.id)}
+              {...dropZone(
+                key,
+                (d) => isChannel(d) || d.id !== category.id,
+                (d) => (isChannel(d) ? onMoveChannel(d.id, category.id, null) : onMoveCategory(d.id, category.id))
+              )}
+            >
+              <button type="button" className="channel-category-toggle" aria-expanded={!isCollapsed} onClick={() => toggle(category.id)}>
+                <ChevronDown className={'icon channel-category-chevron' + (isCollapsed ? ' is-collapsed' : '')} />
+                <span>{category.name}</span>
+              </button>
+              {manage && (
+                <>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--small"
+                    onClick={() => onCreateChannel(category.id)}
+                    aria-label={`${category.name} kategorisine kanal oluştur`}
+                    title="Kanal oluştur"
+                  >
+                    <Plus className="icon" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--small"
+                    onClick={() => onEditCategory(category)}
+                    aria-label={`${category.name} kategorisini düzenle`}
+                    title="Kategoriyi düzenle"
+                  >
+                    <Settings className="icon" />
+                  </button>
+                </>
+              )}
+            </div>
+            <ul className="channel-list">{shown.map(channelRow)}</ul>
+          </section>
+        )
+      })}
+      {drag?.kind === 'category' && (
+        <div
+          className={'channel-category-end' + (dropTarget === 'end' ? ' is-drop-target' : '')}
+          {...dropZone('end', (d) => d.kind === 'category', (d) => onMoveCategory(d.id, null))}
+        >
+          En sona taşı
+        </div>
+      )}
+    </>
+  )
+}
+
 export function ChannelSidebar({
   server,
   channels,
@@ -391,6 +554,12 @@ export function ChannelSidebar({
   onInvite,
   onCreateChannel,
   onEditChannel,
+  // Kanal kategorileri (bkz. ChannelList): kategori penceresi ve taşıma.
+  categories = [],
+  onCreateCategory,
+  onEditCategory,
+  onMoveChannel,
+  onMoveCategory,
   onOpenServerSettings,
   onAddServer,
   onClose,
@@ -415,7 +584,8 @@ export function ChannelSidebar({
           name={server.name}
           permissions={server.permissions || {}}
           onInvite={onInvite}
-          onCreateChannel={onCreateChannel}
+          onCreateChannel={() => onCreateChannel(null)}
+          onCreateCategory={onCreateCategory}
           onOpenServerSettings={onOpenServerSettings}
           onAddServer={onAddServer}
           onClose={onClose}
@@ -454,39 +624,33 @@ export function ChannelSidebar({
           </>
         )}
         {!home && server && (
-          <div className="sidebar-category">
-            <span>Kanallar</span>
-            {server.permissions?.manageChannels && (
-              <button
-                type="button"
-                className="icon-btn icon-btn--small"
-                onClick={onCreateChannel}
-                aria-label="Kanal oluştur"
-                title="Kanal oluştur"
-              >
-                <Plus className="icon" />
-              </button>
+          <ChannelList
+            channels={channels}
+            categories={categories}
+            manage={!!server.permissions?.manageChannels}
+            activeChannel={activeChannel}
+            myVoiceChannel={inVoice ? voiceChannel : null}
+            onCreateChannel={onCreateChannel}
+            onEditCategory={onEditCategory}
+            onMoveChannel={onMoveChannel}
+            onMoveCategory={onMoveCategory}
+            renderChannel={(channel, dragProps) => (
+              <ChannelRow
+                key={channel.id}
+                channel={channel}
+                active={activeChannel === channel.id}
+                unread={unreadChannels.includes(channel.id)}
+                mentions={mentionCounts[channel.id] || 0}
+                isMyVoice={inVoice && voiceChannel === channel.id}
+                voicers={voicersByChannel.get(channel.id) || []}
+                canJoinVoice={!inVoice && !voiceLocked}
+                onOpen={() => onOpenChannel(channel.id)}
+                onJoinVoice={() => onJoinVoiceIn(channel.id)}
+                onEdit={server?.permissions?.manageChannels ? () => onEditChannel(channel) : null}
+                dragProps={dragProps}
+              />
             )}
-          </div>
-        )}
-        {!home && (
-        <ul className="channel-list">
-          {channels.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              active={activeChannel === channel.id}
-              unread={unreadChannels.includes(channel.id)}
-              mentions={mentionCounts[channel.id] || 0}
-              isMyVoice={inVoice && voiceChannel === channel.id}
-              voicers={voicersByChannel.get(channel.id) || []}
-              canJoinVoice={!inVoice && !voiceLocked}
-              onOpen={() => onOpenChannel(channel.id)}
-              onJoinVoice={() => onJoinVoiceIn(channel.id)}
-              onEdit={server?.permissions?.manageChannels ? () => onEditChannel(channel) : null}
-            />
-          ))}
-        </ul>
+          />
         )}
       </div>
 

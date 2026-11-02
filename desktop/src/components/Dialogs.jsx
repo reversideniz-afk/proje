@@ -272,6 +272,63 @@ export function CreateChannelDialog({ error, busy, onCreate, onClose }) {
   )
 }
 
+// Kanal kategorisi: category null ise yeni kategori. Silinen kategorinin
+// kanalları silinmiyor, listenin üstündeki kategorisiz kısma geçiyor.
+export function CategoryDialog({ category, busy, error, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(category?.name || '')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  return (
+    <Dialog title={category ? `${category.name} kategorisi` : 'Kategori oluştur'} onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (name.trim()) onSave(name.trim())
+        }}
+      >
+        <div className="field">
+          <label className="field-label" htmlFor="category-name">
+            Kategori adı
+          </label>
+          <input
+            id="category-name"
+            className="input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="ör. Oyunlar"
+            maxLength={50}
+            autoFocus
+          />
+        </div>
+        {category && <p className="field-hint">Kategoriyi silince kanalları silinmez, listenin en üstüne geçer.</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          {category &&
+            (confirmDelete ? (
+              <button type="button" className="btn btn--danger dialog-actions-start" onClick={onDelete} disabled={busy}>
+                Silmeyi onayla
+              </button>
+            ) : (
+              <button type="button" className="btn btn--ghost dialog-actions-start" onClick={() => setConfirmDelete(true)}>
+                Kategoriyi sil
+              </button>
+            ))}
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button type="submit" className="btn" disabled={busy || !name.trim()}>
+            {category ? 'Kaydet' : 'Kategori oluştur'}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
 export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onClose }) {
   return (
     <Dialog title={title} onClose={onClose}>
@@ -779,8 +836,9 @@ export function RoleDialog({ role, busy, error, onSave, onDelete, onClose }) {
 
 // Kanalı düzenleme: ad, kimlerin görebileceği, silme (Kanalları yönet).
 // Sunucu sahibi kısıtlı kanalları da her zaman görüyor.
-export function EditChannelDialog({ channel, roles, busy, error, onSave, onDelete, onClose }) {
+export function EditChannelDialog({ channel, roles, categories = [], busy, error, onSave, onDelete, onClose }) {
   const [name, setName] = useState(channel.name)
+  const [categoryId, setCategoryId] = useState(channel.categoryId || '')
   const [restricted, setRestricted] = useState((channel.allowedRoleIds || []).length > 0)
   const [roleIds, setRoleIds] = useState(channel.allowedRoleIds || [])
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -792,7 +850,7 @@ export function EditChannelDialog({ channel, roles, busy, error, onSave, onDelet
         className="dialog-body"
         onSubmit={(e) => {
           e.preventDefault()
-          onSave({ name: name.trim(), allowedRoleIds: restricted ? roleIds : [] })
+          onSave({ name: name.trim(), allowedRoleIds: restricted ? roleIds : [], categoryId: categoryId || null })
         }}
       >
         <div className="field">
@@ -801,6 +859,21 @@ export function EditChannelDialog({ channel, roles, busy, error, onSave, onDelet
           </label>
           <input id="channel-edit-name" className="input" maxLength={50} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
+        {categories.length > 0 && (
+          <div className="field">
+            <label className="field-label" htmlFor="channel-edit-category">
+              Kategori
+            </label>
+            <select id="channel-edit-category" className="select" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+              <option value="">Kategorisiz</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="field">
           <span className="field-label" id={accessLabelId}>
             Kimler görebilir

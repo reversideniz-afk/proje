@@ -7,6 +7,7 @@ import { ChannelHeader } from './components/ChannelHeader.jsx'
 import { ChannelSidebar } from './components/ChannelSidebar.jsx'
 import { ChatPanel } from './components/ChatPanel.jsx'
 import {
+  CategoryDialog,
   ConfirmDialog,
   CreateChannelDialog,
   CustomStatusDialog,
@@ -278,6 +279,8 @@ function App() {
   // kullanılan kanalın ObjectId'si. myServers, giriş yapan kullanıcının
   // erişebildiği sunucuların listesi ({id, name, isOwner}).
   const [channels, setChannels] = useState([])
+  // Aktif sunucunun kanal kategorileri, sırasıyla (kanallarda categoryId).
+  const [channelCategories, setChannelCategories] = useState([])
   const [myServers, setMyServers] = useState([])
   const [activeServerId, setActiveServerId] = useState(
     () => window.localStorage?.getItem('activeServerId') || null
@@ -374,7 +377,9 @@ function App() {
   // Kanal oluşturma penceresi ve sunucuyu silme onayı. (Kanal adı eskiden
   // window.prompt ile soruluyordu; masaüstü uygulamasında prompt hiç
   // açılmıyor, kanal eklenemiyordu.)
-  const [createChannelDialog, setCreateChannelDialog] = useState(null) // { busy, error } | null
+  const [createChannelDialog, setCreateChannelDialog] = useState(null) // { busy, error, categoryId } | null
+  // Kategori penceresi: { category (null: yeni), busy, error } | null
+  const [categoryDialog, setCategoryDialog] = useState(null)
   const [confirmDeleteServer, setConfirmDeleteServer] = useState(false)
 
   // --- Kanal (metin) durumu ---
@@ -2450,6 +2455,7 @@ function App() {
       if (serverId !== activeServerIdRef.current) return
       const list = response?.success ? response.channels || [] : []
       setChannels(list)
+      setChannelCategories(response?.success ? response.categories || [] : [])
       setServerPermissions(response?.success ? response.permissions || {} : {})
       setTimeoutUntil(response?.timeoutUntil ? new Date(response.timeoutUntil) : null)
       setServerRoles(rolesResponse?.success ? rolesResponse.roles : [])
@@ -2961,20 +2967,67 @@ function App() {
   // Kanal düzenleme (Kanalları yönet): ad, erişim, silme. Liste sunucunun
   // channels-changed duyurusuyla herkeste yenileniyor.
   const handleSaveChannel = useCallback(
-    async ({ name, allowedRoleIds }) => {
+    async ({ name, allowedRoleIds, categoryId }) => {
       const channel = editChannelDialog?.channel
       if (!channel) return
       setEditChannelDialog((prev) => prev && { ...prev, busy: true, error: null })
-      const response = await emitRequest('update-channel', {
+      let response = await emitRequest('update-channel', {
         serverId: activeServerIdRef.current,
         channelId: channel.id,
         name,
         allowedRoleIds,
       })
+      // Kategorisi değiştiyse yeni kategorinin sonuna taşınıyor.
+      if (response?.success && categoryId !== (channel.categoryId || null)) {
+        response = await emitRequest('move-channel', { serverId: activeServerIdRef.current, channelId: channel.id, categoryId })
+      }
       if (response?.success) setEditChannelDialog(null)
       else setEditChannelDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Kanal kaydedilemedi.' })
     },
     [editChannelDialog, emitRequest]
+  )
+
+  // Kanal kategorileri (Kanalları yönet). Liste channels-changed ile herkeste
+  // yenileniyor.
+  const handleSaveCategory = useCallback(
+    async (name) => {
+      const category = categoryDialog?.category
+      setCategoryDialog((prev) => prev && { ...prev, busy: true, error: null })
+      const response = await emitRequest(category ? 'update-category' : 'create-category', {
+        serverId: activeServerIdRef.current,
+        categoryId: category?.id,
+        name,
+      })
+      if (response?.success) setCategoryDialog(null)
+      else setCategoryDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Kategori kaydedilemedi.' })
+    },
+    [categoryDialog, emitRequest]
+  )
+
+  const handleDeleteCategory = useCallback(async () => {
+    const category = categoryDialog?.category
+    if (!category) return
+    setCategoryDialog((prev) => prev && { ...prev, busy: true, error: null })
+    const response = await emitRequest('delete-category', { serverId: activeServerIdRef.current, categoryId: category.id })
+    if (response?.success) setCategoryDialog(null)
+    else setCategoryDialog((prev) => prev && { ...prev, busy: false, error: response?.message || 'Kategori silinemedi.' })
+  }, [categoryDialog, emitRequest])
+
+  // Sürükleyip bırakma: beforeId'nin önüne (null: sona).
+  const moveChannel = useCallback(
+    async (channelId, categoryId, beforeId) => {
+      const response = await emitRequest('move-channel', { serverId: activeServerIdRef.current, channelId, categoryId, beforeId })
+      if (!response?.success) setNotice(response?.message || 'Kanal taşınamadı.')
+    },
+    [emitRequest]
+  )
+
+  const moveCategory = useCallback(
+    async (categoryId, beforeId) => {
+      const response = await emitRequest('move-category', { serverId: activeServerIdRef.current, categoryId, beforeId })
+      if (!response?.success) setNotice(response?.message || 'Kategori taşınamadı.')
+    },
+    [emitRequest]
   )
 
   const handleDeleteChannel = useCallback(async () => {
@@ -3018,20 +3071,22 @@ function App() {
 
   const handleCreateChannel = useCallback(
     async (name) => {
-      setCreateChannelDialog({ busy: true, error: null })
+      const categoryId = createChannelDialog?.categoryId || null
+      setCreateChannelDialog({ busy: true, error: null, categoryId })
       const response = await emitRequest('create-channel', {
         token: sessionTokenRef.current,
         serverId: activeServerIdRef.current,
         name,
+        categoryId,
       })
       if (response?.success) {
         setCreateChannelDialog(null)
         fetchServerChannels(activeServerIdRef.current)
       } else {
-        setCreateChannelDialog({ busy: false, error: response?.message || 'Kanal oluşturulamadı.' })
+        setCreateChannelDialog({ busy: false, error: response?.message || 'Kanal oluşturulamadı.', categoryId })
       }
     },
-    [emitRequest, fetchServerChannels]
+    [createChannelDialog, emitRequest, fetchServerChannels]
   )
 
   const fetchServerMembers = useCallback(async () => {
@@ -3950,8 +4005,13 @@ function App() {
             setMobileSidebarOpen(false)
           }}
           onInvite={openServerInvitePopover}
-          onCreateChannel={() => setCreateChannelDialog({ busy: false, error: null })}
+          onCreateChannel={(categoryId = null) => setCreateChannelDialog({ busy: false, error: null, categoryId })}
           onEditChannel={(channel) => setEditChannelDialog({ channel, busy: false, error: null })}
+          categories={channelCategories}
+          onCreateCategory={() => setCategoryDialog({ category: null, busy: false, error: null })}
+          onEditCategory={(category) => setCategoryDialog({ category, busy: false, error: null })}
+          onMoveChannel={moveChannel}
+          onMoveCategory={moveCategory}
           onOpenServerSettings={() => openSettings('server')}
           onAddServer={() => openServerModal()}
           onClose={() => setMobileSidebarOpen(false)}
@@ -4292,10 +4352,22 @@ function App() {
         />
       )}
 
+      {categoryDialog && (
+        <CategoryDialog
+          category={categoryDialog.category}
+          busy={categoryDialog.busy}
+          error={categoryDialog.error}
+          onSave={handleSaveCategory}
+          onDelete={handleDeleteCategory}
+          onClose={() => setCategoryDialog(null)}
+        />
+      )}
+
       {editChannelDialog && (
         <EditChannelDialog
           channel={editChannelDialog.channel}
           roles={serverRoles}
+          categories={channelCategories}
           busy={editChannelDialog.busy}
           error={editChannelDialog.error}
           onSave={handleSaveChannel}
