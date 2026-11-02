@@ -383,6 +383,8 @@ export function ChannelSidebar({
   mentionCounts,
   voiceChannel,
   inVoice,
+  // Bu sunucuda susturuldun: kanallardaki sese katılma düğmeleri gizli.
+  voiceLocked = false,
   voicersByChannel,
   onOpenChannel,
   onJoinVoiceIn,
@@ -478,7 +480,7 @@ export function ChannelSidebar({
               mentions={mentionCounts[channel.id] || 0}
               isMyVoice={inVoice && voiceChannel === channel.id}
               voicers={voicersByChannel.get(channel.id) || []}
-              canJoinVoice={!inVoice}
+              canJoinVoice={!inVoice && !voiceLocked}
               onOpen={() => onOpenChannel(channel.id)}
               onJoinVoice={() => onJoinVoiceIn(channel.id)}
               onEdit={server?.permissions?.manageChannels ? () => onEditChannel(channel) : null}

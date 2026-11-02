@@ -5,7 +5,7 @@ const ROLE_COLORS = ["#f2726c", "#ff9f5a", "#e6b04a", "#5cc08a", "#6ea8f7", "#a9
 
 // manageChannels: kanal oluşturma, düzenleme, silme, erişim ayarı.
 // manageMessages: başkalarının mesajlarını silme.
-// kickMembers: sahip dışındaki üyeleri sunucudan çıkarma.
+// kickMembers: sahip dışındaki üyeleri çıkarma, yasaklama ve susturma.
 // createInvites: davet bağlantısı oluşturma ve iptal etme.
 // Rolleri sadece sunucu sahibi yönetiyor (rol yetkisi yok).
 const PERMISSIONS = ["manageChannels", "manageMessages", "kickMembers", "createInvites"];

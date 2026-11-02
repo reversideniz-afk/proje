@@ -3,7 +3,7 @@
 // harfli isimlerde de çalışıyor ve imlecin olduğu yerdeki kelimeye bakıyor
 // (H22; eskiden sadece metnin sonunda ve İngilizce harflerle çalışıyordu).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { CalendarPlus, ChartColumn, ImagePlus, LoaderCircle, Plus, SendHorizontal, Smile, X } from 'lucide-react'
+import { CalendarPlus, ChartColumn, Clock, ImagePlus, LoaderCircle, Plus, SendHorizontal, Smile, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
 import { COMPOSER_EMOJIS } from '../lib/config.js'
 import { toDative } from '../lib/format.js'
@@ -35,6 +35,7 @@ function EmojiPicker({ onPick, onClose }) {
 
 // replyingTo: yanıt verilen mesaj (varsa üstte çubuk çıkıyor, Esc vazgeçiyor).
 // isDm: özel mesaj ("Ece'ye yaz"), değilse kanal ("#genel kanalına yaz").
+// lockedReason: yazılamıyorsa (susturuldu) kutunun yerinde gösterilen neden.
 export function Composer({
   channelName,
   isDm = false,
@@ -48,6 +49,7 @@ export function Composer({
   onCancelReply,
   onCreatePoll,
   onCreateEvent,
+  lockedReason = null,
 }) {
   const [plusOpen, setPlusOpen] = useState(false)
   const plusRef = useRef(null)
@@ -170,6 +172,16 @@ export function Composer({
         return
       }
     }
+  }
+
+  // Susturulan kişi bu sunucuda yazamıyor: kutunun yerinde nedeni.
+  if (lockedReason) {
+    return (
+      <div className="composer composer--locked" role="status">
+        <Clock className="icon" aria-hidden="true" />
+        <span>{lockedReason}</span>
+      </div>
+    )
   }
 
   return (

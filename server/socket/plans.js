@@ -7,6 +7,7 @@ const { User, Message, Channel } = require("../db");
 const { canAccessServer, canModerateServer, channelViewer, canViewChannel } = require("../lib/access");
 const { io } = require("../lib/realtime");
 const { serverRoomName, textRoomName } = require("../lib/state");
+const { TIMEOUT_MESSAGE, activeTimeout } = require("../lib/moderation");
 const { serializeMessage, serializePoll, serializeEvent } = require("../lib/validate");
 
 const isObjectId = (id) => typeof id === "string" && mongoose.isValidObjectId(id);
@@ -39,6 +40,7 @@ module.exports = function registerPlanHandlers(socket, ctx) {
   socket.on("create-poll", async ({ question, options, multiple = false } = {}, callback) => {
     const done = reply(callback);
     if (!ctx.username || !ctx.textRoom) return done({ success: false, message: "Önce bir kanala gir." });
+    if (await activeTimeout(ctx.serverId, ctx.username)) return done({ success: false, message: TIMEOUT_MESSAGE });
     const cleanQuestion = typeof question === "string" ? question.trim() : "";
     const cleanOptions = Array.isArray(options)
       ? options.filter((o) => typeof o === "string").map((o) => o.trim()).filter(Boolean)
@@ -67,6 +69,7 @@ module.exports = function registerPlanHandlers(socket, ctx) {
   socket.on("vote-poll", async ({ messageId, optionIndex } = {}, callback) => {
     const done = reply(callback);
     if (!ctx.username || !ctx.textRoom || !isObjectId(messageId)) return done({ success: false, message: "Eksik bilgi." });
+    if (await activeTimeout(ctx.serverId, ctx.username)) return done({ success: false, message: TIMEOUT_MESSAGE });
     try {
       const message = await Message.findOne({ _id: messageId, channelId: ctx.textRoom, poll: { $exists: true } }).lean();
       if (!message) return done({ success: false, message: "Anket bulunamadı." });
@@ -119,6 +122,7 @@ module.exports = function registerPlanHandlers(socket, ctx) {
   socket.on("create-event", async ({ title, startsAt, description = "" } = {}, callback) => {
     const done = reply(callback);
     if (!ctx.username || !ctx.textRoom) return done({ success: false, message: "Önce bir kanala gir." });
+    if (await activeTimeout(ctx.serverId, ctx.username)) return done({ success: false, message: TIMEOUT_MESSAGE });
     const cleanTitle = typeof title === "string" ? title.trim() : "";
     const cleanDescription = typeof description === "string" ? description.trim() : "";
     const start = new Date(startsAt);
@@ -148,6 +152,7 @@ module.exports = function registerPlanHandlers(socket, ctx) {
     if (!ctx.username || !ctx.textRoom || !isObjectId(messageId) || !RSVP_CHOICES.includes(choice)) {
       return done({ success: false, message: "Eksik bilgi." });
     }
+    if (await activeTimeout(ctx.serverId, ctx.username)) return done({ success: false, message: TIMEOUT_MESSAGE });
     try {
       const filter = { _id: messageId, channelId: ctx.textRoom, event: { $exists: true } };
       const pulled = await Message.updateOne(filter, { $pull: { "event.going": ctx.username, "event.maybe": ctx.username } });

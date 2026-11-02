@@ -75,7 +75,7 @@ açık kalıyor; ekran kutucuğunda tam ekran düğmesi var.
 Roller sunucuya özel (`Role` koleksiyonu, üyede `roleIds`). Sunucu sahibi Ayarlar > Roller'den
 rol oluşturuyor: ad, renk (listeden), "üye listesinde ayrı göster" ve yetkiler: kanalları
 yönet (oluştur, adını değiştir, sil, kimlerin göreceği), mesajları yönet (başkasının mesajını
-sil), üyeleri çıkar (sahip hariç), davet oluştur. Rolleri yönetmek ve sunucuyu silmek sadece
+sil), üyeleri yönet (sahip hariç: çıkar, yasakla, sustur), davet oluştur. Rolleri yönetmek ve sunucuyu silmek sadece
 sahibe (ve platform yöneticisine) ait. Bir kanal rollere kısıtlanabiliyor (`allowedRoleIds`);
 sahip kısıtlı kanalları da görüyor. Eski kısıtlama (`allowedRoles`, platform rolü adları) hâlâ
 geçerli, kanal düzenlenince yerini yenisi alıyor. Bir sunucudaki yetkiler tek yerde hesaplanıyor
@@ -83,6 +83,13 @@ geçerli, kanal düzenlenince yerini yenisi alıyor. Bir sunucudaki yetkiler tek
 rol silindi ya da alındı) etkilenenler kanaldan ve sesten çıkarılıyor. Rol silinince sadece o
 role açık kanal herkese açılmıyor, sahibe kalıyor. Adın rengi ve üye listesindeki başlık en
 üstteki rolden.
+
+Moderasyon (Ayarlar > Üyeler, "Üyeleri yönet" yetkisi; `server/lib/moderation.js`): yasaklanan
+çıkarılıyor ve davetle ya da sabit kodla geri giremiyor (`ServerBan`, yasak Ayarlar'dan
+kaldırılabiliyor). Susturulan (5 dakika, 1 saat, 1 gün, 1 hafta; `ServerMember.timeoutUntil`) o
+sunucuda süre bitene kadar mesaj, fotoğraf, tepki, anket ve etkinlik yazamıyor, sese giremiyor;
+seste ise sesten çıkarılıyor, yazma alanının yerinde ne zaman yazabileceği görünüyor. Özel
+mesajlar etkilenmiyor. Sahip ve platform yöneticisi yasaklanamıyor ve susturulamıyor.
 
 Durum ve etkinlik: kişi sol alttan Çevrimiçi, Boşta, Rahatsız etmeyin ya da Görünmez seçiyor ve
 süreli bir özel durum yazabiliyor (`User.status`, `User.customStatus`). Rahatsız etmeyin'de

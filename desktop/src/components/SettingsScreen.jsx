@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
+  Ban,
   Bell,
+  Clock,
   Crown,
   Download,
   ImagePlus,
@@ -33,7 +35,7 @@ import { ScreenQualityFields } from './Dialogs.jsx'
 import { Toggle } from './Toggle.jsx'
 import { ZoomControl } from './ZoomControl.jsx'
 import { IS_DESKTOP_APP, THEMES, assetUrl } from '../lib/config.js'
-import { formatKeyCode, serverInitials } from '../lib/format.js'
+import { formatKeyCode, formatShortDateTime, serverInitials } from '../lib/format.js'
 import { describeInvite, inviteLink } from '../lib/invites.js'
 import { roleColorOf } from '../lib/roles.js'
 import './SettingsScreen.css'
@@ -705,13 +707,36 @@ function ServerRolesPage({ server }) {
   )
 }
 
-// Sunucunun üyeleri: rolleri (sahip veriyor) ve çıkarma (Üyeleri çıkar).
+// Susturma süreleri (sunucu da aynılarını kabul ediyor, bkz. lib/moderation.js).
+const TIMEOUT_CHOICES = [
+  { minutes: 5, label: '5 dakika' },
+  { minutes: 60, label: '1 saat' },
+  { minutes: 24 * 60, label: '1 gün' },
+  { minutes: 7 * 24 * 60, label: '1 hafta' },
+]
+
+// Sunucunun üyeleri: rolleri (sahip veriyor); çıkarma, yasaklama ve susturma
+// (Üyeleri yönet).
 function ServerMembersPage({ server }) {
   const [editing, setEditing] = useState(null)
+  // Yasaklamadan önce satırda onay: { username } | null
+  const [confirmBan, setConfirmBan] = useState(null)
+  const [error, setError] = useState(null)
   const { permissions, roles } = server
+  const run = async (action) => {
+    setError(null)
+    const response = await action()
+    if (!response?.success) setError(response?.message || 'İşlem yapılamadı, tekrar dene.')
+  }
   return (
-    <Section title={`Üyeler — ${server.members.length}`} description="Sunucu sahibi çıkarılamaz.">
-      <ul className="settings-list">
+    <>
+    <Section title={`Üyeler — ${server.members.length}`} description="Sunucu sahibi çıkarılamaz, yasaklanamaz ve susturulamaz.">
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <ul className="settings-list" aria-label="Sunucu üyeleri">
         {server.members.map((m) => {
           const memberRoleIds = m.roleIds || []
           const memberRoles = roles.filter((r) => memberRoleIds.includes(r.id))
@@ -736,6 +761,12 @@ function ServerMembersPage({ server }) {
                     ))}
                   </span>
                 )}
+                {m.timeoutUntil && (
+                  <span className="field-hint settings-member-timeout">
+                    <Clock className="icon" aria-hidden="true" />
+                    Susturuldu · {formatShortDateTime(m.timeoutUntil)}
+                  </span>
+                )}
               </span>
               {permissions.isOwner && roles.length > 0 && (
                 <button
@@ -747,11 +778,56 @@ function ServerMembersPage({ server }) {
                   Roller
                 </button>
               )}
-              {!m.isOwner && permissions.kickMembers && (
-                <button type="button" className="btn btn--ghost btn--small" onClick={() => server.onRemoveMember(m.username)}>
-                  <UserMinus className="icon" />
-                  Çıkar
-                </button>
+              {!m.isOwner && permissions.kickMembers && confirmBan !== m.username && (
+                <>
+                  {m.timeoutUntil ? (
+                    <button type="button" className="btn btn--secondary btn--small" onClick={() => run(() => server.onTimeout(m.username, 0))}>
+                      Susturmayı kaldır
+                    </button>
+                  ) : (
+                    <select
+                      className="select select--small"
+                      aria-label={`${m.username}: sustur`}
+                      value=""
+                      onChange={(e) => run(() => server.onTimeout(m.username, Number(e.target.value)))}
+                    >
+                      <option value="" disabled>
+                        Sustur…
+                      </option>
+                      {TIMEOUT_CHOICES.map((choice) => (
+                        <option key={choice.minutes} value={choice.minutes}>
+                          {choice.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button type="button" className="btn btn--ghost btn--small" onClick={() => server.onRemoveMember(m.username)}>
+                    <UserMinus className="icon" />
+                    Çıkar
+                  </button>
+                  <button type="button" className="btn btn--ghost btn--small settings-danger-text" onClick={() => setConfirmBan(m.username)}>
+                    <Ban className="icon" />
+                    Yasakla
+                  </button>
+                </>
+              )}
+              {confirmBan === m.username && (
+                <span className="settings-row" role="group" aria-label={`${m.username}: yasaklama onayı`}>
+                  <span className="field-hint">Davetle de geri giremez.</span>
+                  <button
+                    type="button"
+                    className="btn btn--danger btn--small"
+                    onClick={() => {
+                      setConfirmBan(null)
+                      run(() => server.onBan(m.username))
+                    }}
+                  >
+                    Evet, yasakla
+                  </button>
+                  <button type="button" className="btn btn--ghost btn--small" onClick={() => setConfirmBan(null)}>
+                    Vazgeç
+                  </button>
+                </span>
               )}
               {editing === m.username && (
                 <div className="role-checks settings-member-roles" role="group" aria-label={`${m.username}: roller`}>
@@ -769,6 +845,25 @@ function ServerMembersPage({ server }) {
         })}
       </ul>
     </Section>
+    {permissions.kickMembers && server.bans.length > 0 && (
+      <Section title={`Yasaklananlar — ${server.bans.length}`} description="Yasağı kalkan kişi davetle yeniden katılabilir.">
+        <ul className="settings-list" aria-label="Yasaklananlar">
+          {server.bans.map((b) => (
+            <li key={b.username} className="settings-list-row">
+              <Avatar name={b.username} size="sm" />
+              <span className="settings-list-name">
+                {b.username}
+                <span className="field-hint"> · {b.bannedBy} yasakladı</span>
+              </span>
+              <button type="button" className="btn btn--ghost btn--small" onClick={() => run(() => server.onUnban(b.username))}>
+                Yasağı kaldır
+              </button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    )}
+    </>
   )
 }
 

@@ -2,6 +2,7 @@
 const { Channel } = require("../db");
 const { checkChannelAccess } = require("../lib/access");
 const { emitToUsers } = require("../lib/friends");
+const { TIMEOUT_MESSAGE, activeTimeout } = require("../lib/moderation");
 const { SOUND_IDS, SOUND_COOLDOWN_MS } = require("../lib/soundboard");
 const { avatarUrlOf } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
@@ -56,6 +57,10 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
         return;
       }
       voiceServerId = access.channel.serverId ? access.channel.serverId.toString() : null;
+    }
+    if (await activeTimeout(voiceServerId, username)) {
+      reply({ success: false, message: TIMEOUT_MESSAGE });
+      return;
     }
 
     // Profil fotoğrafının adresi de eş bilgisine ekleniyor: karşı taraf

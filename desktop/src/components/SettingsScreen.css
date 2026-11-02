@@ -524,6 +524,28 @@
   color: var(--uyari);
 }
 
+/* Üye satırında susturma: küçük süre seçici ve bitiş bilgisi. */
+.select--small {
+  width: auto;
+  height: 32px;
+  font-size: 13px;
+}
+
+.settings-member-timeout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-member-timeout .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-danger-text {
+  color: #ff8e8a;
+}
+
 .settings-roles {
   display: flex;
   flex: 1 1 260px;

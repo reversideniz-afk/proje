@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 const { Channel, User, Server: ServerModel } = require("../db");
 const { AVATAR_TYPES, avatarVersion } = require("../lib/avatars");
 const { createRateLimiter } = require("../lib/limits");
+const { TIMEOUT_MESSAGE, activeTimeout } = require("../lib/moderation");
 const { app } = require("../lib/realtime");
 const { relayPhoto } = require("../lib/rooms");
 const { resolveUsername } = require("../lib/sessions");
@@ -99,6 +100,9 @@ app.post(
     try {
       // Bildirime tıklayınca doğru sunucu açılsın diye kanalın sunucusu.
       const channel = await Channel.findById(channelId).select("serverId").lean();
+      if (await activeTimeout(channel?.serverId, req.username)) {
+        return res.status(403).json({ success: false, message: TIMEOUT_MESSAGE });
+      }
       relayPhoto(channelId, channel?.serverId?.toString() || null, req.username, imageData, mimeType, senderSocketIds);
       res.json({ success: true });
     } catch (err) {

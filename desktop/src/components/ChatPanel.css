@@ -575,6 +575,15 @@
   background: var(--kabin);
 }
 
+/* Susturulan kişi: yazma alanının yerinde neden ve bitiş. */
+.composer--locked {
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  color: var(--ikincil);
+  font-size: 14px;
+}
+
 /* Yanıt veriyorsun çubuğu yazma alanının üst kenarına yapışık. */
 .composer--replying {
   flex-wrap: wrap;

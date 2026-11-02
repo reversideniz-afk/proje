@@ -1,8 +1,9 @@
 // Sunucular: oluşturma, silme, davetle katılma, kanal ve üye işlemleri,
 // varlık listesi.
 const crypto = require("crypto");
-const { User, Message, ChannelMember, Server: ServerModel, ServerMember, Channel, Invite, Role } = require("../db");
+const { User, Message, ChannelMember, Server: ServerModel, ServerMember, ServerBan, Channel, Invite, Role } = require("../db");
 const {
+  isPlatformAdmin,
   getAccessibleServers,
   canAccessServer,
   isServerOwner,
@@ -13,8 +14,9 @@ const {
 } = require("../lib/access");
 const { AVATAR_TYPES, avatarUrlsFor, serverIconUrl } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
-const { refreshUserServerRooms, recheckUserAccess, buildServerPresence } = require("../lib/rooms");
-const { serverRoomName } = require("../lib/state");
+const { TIMEOUT_MINUTES, TIMEOUT_MESSAGE, activeTimeout, isBanned } = require("../lib/moderation");
+const { refreshUserServerRooms, recheckUserAccess, buildServerPresence, buildMemberList, announcePresence } = require("../lib/rooms");
+const { serverRoomName, textRoomName, voiceRooms } = require("../lib/state");
 const { unreadByChannel, unreadByServer } = require("../lib/unread");
 const { isValidImageDataUri } = require("../lib/validate");
 const {
@@ -91,6 +93,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
       await Channel.deleteMany({ serverId });
       await Role.deleteMany({ serverId });
       await Invite.deleteMany({ serverId });
+      await ServerBan.deleteMany({ serverId });
       await ServerMember.deleteMany({ serverId });
       await ServerModel.deleteOne({ _id: serverId });
       callback({ success: true });
@@ -118,6 +121,9 @@ module.exports = function registerServerHandlers(socket, ctx) {
       const existing = await ServerMember.findOne({ serverId: server._id, username }).lean();
       if (existing) {
         return callback({ success: false, message: "Bu sunucuya zaten üyesin." });
+      }
+      if (await isBanned(server._id, username)) {
+        return callback({ success: false, message: "Bu sunucudan yasaklandın." });
       }
       if (!(await consumeInvite(invite))) {
         return callback({ success: false, message: "Bu davetin kullanım sınırı dolmuş." });
@@ -293,6 +299,8 @@ module.exports = function registerServerHandlers(socket, ctx) {
         // Arayüz sadece yapabildiklerini göstersin (sunucu yine her
         // işlemde ayrıca denetliyor).
         permissions: await serverPermissions(username, userRoles, server),
+        // Susturulduysa bitişi: yazma alanı o zamana kadar kapalı.
+        timeoutUntil: await activeTimeout(server._id, username),
         channels: accessible.map((c) => ({
           id: c._id.toString(),
           name: c.name,
@@ -423,6 +431,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
           isOwner: m.isOwner,
           roleIds: (m.roleIds || []).map(String),
           avatarUrl: avatarUrls.get(m.username) || null,
+          timeoutUntil: m.timeoutUntil > new Date() ? m.timeoutUntil : null,
         })),
       });
     } catch (err) {
@@ -453,6 +462,102 @@ module.exports = function registerServerHandlers(socket, ctx) {
     } catch (err) {
       console.error("Üye çıkarılırken hata:", err.message);
       callback({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // ---- Moderasyon ("Üyeleri yönet" yetkisi): yasaklama ve susturma. Sahip
+  // ve kişinin kendisi hedef olamıyor; platform yöneticisi her sunucuyu
+  // gördüğü için yasaklanamıyor (bkz. lib/moderation.js).
+  const moderationTarget = async (serverId, target) => {
+    if (typeof target !== "string" || !target) return { error: "Eksik bilgi." };
+    const { server, error } = await requireServerPermission(ctx.username, serverId, "kickMembers");
+    if (error) return { error };
+    if (target === server.ownerUsername) return { error: "Sunucu sahibine bu yapılamaz." };
+    if (target === ctx.username) return { error: "Bunu kendine yapamazsın." };
+    const user = await User.findOne({ username: target }).select("roles").lean();
+    if (!user) return { error: "Böyle bir kullanıcı yok." };
+    if (isPlatformAdmin(user.roles)) return { error: "Platform yöneticisine bu yapılamaz." };
+    return { server };
+  };
+
+  socket.on("ban-server-member", async ({ serverId, username: target } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    try {
+      const { server, error } = await moderationTarget(serverId, target);
+      if (error) return reply({ success: false, message: error });
+      await ServerBan.updateOne(
+        { serverId: server._id, username: target },
+        { $setOnInsert: { bannedBy: ctx.username, createdAt: new Date() } },
+        { upsert: true }
+      );
+      await ServerMember.deleteOne({ serverId: server._id, username: target });
+      reply({ success: true });
+      await recheckUserAccess(target, "Bu sunucudan yasaklandın.", { listChanged: true });
+      io.to(serverRoomName(server._id.toString())).emit("members-changed", { serverId: server._id.toString() });
+    } catch (err) {
+      console.error("Üye yasaklanırken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  socket.on("unban-server-member", async ({ serverId, username: target } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    if (typeof target !== "string") return reply({ success: false, message: "Eksik bilgi." });
+    try {
+      const { server, error } = await requireServerPermission(ctx.username, serverId, "kickMembers");
+      if (error) return reply({ success: false, message: error });
+      await ServerBan.deleteOne({ serverId: server._id, username: target });
+      reply({ success: true });
+    } catch (err) {
+      console.error("Yasak kaldırılırken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  socket.on("list-server-bans", async ({ serverId } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    try {
+      const { server, error } = await requireServerPermission(ctx.username, serverId, "kickMembers");
+      if (error) return reply({ success: false, message: error });
+      const bans = await ServerBan.find({ serverId: server._id }).sort({ createdAt: -1 }).lean();
+      reply({
+        success: true,
+        bans: bans.map((b) => ({ username: b.username, bannedBy: b.bannedBy, createdAt: b.createdAt })),
+      });
+    } catch (err) {
+      console.error("Yasaklılar alınırken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
+    }
+  });
+
+  // minutes: TIMEOUT_MINUTES'ten biri; 0 susturmayı kaldırıyor. Susturulan
+  // seste ise bu sunucunun sesinden çıkarılıyor; kendi cihazlarında yazma
+  // alanı kapanıyor (timeout-changed).
+  socket.on("timeout-server-member", async ({ serverId, username: target, minutes } = {}, callback) => {
+    const reply = typeof callback === "function" ? callback : () => {};
+    if (minutes !== 0 && !TIMEOUT_MINUTES.includes(minutes)) return reply({ success: false, message: "Geçersiz süre." });
+    try {
+      const { server, error } = await moderationTarget(serverId, target);
+      if (error) return reply({ success: false, message: error });
+      const timeoutUntil = minutes ? new Date(Date.now() + minutes * 60_000) : null;
+      const member = await ServerMember.findOneAndUpdate({ serverId: server._id, username: target }, { timeoutUntil });
+      if (!member) return reply({ success: false, message: "Bu kişi sunucuda değil." });
+      reply({ success: true, timeoutUntil });
+
+      const id = server._id.toString();
+      io.to(`user:${target}`).emit("timeout-changed", { serverId: id, timeoutUntil });
+      if (timeoutUntil) {
+        for (const [roomId, members] of Object.entries(voiceRooms)) {
+          const sockets = Object.entries(members).filter(([, info]) => info.username === target && info.serverId === id);
+          for (const [socketId] of sockets) io.sockets.sockets.get(socketId)?.data.endVoice(TIMEOUT_MESSAGE);
+          if (sockets.length > 0) io.to(textRoomName(roomId)).emit("channel-members", await buildMemberList(roomId));
+        }
+        announcePresence([id]);
+      }
+      io.to(serverRoomName(id)).emit("members-changed", { serverId: id });
+    } catch (err) {
+      console.error("Üye susturulurken hata:", err.message);
+      reply({ success: false, message: "Sunucu hatası, tekrar dene." });
     }
   });
 };

@@ -213,11 +213,25 @@ const serverMemberSchema = new mongoose.Schema({
   isOwner: { type: Boolean, default: false },
   // Sunucuya özel rolleri (bkz. Role).
   roleIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+  // Susturma: bu zamana kadar bu sunucuda yazamıyor ve sese giremiyor
+  // (bkz. lib/moderation.js).
+  timeoutUntil: { type: Date, default: null },
   joinedAt: { type: Date, default: Date.now },
 });
 serverMemberSchema.index({ serverId: 1, username: 1 }, { unique: true });
 const ServerMember =
   mongoose.models.ServerMember || mongoose.model("ServerMember", serverMemberSchema);
+
+// Sunucudan yasaklananlar: çıkarılıyor ve davetle ya da sabit kodla geri
+// giremiyor (yasak kaldırılana kadar).
+const serverBanSchema = new mongoose.Schema({
+  serverId: { type: mongoose.Schema.Types.ObjectId, ref: "Server", required: true },
+  username: { type: String, required: true },
+  bannedBy: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+serverBanSchema.index({ serverId: 1, username: 1 }, { unique: true });
+const ServerBan = mongoose.models.ServerBan || mongoose.model("ServerBan", serverBanSchema);
 
 // YENİ: Kanallar artık ortam değişkenlerinden değil, veritabanından
 // geliyor — her kanal bir sunucuya bağlı. allowedRoles boşsa o sunucunun
@@ -300,6 +314,7 @@ module.exports = {
   Session,
   Server,
   ServerMember,
+  ServerBan,
   Channel,
   Invite,
   Role,

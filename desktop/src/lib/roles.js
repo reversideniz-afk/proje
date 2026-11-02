@@ -7,7 +7,7 @@ export const ROLE_COLORS = ['#f2726c', '#ff9f5a', '#e6b04a', '#5cc08a', '#6ea8f7
 export const PERMISSIONS = [
   { id: 'manageChannels', label: 'Kanalları yönet', hint: 'Kanal oluşturur, adını değiştirir, siler ve kimlerin göreceğini ayarlar.' },
   { id: 'manageMessages', label: 'Mesajları yönet', hint: 'Başkalarının mesajlarını siler.' },
-  { id: 'kickMembers', label: 'Üyeleri çıkar', hint: 'Sunucu sahibi dışında üyeleri sunucudan çıkarır.' },
+  { id: 'kickMembers', label: 'Üyeleri yönet', hint: 'Sunucu sahibi dışında üyeleri çıkarır, yasaklar ve susturur.' },
   { id: 'createInvites', label: 'Davet oluştur', hint: 'Davet bağlantısı oluşturur ve iptal eder.' },
 ]
 

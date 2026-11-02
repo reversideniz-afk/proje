@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const { User, Message, ChannelMember } = require("../db");
 const { canModerateServer, checkChannelAccess } = require("../lib/access");
 const { io } = require("../lib/realtime");
+const { blockedByTimeout } = require("../lib/moderation");
 const { relayPhoto, announceUserPresence, buildMemberList } = require("../lib/rooms");
 const { socketsByUsername, textRooms, textRoomName } = require("../lib/state");
 const { isValidImageDataUri, serializeMessage } = require("../lib/validate");
@@ -146,6 +147,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (!trimmedText || trimmedText.length > 2000) return;
 
     try {
+      if (await blockedByTimeout(socket, ctx.serverId, username)) return;
       let replyTo;
       if (typeof replyToId === "string" && mongoose.isValidObjectId(replyToId)) {
         const original = await Message.findOne({ _id: replyToId, channelId: ctx.textRoom }).lean();
@@ -201,6 +203,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (emoji.length > 8) return; // tek bir emoji karakteri için fazlasıyla yeterli
 
     try {
+      if (await blockedByTimeout(socket, ctx.serverId, username)) return;
       const message = await Message.findOne({ _id: messageId, channelId: ctx.textRoom });
       if (!message) return;
 
@@ -261,6 +264,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     if (!trimmed || trimmed.length > 2000) return;
 
     try {
+      if (await blockedByTimeout(socket, ctx.serverId, username)) return;
       // Anket ve etkinlik mesajları düzenlenmiyor (başlıkları kartın parçası).
       const message = await Message.findOne({
         _id: messageId,
@@ -458,6 +462,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
     const username = await ctx.authenticate(token);
     if (!username || !ctx.textRoom) return;
     if (!isValidImageDataUri(imageData, mimeType)) return;
+    if (await blockedByTimeout(socket, ctx.serverId, username)) return;
     relayPhoto(ctx.textRoom, ctx.serverId, username, imageData, mimeType, [socket.id]);
   });
 

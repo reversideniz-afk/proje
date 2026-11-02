@@ -53,6 +53,14 @@ export function formatKeyCode(code) {
   return code
 }
 
+// Kısa bitiş zamanı: bugünse "12:05", değilse "3 Kas 12:05".
+export function formatShortDateTime(date, now = new Date()) {
+  const d = new Date(date)
+  const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  if (isSameDay(d, now)) return time
+  return `${d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} ${time}`
+}
+
 // YENİ: Mesaj saatini okunabilir göstermek için.
 export function formatMessageTime(dateStr) {
   try {

@@ -30,7 +30,7 @@ import { SettingsScreen } from './components/SettingsScreen.jsx'
 import { VoiceStage } from './components/VoiceStage.jsx'
 import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
-import { describeMediaError, formatEventTime, formatKeyCode } from './lib/format.js'
+import { describeMediaError, formatEventTime, formatKeyCode, formatRelative } from './lib/format.js'
 import { mentionsUser } from './lib/mentions.jsx'
 import { DEFAULT_VOICE_SETTINGS, createMicProcessor, gateSettings, micConstraints } from './lib/micProcessor.js'
 import {
@@ -341,6 +341,16 @@ function App() {
   }, [])
   // YENİ: "Sunucu Üyeleri" (Ayarlar > sadece aktif sunucunun sahibiyken).
   const [serverMembers, setServerMembers] = useState([])
+  // Aktif sunucudan yasaklananlar (Ayarlar > Üyeler, yetkisi olana).
+  const [serverBans, setServerBans] = useState([])
+  // Aktif sunucuda susturulduysan bitişi: o zamana kadar yazma alanı kapalı.
+  const [timeoutUntil, setTimeoutUntil] = useState(null)
+  // Süre dolunca yazma alanı kendiliğinden açılıyor.
+  useEffect(() => {
+    if (!timeoutUntil) return
+    const timer = setTimeout(() => setTimeoutUntil(null), Math.max(0, timeoutUntil.getTime() - Date.now()))
+    return () => clearTimeout(timer)
+  }, [timeoutUntil])
   // Ana sayfa (disko topu): arkadaşlar ve özel mesajlar. Özel mesaj iki
   // kişilik bir kanal; açılınca aktif kanal o oluyor (sunucusu yok). Ana
   // sayfaya geçmek sesi kapatmıyor; aynı sunucuya dönünce son kanal açılıyor.
@@ -1497,17 +1507,23 @@ function App() {
   // ses hep bu kanalda kalır.
   const joinVoice = useCallback(() => {
     if (!socketRef.current) return
-    socketRef.current.emit('join-voice', {
-      token: sessionTokenRef.current,
-      channelId: activeChannelRef.current,
-    })
+    // Sunucu reddederse (ör. bu sunucuda susturuldun) ses yerelde de kapanıyor.
+    socketRef.current.emit(
+      'join-voice',
+      { token: sessionTokenRef.current, channelId: activeChannelRef.current },
+      (response) => {
+        if (response?.success) return
+        resetVoiceState()
+        setNotice(response?.message || 'Sese girilemedi.')
+      }
+    )
     setInVoice(true)
     setVoiceChannel(activeChannelRef.current)
     voiceChannelRef.current = activeChannelRef.current
     // Mikrofon yoksa ya da izin verilmezse sese dinleyici olarak giriliyor;
     // mikrofon düğmesi tekrar deniyor.
     addMicTrack(false)
-  }, [addMicTrack])
+  }, [addMicTrack, resetVoiceState])
 
   // İnternet bir an gidip gelince sunucu bizi sesten çıkarmış oluyor ve
   // eski eş bağlantıları kopmuş bağlantıya ait (karşı taraf da onları
@@ -1860,6 +1876,12 @@ function App() {
     // kanal listeleri yenilensin.
     socket.on('server-list-changed', () => {
       refreshServerDataRef.current?.()
+    })
+
+    // Bir sunucuda susturuldun ya da susturman kaldırıldı: o sunucu açıksa
+    // yazma alanı hemen kapanıyor/açılıyor.
+    socket.on('timeout-changed', ({ serverId, timeoutUntil: until } = {}) => {
+      if (serverId === activeServerIdRef.current) setTimeoutUntil(until ? new Date(until) : null)
     })
 
     // Şifre başka bir cihazda değiştirildi: bu cihazdaki oturum kapandı,
@@ -2429,6 +2451,7 @@ function App() {
       const list = response?.success ? response.channels || [] : []
       setChannels(list)
       setServerPermissions(response?.success ? response.permissions || {} : {})
+      setTimeoutUntil(response?.timeoutUntil ? new Date(response.timeoutUntil) : null)
       setServerRoles(rolesResponse?.success ? rolesResponse.roles : [])
       setUpcomingEvents(eventsResponse?.success ? eventsResponse.events : [])
       // Okunmamışlar ve bahsedilmeler sunucudan (uygulama kapalıyken gelenler dahil).
@@ -3012,13 +3035,26 @@ function App() {
   )
 
   const fetchServerMembers = useCallback(async () => {
-    if (!activeServerIdRef.current) return
-    const response = await emitRequest('list-server-members', {
-      token: sessionTokenRef.current,
-      serverId: activeServerIdRef.current,
-    })
+    const serverId = activeServerIdRef.current
+    if (!serverId) return
+    const [response, bansResponse] = await Promise.all([
+      emitRequest('list-server-members', { token: sessionTokenRef.current, serverId }),
+      emitRequest('list-server-bans', { serverId }),
+    ])
     if (response?.success) setServerMembers(response.members || [])
+    setServerBans(bansResponse?.success ? bansResponse.bans : [])
   }, [emitRequest])
+
+  // Moderasyon (Ayarlar > Üyeler): yasaklama, yasağı kaldırma ve susturma
+  // (minutes 0: susturmayı kaldır). Sonuç { success, message } döner.
+  const moderate = useCallback(
+    async (event, payload) => {
+      const response = await emitRequest(event, { serverId: activeServerIdRef.current, ...payload })
+      if (response?.success) fetchServerMembers()
+      return response
+    },
+    [emitRequest, fetchServerMembers]
+  )
 
   const removeServerMember = useCallback(
     async (targetUsername) => {
@@ -3701,6 +3737,9 @@ function App() {
         : { unread: !!s.unread, mentions: s.mentions || 0 },
     ])
   )
+  // Bu sunucuda susturulduysan yazma alanı kapalı, sese katılma düğmeleri
+  // gizli (özel mesajlar etkilenmiyor).
+  const timedOutHere = !!timeoutUntil && !activeDm
   // Telefonda üye çekmecesi kapalıyken de duruyor ki kaydırınca parmağı
   // takip ederek açılabilsin.
   const membersVisible = !homeOpen && !isVoiceView && (membersPanelOpen || mobileMembersOpen || isNarrow())
@@ -3712,6 +3751,9 @@ function App() {
       variant={isVoiceView ? 'side' : 'full'}
       channelName={activeChannelName}
       isDm={!!activeDm}
+      lockedReason={
+        timedOutHere ? `Bu sunucuda susturuldun: ${formatRelative(timeoutUntil)} yeniden yazabilirsin.` : null
+      }
       items={chatTimeline}
       avatars={avatarByName}
       nameColors={nameColors}
@@ -3896,6 +3938,7 @@ function App() {
           mentionCounts={mentionCounts}
           voiceChannel={voiceChannel}
           inVoice={inVoice}
+          voiceLocked={timedOutHere}
           voicersByChannel={voicersByChannel}
           onOpenChannel={(channelId) => {
             joinChannel(channelId)
@@ -3996,7 +4039,7 @@ function App() {
           isChannel={!!activeChannel && !connectionError}
           isDm={!!activeDm}
           voiceCount={homeOpen ? 0 : voiceCountHere}
-          showJoinVoice={!!activeChannel && !connectionError && !inVoice}
+          showJoinVoice={!!activeChannel && !connectionError && !inVoice && !timedOutHere}
           onJoinVoice={joinVoice}
           membersOpen={isNarrow() ? mobileMembersOpen : membersPanelOpen}
           onToggleMembers={
@@ -4154,6 +4197,10 @@ function App() {
                   roles: serverRoles,
                   members: serverMembers,
                   onRemoveMember: removeServerMember,
+                  bans: serverBans,
+                  onBan: (username) => moderate('ban-server-member', { username }),
+                  onUnban: (username) => moderate('unban-server-member', { username }),
+                  onTimeout: (username, minutes) => moderate('timeout-server-member', { username, minutes }),
                   onSetMemberRoles: setMemberRoles,
                   onCreateRole: () => setRoleDialog({ role: null, busy: false, error: null }),
                   onEditRole: (role) => setRoleDialog({ role, busy: false, error: null }),

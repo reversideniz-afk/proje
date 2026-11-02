@@ -42,6 +42,7 @@ export function ChatPanel({
   onDelete,
   onOpenPhoto,
   messagesRef,
+  lockedReason,
 }) {
   const [dragging, setDragging] = useState(false)
   const [replyingTo, setReplyingTo] = useState(null)
@@ -131,6 +132,7 @@ export function ChatPanel({
         isSendingPhoto={isSendingPhoto}
         onCreatePoll={onCreatePoll}
         onCreateEvent={onCreateEvent}
+        lockedReason={lockedReason}
       />
 
       {dragging && (
