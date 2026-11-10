@@ -1601,3 +1601,175 @@ button.dancer-body {
     0 0 0 3px var(--loca),
     0 0 0 5px var(--metin);
 }
+
+/* ---------------- Birlikte izle ---------------- */
+
+.watch-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 24px;
+  background: var(--loca);
+}
+
+.watch-screen {
+  position: relative;
+  width: min(100%, calc((36vh) * 16 / 9));
+  aspect-ratio: 16 / 9;
+  align-self: center;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #000;
+}
+
+.watch-screen iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Videoya tıklama bizim oynat/duraklat düğmemize gidiyor. */
+.watch-overlay {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.watch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.watch-play {
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.watch-play:hover {
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.watch-time {
+  flex: none;
+  color: var(--ikincil);
+  font: 500 12px/1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.watch-seek {
+  flex: 1;
+  min-width: 60px;
+  accent-color: var(--accent);
+}
+
+.watch-volume {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ikincil);
+}
+
+.watch-volume .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.watch-volume input {
+  width: 80px;
+  accent-color: var(--accent);
+}
+
+.watch-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 6px 2px;
+  color: var(--ikincil);
+  font-size: 13px;
+}
+
+.watch-caption .icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--spot);
+}
+
+.watch-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--metin);
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.watch-note {
+  flex: none;
+  white-space: nowrap;
+}
+
+.app-shell--narrow .watch-panel {
+  margin: 0 12px;
+}
+
+.app-shell--narrow .watch-screen {
+  width: 100%;
+}
+
+.app-shell--narrow .watch-volume input {
+  width: 56px;
+}
+
+.watch-error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  background: rgb(23 10 19 / 88%);
+  color: var(--metin);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Telefonda tek sıra kontrol; birlikte izlerken pist kartı gizli. */
+.dance-floor--compact .voice-controls {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.dance-floor--compact .voice-control {
+  width: 40px;
+  height: 40px;
+}
+
+.dance-floor--compact .voice-leave {
+  flex: 1 0 52px;
+  height: 40px;
+  padding: 0 10px;
+}
+
+.dance-floor--collapsed .floor-card {
+  display: none;
+}

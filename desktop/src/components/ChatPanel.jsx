@@ -43,9 +43,38 @@ export function ChatPanel({
   onOpenPhoto,
   messagesRef,
   lockedReason,
+  onWatchTogether,
 }) {
   const [dragging, setDragging] = useState(false)
   const [replyingTo, setReplyingTo] = useState(null)
+
+  // En alttayken içerik büyürse (sonradan gelen bağlantı önizlemesi, geç
+  // yüklenen görsel) en altta kal; yukarıda okuyan birini kaydırma.
+  useEffect(() => {
+    const el = messagesRef?.current
+    if (!el) return undefined
+    let atBottom = true
+    const onScroll = () => {
+      atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const resize = new ResizeObserver(() => {
+      if (atBottom) el.scrollTop = el.scrollHeight
+    })
+    // Kutunun kendisi küçülünce de (ör. üstte video açılınca).
+    resize.observe(el)
+    const observeChildren = () => {
+      for (const child of el.children) resize.observe(child)
+    }
+    observeChildren()
+    const mutations = new MutationObserver(observeChildren)
+    mutations.observe(el, { childList: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      resize.disconnect()
+      mutations.disconnect()
+    }
+  }, [messagesRef])
   // Başka kanala geçince yarım kalan yanıt düşüyor.
   useEffect(() => {
     setReplyingTo(null)
@@ -94,6 +123,7 @@ export function ChatPanel({
           onVotePoll={onVotePoll}
           onClosePoll={onClosePoll}
           onRsvpEvent={onRsvpEvent}
+          onWatchTogether={onWatchTogether}
           onReact={onReact}
           onEdit={onEdit}
           onDelete={onDelete}

@@ -1,4 +1,5 @@
 // İstemciden gelen verinin doğrulanması ve istemciye gidecek verinin şekli.
+const { serializePreview } = require("./linkPreview");
 
 // Ses odasındaki bir kişinin istemciden kabul edilen durumu: sadece bu üç
 // alan ve sadece true/false.
@@ -43,6 +44,8 @@ function serializeMessage(msg) {
     pinned: msg.pinnedAt ? { by: msg.pinnedBy, at: msg.pinnedAt } : null,
     poll: msg.poll ? serializePoll(msg.poll) : null,
     event: msg.event ? serializeEvent(msg.event) : null,
+    // Sadece varsa: eski istemciler ve testler aynı biçimi görsün.
+    ...(msg.linkPreview?.url ? { linkPreview: serializePreview(msg.linkPreview) } : {}),
   };
 }
 

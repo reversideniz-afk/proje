@@ -10,6 +10,7 @@ import {
   Monitor,
   MonitorOff,
   PartyPopper,
+  Tv,
   Video,
   VideoOff,
 } from 'lucide-react'
@@ -41,7 +42,10 @@ export function VoiceControls({
   onToggleCamera,
   onToggleScreenShare,
   onPlaySound,
+  onWatchTogether,
   onLeave,
+  // Telefonda tek sıra: "Pistten çık" yerine kısa "Çık".
+  compact = false,
 }) {
   const [soundboardOpen, setSoundboardOpen] = useState(false)
   const soundboardRef = useRef(null)
@@ -123,8 +127,13 @@ export function VoiceControls({
           )}
         </div>
       )}
-      <button type="button" className="voice-leave leave-voice-button" onClick={onLeave} title="Sesten çık">
-        Pistten çık
+      {onWatchTogether && (
+        <button type="button" className="voice-control" onClick={onWatchTogether} title="Birlikte izle" aria-label="Birlikte izle">
+          <Tv className="icon" />
+        </button>
+      )}
+      <button type="button" className="voice-leave leave-voice-button" onClick={onLeave} title="Sesten çık" aria-label="Pistten çık">
+        {compact ? 'Çık' : 'Pistten çık'}
       </button>
     </div>
   )

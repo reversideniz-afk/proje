@@ -1,13 +1,47 @@
 // Metin kanalları: girme/çıkma, mesajlar, tepkiler, düzenleme ve silme,
 // !sil komutları, yazıyor göstergesi, eski mesajlar, bağlantının kopması.
 const mongoose = require("mongoose");
-const { User, Message, ChannelMember } = require("../db");
+const { User, Message, ChannelMember, LinkImage } = require("../db");
 const { canModerateServer, checkChannelAccess } = require("../lib/access");
 const { io } = require("../lib/realtime");
 const { blockedByTimeout } = require("../lib/moderation");
 const { relayPhoto, announceUserPresence, buildMemberList } = require("../lib/rooms");
 const { socketsByUsername, textRooms, textRoomName } = require("../lib/state");
 const { isValidImageDataUri, serializeMessage } = require("../lib/validate");
+const { firstLinkIn, previewFor, serializePreview } = require("../lib/linkPreview");
+
+// Mesaj kaydedilip herkese gittikten sonra: ilk bağlantının önizlemesi
+// çekilip mesaja ekleniyor ve kanaldakilere "message-link-preview" ile
+// gidiyor. Düzenlenince bağlantı değiştiyse yenileniyor ya da kalkıyor.
+async function attachLinkPreview(messageId, channelId, text) {
+  const link = firstLinkIn(text);
+  try {
+    const current = await Message.findById(messageId).select("linkPreview").lean();
+    if (!current) return;
+    if (!link) {
+      if (current.linkPreview?.url) {
+        await Message.updateOne({ _id: messageId }, { $unset: { linkPreview: 1 } });
+        io.to(textRoomName(channelId)).emit("message-link-preview", { messageId: String(messageId), linkPreview: null });
+      }
+      return;
+    }
+    if (current.linkPreview?.url === link) return;
+    const preview = await previewFor(link, LinkImage);
+    // Bu arada düzenlenip bağlantı değiştiyse eski sonucu yazma.
+    const latest = await Message.findById(messageId).select("text").lean();
+    if (!latest || firstLinkIn(latest.text) !== link) return;
+    if (preview) await Message.updateOne({ _id: messageId }, { linkPreview: preview });
+    else await Message.updateOne({ _id: messageId }, { $unset: { linkPreview: 1 } });
+    if (preview || current.linkPreview?.url) {
+      io.to(textRoomName(channelId)).emit("message-link-preview", {
+        messageId: String(messageId),
+        linkPreview: serializePreview(preview),
+      });
+    }
+  } catch (err) {
+    console.error("Bağlantı önizlemesi eklenirken hata:", err.message);
+  }
+}
 
 module.exports = function registerChannelHandlers(socket, ctx) {
   // ---- YENİ: Metin kanalına katılma (SES BAĞLANTISI KURMAZ) ----
@@ -162,6 +196,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
         replyTo,
       });
       io.to(textRoomName(ctx.textRoom)).emit("new-message", serializeMessage(message.toObject()));
+      attachLinkPreview(message._id, ctx.textRoom, trimmedText);
       // YENİ: bu kanalın ÜYESİ olan ama şu an BAŞKA bir kanalda olan
       // kişilere hafif bir "burada bir şey oldu" işareti gönder —
       // okunmamış kanal işareti için. Kendisi zaten mesajı gördüğü
@@ -283,6 +318,7 @@ module.exports = function registerChannelHandlers(socket, ctx) {
         newText: trimmed,
         editedAt: message.editedAt,
       });
+      attachLinkPreview(message._id, ctx.textRoom, trimmed);
     } catch (err) {
       console.error("Mesaj düzenlenirken hata:", err.message);
     }

@@ -77,6 +77,8 @@ export function DanceFloor({
   mediaError,
   onDismissMediaError,
   compact = false,
+  // Telefonda birlikte izlerken pist kartı gizleniyor (sadece kontroller).
+  collapsed = false,
 }) {
   const floorRef = useRef(null)
   const anglesRef = useRef(new Map())
@@ -90,7 +92,7 @@ export function DanceFloor({
   const people = `${dancers.length} kişi pistte`
   return (
     <section
-      className={'voice-stage dance-floor' + (compact ? ' dance-floor--compact' : '')}
+      className={'voice-stage dance-floor' + (compact ? ' dance-floor--compact' : '') + (collapsed ? ' dance-floor--collapsed' : '')}
       aria-label="Ses bağlantısı"
     >
       <div className="floor-card" ref={floorRef} style={{ '--ball-color': color }}>
@@ -186,7 +188,7 @@ export function DanceFloor({
           </button>
         </div>
       )}
-      <VoiceControls {...controls} />
+      <VoiceControls {...controls} compact={compact} />
     </section>
   )
 }

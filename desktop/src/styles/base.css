@@ -241,11 +241,18 @@ img {
   transition: background-color 0.15s, color 0.15s;
 }
 
-.icon-btn:hover:not(:disabled),
 .icon-btn[aria-expanded='true'],
 .icon-btn[aria-pressed='true'] {
   background: var(--kabin);
   color: var(--metin);
+}
+
+/* Dokunmatikte üzerine gelme yok: dokunulan düğme basılı gibi kalmasın. */
+@media (hover: hover) {
+  .icon-btn:hover:not(:disabled) {
+    background: var(--kabin);
+    color: var(--metin);
+  }
 }
 
 .icon-btn:disabled {

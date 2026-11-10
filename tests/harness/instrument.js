@@ -159,6 +159,29 @@ export function installSyntheticMic(peakDb) {
   }
 }
 
+// Sayfada çalışır: mikrofon yerine beyaz gürültü (fan/uğultu gibi). Güçlü
+// gürültü bastırmanın (RNNoise) ayıklaması gereken türden ses.
+export function installSyntheticNoise(peakDb) {
+  const ctx = new AudioContext({ sampleRate: 48000 })
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+  const noise = ctx.createBufferSource()
+  noise.buffer = buffer
+  noise.loop = true
+  const gain = ctx.createGain()
+  gain.gain.value = 10 ** (peakDb / 20)
+  const output = ctx.createMediaStreamDestination()
+  noise.connect(gain).connect(output)
+  noise.start()
+  window.__disco.syntheticMic = { ctx, gain }
+  MediaDevices.prototype.getUserMedia = async function () {
+    const track = output.stream.getAudioTracks()[0].clone()
+    window.__disco.mediaTracks.push(track)
+    return new MediaStream([track])
+  }
+}
+
 export function setSyntheticMicLevel(peakDb) {
   const { ctx, gain } = window.__disco.syntheticMic
   gain.gain.setValueAtTime(10 ** (peakDb / 20), ctx.currentTime)

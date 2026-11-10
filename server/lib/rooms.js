@@ -1,5 +1,6 @@
 // Odalara yayınlanan bilgiler: üye listeleri, varlık (kim çevrimiçi, kim
 // seste), ses odasından çıkarma, fotoğraf iletme, erişim yeniden kontrolü.
+const { clearWatch } = require("./watch");
 const { User, ChannelMember, ServerMember, Channel } = require("../db");
 const { ADMIN_ROLE } = require("./access");
 const { avatarUrlsFor } = require("./avatars");
@@ -131,6 +132,8 @@ function removeVoiceMember(roomId, socketId) {
   if (serverId) announcePresence([serverId]);
   if (Object.keys(room).length === 0) {
     delete voiceRooms[roomId];
+    // Birlikte izlenen video da bitiyor.
+    clearWatch(roomId);
     // Özel mesajda kimse kalmadı: açılmamış arama da bitti.
     if (!serverId) endDmCall(roomId);
   }

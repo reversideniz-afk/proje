@@ -3,7 +3,7 @@
 const express = require("express");
 const path = require("path");
 const mongoose = require("mongoose");
-const { Channel, User, Server: ServerModel } = require("../db");
+const { Channel, LinkImage, User, Server: ServerModel } = require("../db");
 const { AVATAR_TYPES, avatarVersion } = require("../lib/avatars");
 const { createRateLimiter } = require("../lib/limits");
 const { TIMEOUT_MESSAGE, activeTimeout } = require("../lib/moderation");
@@ -150,6 +150,19 @@ app.get("/api/server-icons/:serverId", async (req, res) => {
     sendStoredImage(req, res, server?.iconData, server?.iconUpdatedAt);
   } catch (err) {
     console.error("Sunucu simgesi okunurken hata:", err.message);
+    res.status(500).end();
+  }
+});
+
+// Bağlantı önizlemesi görselleri (bkz. lib/linkPreview.js): içerik adresin
+// özetiyle değişmediği için uzun süre önbellekte kalabiliyor.
+app.get("/api/link-images/:id", async (req, res) => {
+  if (!/^[0-9a-f]{32}$/.test(req.params.id)) return res.status(404).end();
+  try {
+    const image = await LinkImage.findById(req.params.id).lean();
+    sendStoredImage({ query: { v: "0" } }, res, image?.data, null);
+  } catch (err) {
+    console.error("Önizleme görseli okunurken hata:", err.message);
     res.status(500).end();
   }
 });

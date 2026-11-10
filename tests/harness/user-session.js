@@ -7,6 +7,7 @@ import {
   readIncomingAudioBytesPerConnection,
   readSpeakerPeak,
   setSyntheticMicLevel,
+  installSyntheticNoise,
 } from './instrument.js'
 import { PASSWORD } from './seed.js'
 
@@ -154,6 +155,10 @@ export class UserSession {
   // installSyntheticMic). Sese girmeden önce çağır.
   useSyntheticMic(peakDb) {
     return this.page.evaluate(installSyntheticMic, peakDb)
+  }
+
+  useSyntheticNoise(peakDb) {
+    return this.page.evaluate(installSyntheticNoise, peakDb)
   }
 
   setSyntheticMicLevel(peakDb) {

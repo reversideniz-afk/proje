@@ -4,9 +4,9 @@
 // üstüne gelince, klavyeyle odaklanınca, sağ tıklayınca ve dokunmatikte
 // uzun basınca görünüyor (H15; eskiden sadece sağ tıkla açılıyordu).
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { CalendarDays, ChartColumn, Check, Copy, CornerUpLeft, Info, Pencil, Pin, PinOff, Reply, SmilePlus, Trash2, X } from 'lucide-react'
+import { CalendarDays, ChartColumn, Check, Copy, CornerUpLeft, Info, Pencil, Pin, PinOff, Play, Reply, SmilePlus, Trash2, Tv, X } from 'lucide-react'
 import { Avatar } from './Avatar.jsx'
-import { QUICK_REACTIONS } from '../lib/config.js'
+import { QUICK_REACTIONS, assetUrl } from '../lib/config.js'
 import { formatDayLabel, formatEventTime, formatFullDate, formatMessageTime, formatRelative, isSameDay } from '../lib/format.js'
 import { renderMarkdown } from '../lib/markdown.jsx'
 import { mentionsUser } from '../lib/mentions.jsx'
@@ -177,6 +177,53 @@ function EventCard({ item, displayName, onRsvp }) {
   )
 }
 
+// Mesajdaki ilk bağlantının önizlemesi (sunucu çekiyor; bkz.
+// server/lib/linkPreview.js). YouTube videosunda, sesteyken "Birlikte izle".
+function LinkPreviewCard({ preview, onWatchTogether }) {
+  const image = assetUrl(preview.imageUrl)
+  const isVideo = preview.kind === 'youtube'
+  return (
+    <div
+      className={`link-card link-card--${preview.kind}`}
+      style={preview.color ? { '--link-color': preview.color } : undefined}
+    >
+      {preview.kind !== 'image' && (
+        <div className="link-card-text">
+          {preview.siteName && <span className="link-card-site">{preview.siteName}</span>}
+          {preview.title && (
+            <a className="link-card-title" href={preview.url} target="_blank" rel="noopener noreferrer">
+              {preview.title}
+            </a>
+          )}
+          {preview.description && <p className="link-card-desc">{preview.description}</p>}
+        </div>
+      )}
+      {image && (
+        <a
+          className="link-card-media"
+          href={preview.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={preview.title ? `${preview.title} (bağlantıyı aç)` : 'Bağlantıyı aç'}
+        >
+          <img src={image} alt="" loading="lazy" draggable="false" />
+          {isVideo && (
+            <span className="link-card-play" aria-hidden="true">
+              <Play className="icon" />
+            </span>
+          )}
+        </a>
+      )}
+      {isVideo && onWatchTogether && (
+        <button type="button" className="btn btn--small link-card-watch" onClick={() => onWatchTogether(preview)}>
+          <Tv className="icon" />
+          Birlikte izle
+        </button>
+      )}
+    </div>
+  )
+}
+
 // colorOf: kişinin adının rengi (rol rengi, yoksa kişiye özel renk).
 function MessageItem({
   item,
@@ -204,6 +251,7 @@ function MessageItem({
   onVotePoll,
   onClosePoll,
   onRsvpEvent,
+  onWatchTogether,
 }) {
   const pressTimer = useRef(null)
   const pressStart = useRef(null)
@@ -327,6 +375,8 @@ function MessageItem({
           </div>
         )}
 
+        {!isEditing && item.linkPreview && <LinkPreviewCard preview={item.linkPreview} onWatchTogether={onWatchTogether} />}
+
         {reactions.length > 0 && (
           <div className="chat-reactions">
             {reactions.map(([emoji, usernames]) => {
@@ -436,6 +486,7 @@ export function MessageList({
   onVotePoll,
   onClosePoll,
   onRsvpEvent,
+  onWatchTogether,
   containerRef,
 }) {
   const colorOf = (name) => nameColors?.get(name) || userColor(name)
@@ -519,6 +570,7 @@ export function MessageList({
           onVotePoll={onVotePoll}
           onClosePoll={onClosePoll}
           onRsvpEvent={onRsvpEvent}
+          onWatchTogether={onWatchTogether}
           grouped={grouped}
           displayName={displayName}
           canModerate={canModerate}

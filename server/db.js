@@ -113,10 +113,37 @@ const messageSchema = new mongoose.Schema({
   // Anket ya da etkinlik mesajı (bkz. socket/plans.js); metin başlığı.
   poll: { type: pollSchema, default: undefined },
   event: { type: eventSchema, default: undefined },
+  // Mesajdaki ilk bağlantının önizlemesi (bkz. lib/linkPreview.js); sunucu
+  // mesaj gönderildikten sonra ekliyor.
+  linkPreview: {
+    type: new mongoose.Schema(
+      {
+        url: String,
+        kind: { type: String, enum: ["page", "youtube", "image"] },
+        videoId: String,
+        siteName: String,
+        title: String,
+        description: String,
+        imageId: String,
+        color: String,
+      },
+      { _id: false }
+    ),
+    default: undefined,
+  },
 });
 // Kanalın son mesajları ve "şu andan sonraki mesajlar" sorguları için.
 messageSchema.index({ channelId: 1, createdAt: -1 });
 const Message = mongoose.models.Message || mongoose.model("Message", messageSchema);
+
+// Bağlantı önizlemesi görselleri: adresin özetiyle saklanıyor, 30 gün sonra
+// siliniyor (mesaj kalsa da kart görselsiz görünür).
+const linkImageSchema = new mongoose.Schema({
+  _id: { type: String },
+  data: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 30 },
+});
+const LinkImage = mongoose.models.LinkImage || mongoose.model("LinkImage", linkImageSchema);
 
 // YENİ: Bir kişi bir kanala (metin olarak) katıldığında buraya kaydı
 // düşüyor — "bu kanalda hiç bulunmuş biri" listesini (çevrimdışı
@@ -329,6 +356,7 @@ module.exports = {
   connectDB,
   User,
   Message,
+  LinkImage,
   ChannelMember,
   BannedIp,
   Session,

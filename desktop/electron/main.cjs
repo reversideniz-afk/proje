@@ -308,6 +308,19 @@ app.whenReady().then(() => {
     }
   );
 
+  // Birlikte izle: YouTube'un gömülü oynatıcısı isteğin hangi siteden
+  // geldiğini (Referer) istiyor. Uygulama dosyadan (file://) açıldığı için
+  // bu başlık boş gidiyor ve oynatıcı "yapılandırma hatası (153)" veriyor;
+  // sadece YouTube isteklerine Disco'nun web adresi yazılıyor.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["https://www.youtube-nocookie.com/*", "https://www.youtube.com/*"] },
+    (details, callback) => {
+      const headers = details.requestHeaders;
+      if (!headers.Referer && !headers.referer) headers.Referer = "https://proje-dh7l.onrender.com/";
+      callback({ requestHeaders: headers });
+    }
+  );
+
   // YENİ: getDisplayMedia (ekran paylaşımı) isteklerini işliyoruz.
   // Windows'un deneysel "sistem seçici"si (useSystemPicker) her yerde
   // güvenilir çalışmadığı için KENDİ seçim arayüzümüzü kuruyoruz:

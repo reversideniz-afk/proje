@@ -9,6 +9,7 @@ import { DanceFloor } from './components/DanceFloor.jsx'
 import { Glints } from './components/DiscoBall.jsx'
 import { FloorsCard } from './components/FloorsCard.jsx'
 import { TopBar } from './components/TopBar.jsx'
+import { WatchDialog, WatchPanel } from './components/WatchTogether.jsx'
 import { ChatPanel } from './components/ChatPanel.jsx'
 import {
   CategoryDialog,
@@ -822,7 +823,14 @@ function App() {
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      // 48 kHz: güçlü gürültü bastırma (RNNoise) bu hızda çalışıyor; tarayıcı
+      // gerekirse hoparlörün hızına kendisi çeviriyor.
+      let ctx
+      try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 })
+      } catch {
+        ctx = new (window.AudioContext || window.webkitAudioContext)()
+      }
       audioContextRef.current = ctx
       // Context YENİ kuruldu — kullanıcı daha önce (henüz kimse konuşmadan)
       // bir çıkış cihazı seçmiş olabilir. O seçimi hemen burada uyguluyoruz,
@@ -911,7 +919,9 @@ function App() {
       })
       const ctx = getAudioContext()
       await audioContextReadyRef.current
-      const processor = await createMicProcessor(ctx, gateConfigRef.current)
+      const processor = await createMicProcessor(ctx, gateConfigRef.current, {
+        denoise: voiceSettingsRef.current.strongNoiseSuppression,
+      })
       processor.setInput(stream.getAudioTracks()[0])
       const autoStopTimer = setTimeout(stopMicTest, 15000)
       micTestCleanupRef.current = () => {
@@ -931,6 +941,14 @@ function App() {
     micTestProcessor?.setGate(gateConfig)
   }, [gateConfig, micProcessor, micTestProcessor])
 
+  // Güçlü gürültü bastırma (RNNoise) seste ve mikrofon testinde anında
+  // açılıp kapanıyor; mikrofon yeniden açılmıyor.
+  const strongNoiseSuppression = voiceSettings.strongNoiseSuppression
+  useEffect(() => {
+    micProcessor?.setDenoise(strongNoiseSuppression)
+    micTestProcessor?.setDenoise(strongNoiseSuppression)
+  }, [strongNoiseSuppression, micProcessor, micTestProcessor])
+
   // Panel kapanırken ya da bileşen kaldırılırken testi arkada bırakma.
   useEffect(() => {
     if (!showAppSettings) stopMicTest()
@@ -947,6 +965,11 @@ function App() {
   }, [isDeafened])
   // Biri ses efekti çalınca sahnede kısa not: { key, username, sound }
   const [soundToast, setSoundToast] = useState(null)
+  // Birlikte izleme: { session, offset (sunucu saati - bizimki), by, action }
+  // ya da null (bkz. components/WatchTogether.jsx). watchDialog: bağlantı
+  // penceresi { busy, error } | null.
+  const [watch, setWatch] = useState(null)
+  const [watchDialog, setWatchDialog] = useState(null)
   useEffect(() => {
     if (!soundToast) return
     const timer = setTimeout(() => setSoundToast(null), 2500)
@@ -1434,6 +1457,7 @@ function App() {
     voiceChannelRef.current = null
     setVolumePopup(null)
     setIsDeafened(false)
+    setWatch(null)
     // Ses seviyesi düğümleri bir sonraki sese girişte sıfırdan kurulacak.
     gainNodesRef.current.forEach((gainNode) => gainNode.disconnect())
     gainNodesRef.current.clear()
@@ -1478,7 +1502,9 @@ function App() {
           const ready = Promise.all([audioContextReadyRef.current, ctx.state === 'running' || ctx.resume()])
           await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 2000))])
           if (ctx.state !== 'running') throw new Error(`ses motoru ${ctx.state}`)
-          processor = await createMicProcessor(ctx, gateConfigRef.current)
+          processor = await createMicProcessor(ctx, gateConfigRef.current, {
+            denoise: voiceSettingsRef.current.strongNoiseSuppression,
+          })
         } catch (err) {
           console.warn('[mikrofon] ses kapısı kurulamadı, mikrofon işlenmeden gidiyor:', err.message)
           return rawTrack
@@ -1807,6 +1833,21 @@ function App() {
       setSoundToast({ key: Date.now(), username: from, sound })
     })
 
+    // Birlikte izleme: odadaki ortak durum değişti (ya da sese yeni girdik).
+    socket.on('watch-state', ({ session, serverNow, by, action }) => {
+      setWatch((prev) => {
+        if (!session) return null
+        // Sadece başlık geldiyse son işlem notu ("Ece duraklattı") kalıyor.
+        const keep = action === 'title' && prev
+        return {
+          session,
+          offset: serverNow - Date.now(),
+          by: keep ? prev.by : by || null,
+          action: keep ? prev.action : action || null,
+        }
+      })
+    })
+
     // Ankette oy ya da etkinlikte katılım değişti.
     socket.on('poll-updated', ({ messageId, poll }) => {
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, poll } : m)))
@@ -1829,6 +1870,12 @@ function App() {
       setMessages((prev) =>
         prev.map((m) => (m.id === messageId ? { ...m, text: newText, editedAt } : m))
       )
+    })
+
+    // Sunucu mesajdaki bağlantının önizlemesini sonradan ekliyor (ya da
+    // düzenlenince kaldırıyor).
+    socket.on('message-link-preview', ({ messageId, linkPreview }) => {
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, linkPreview } : m)))
     })
 
     // YENİ: Üye olunan bir kanalda (o an İÇİNDE olunmayan) yeni
@@ -2995,6 +3042,34 @@ function App() {
 
   // Kanal düzenleme (Kanalları yönet): ad, erişim, silme. Liste sunucunun
   // channels-changed duyurusuyla herkeste yenileniyor.
+  // Birlikte izleme (seste olanlar): başlat, oynat/duraklat/sar, bitir.
+  // Sonuç herkese (bize de) "watch-state" ile geliyor.
+  // fromDialog: bağlantı penceresinden (hata pencerede), değilse sohbetteki
+  // YouTube kartından (hata pistin altında).
+  const startWatch = useCallback(
+    async (videoId, title = null, fromDialog = false) => {
+      if (fromDialog) setWatchDialog((prev) => prev && { ...prev, busy: true, error: null })
+      const response = await emitRequest('watch-start', { videoId, title })
+      if (response?.success) {
+        if (fromDialog) setWatchDialog(null)
+        return
+      }
+      const message = response?.message || 'Video başlatılamadı.'
+      if (fromDialog) setWatchDialog((prev) => prev && { ...prev, busy: false, error: message })
+      else setMediaError(message)
+    },
+    [emitRequest]
+  )
+  const controlWatch = useCallback(
+    (action, position) => {
+      emitRequest('watch-control', { action, position })
+    },
+    [emitRequest]
+  )
+  const stopWatch = useCallback(() => {
+    emitRequest('watch-stop', {})
+  }, [emitRequest])
+
   const handleSaveChannel = useCallback(
     async ({ name, allowedRoleIds, categoryId, ballColor }) => {
       const channel = editChannelDialog?.channel
@@ -3871,6 +3946,7 @@ function App() {
   const danceFloor = inVoice && (
     <DanceFloor
       compact={narrow}
+      collapsed={narrow && !!watch}
       title={floorTitle}
       isDm={!!voiceDm}
       color={floorColor}
@@ -3896,9 +3972,13 @@ function App() {
         onToggleCamera: toggleCamera,
         onToggleScreenShare: toggleScreenShare,
         onPlaySound: (soundId) => emitRequest('play-sound', { soundId }),
+        onWatchTogether: () => setWatchDialog({ busy: false, error: null }),
         onLeave: leaveVoice,
       }}
     />
+  )
+  const watchPanel = inVoice && watch && (
+    <WatchPanel key={watch.session.videoId} watch={watch} onControl={controlWatch} onStop={stopWatch} />
   )
   const videoStage = inVoice && (
     <VideoStage
@@ -3955,6 +4035,7 @@ function App() {
       onDelete={handleDeleteMessage}
       onOpenPhoto={setPhotoLightbox}
       messagesRef={chatMessagesRef}
+      onWatchTogether={inVoice ? (preview) => startWatch(preview.videoId, preview.title) : null}
     />
   )
 
@@ -4232,6 +4313,7 @@ function App() {
             {header}
             {banners}
             {danceFloor}
+            {watchPanel}
             {videoStage}
             {mainContent}
           </main>
@@ -4304,6 +4386,7 @@ function App() {
               )}
             </aside>
             <main className="main-panel">
+              {watchPanel}
               {videoStage}
               <div className="chat-card">
                 {header}
@@ -4316,6 +4399,14 @@ function App() {
         </>
       )}
       {inVoice && <RemoteAudioSinks remoteStreams={remoteStreams} />}
+      {watchDialog && inVoice && (
+        <WatchDialog
+          busy={watchDialog.busy}
+          error={watchDialog.error}
+          onStart={(videoId) => startWatch(videoId, null, true)}
+          onClose={() => setWatchDialog(null)}
+        />
+      )}
 
       {showAppSettings && (
         <SettingsScreen

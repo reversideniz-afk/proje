@@ -351,7 +351,13 @@ function AudioPage({ audio }) {
       <InputSensitivity audio={audio} />
       <Section title="Ses işleme" description="Seste değiştirirsen mikrofon yeni ayarla bir an kapanıp açılır.">
         <Toggle
-          label="Gürültü bastırma"
+          label="Güçlü gürültü bastırma"
+          hint="Klavye, fare tıkı, fan, köpek havlaması gibi konuşma olmayan sesleri yapay zekâyla ayıklar. Mikrofonu yeniden açmadan hemen uygulanır."
+          checked={voice.strongNoiseSuppression}
+          onChange={(strongNoiseSuppression) => onVoiceChange({ strongNoiseSuppression })}
+        />
+        <Toggle
+          label="Tarayıcının gürültü bastırması"
           hint="Fan, klima, uğultu gibi sürekli arka plan seslerini azaltır."
           checked={voice.noiseSuppression}
           onChange={(noiseSuppression) => onVoiceChange({ noiseSuppression })}

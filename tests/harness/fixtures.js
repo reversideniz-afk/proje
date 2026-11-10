@@ -37,7 +37,10 @@ export const test = base.extend({
           const seed = await seedDatabase(mongoUri)
           const server = new ServerProcess({
             mongoUri,
-            extraEnv: { REGISTER_INVITE_CODE, ALLOW_TEST_TOKENS: 'true' },
+            // LINK_PREVIEW_ALLOW_LOOPBACK: bağlantı önizlemesi testlerin yerel
+            // sitesine (127.0.0.1) gidebilsin; sadece ALLOW_TEST_TOKENS ile
+            // birlikte geçerli (bkz. server/lib/linkPreview.js).
+            extraEnv: { REGISTER_INVITE_CODE, ALLOW_TEST_TOKENS: 'true', LINK_PREVIEW_ALLOW_LOOPBACK: 'true' },
           })
           const pointProxiesAt = (port) => {
             appProxy.setTarget(port)

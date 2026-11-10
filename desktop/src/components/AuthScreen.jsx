@@ -2,7 +2,7 @@
 // bekleme ekranı). Alanlar etiketli; şifre yöneticileri tanısın diye
 // autocomplete değerleri doğru.
 import { Eye, EyeOff, LoaderCircle } from 'lucide-react'
-import { DiscoBall } from './DiscoBall.jsx'
+import logoUrl from '../assets/logo.png'
 import './AuthScreen.css'
 
 function AuthShell({ children, subtitle, invite }) {
@@ -11,7 +11,7 @@ function AuthShell({ children, subtitle, invite }) {
       <main className="auth-card">
         <div className="auth-brand">
           <span className="auth-logo-glow" aria-hidden="true" />
-          <DiscoBall color="#C9B8E8" size={72} facets={8} speed={10} className="auth-logo" />
+          <img src={logoUrl} alt="" className="auth-logo" width="72" height="72" />
           <h1 className="auth-title">Disco</h1>
           {subtitle && <p className="auth-subtitle">{subtitle}</p>}
         </div>

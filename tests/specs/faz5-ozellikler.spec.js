@@ -28,6 +28,9 @@ const micTracks = (user) =>
 
 // Giriş hassasiyeti testlerindeki tonlar (bkz. useSyntheticMic): konuşma
 // (tepe -14 dB, etkin değer -17) ve sürekli ortam sesi (tepe -40, etkin -43).
+// Bu testler ses kapısını ölçüyor: güçlü gürültü bastırma (RNNoise) sabit
+// tonu "gürültü" sayıp kıstığı için onlarda kapalı (bkz. gurultu.spec.js).
+const NO_RNNOISE = { strongNoiseSuppression: false }
 const SPEECH_DB = -14
 const ROOM_DB = -40
 
@@ -1112,7 +1115,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
 
   test('giriş hassasiyeti: elle seçilen eşiğin altındaki ses karşıya gitmiyor', async ({ disco }) => {
     const ece = await disco.user('Ece', {
-      storage: { voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -30 }) },
+      storage: { voiceSettings: JSON.stringify({ ...NO_RNNOISE, autoSensitivity: false, thresholdDb: -30 }) },
     })
     const mert = await disco.user('Mert')
     await ece.useSyntheticMic(SPEECH_DB)
@@ -1136,7 +1139,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
   })
 
   test('otomatik hassasiyet: sürekli ortam sesi gitmiyor, üstüne çıkan konuşma gidiyor', async ({ disco }) => {
-    const ece = await disco.user('Ece')
+    const ece = await disco.user('Ece', { storage: { voiceSettings: JSON.stringify(NO_RNNOISE) } })
     const mert = await disco.user('Mert')
     await ece.useSyntheticMic(ROOM_DB)
     await joinVoiceTogether(ece, mert)
@@ -1164,7 +1167,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
 
   test('bas-konuşta hassasiyet kullanılmıyor: tuş basılıyken sessiz ses de gidiyor', async ({ disco }) => {
     const ece = await disco.user('Ece', {
-      storage: { pttKey: 'KeyV', voiceSettings: JSON.stringify({ autoSensitivity: false, thresholdDb: -10 }) },
+      storage: { pttKey: 'KeyV', voiceSettings: JSON.stringify({ ...NO_RNNOISE, autoSensitivity: false, thresholdDb: -10 }) },
     })
     const mert = await disco.user('Mert')
     await ece.useSyntheticMic(ROOM_DB)
@@ -1203,7 +1206,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     ])
 
     await openAudioSettings(ece)
-    await ece.page.getByRole('switch', { name: 'Gürültü bastırma' }).click()
+    await ece.page.getByRole('switch', { name: /^Tarayıcının gürültü bastırması/ }).click()
     await ece.page.getByRole('switch', { name: 'Yankı engelleme' }).click()
     await expect
       .poll(async () => {
@@ -1228,7 +1231,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
   })
 
   test('sesten önce mikrofon testi seviye çubuğunu dolduruyor, bitince mikrofonu bırakıyor', async ({ disco }) => {
-    const ece = await disco.user('Ece')
+    const ece = await disco.user('Ece', { storage: { voiceSettings: JSON.stringify(NO_RNNOISE) } })
     await ece.useSyntheticMic(SPEECH_DB)
     await openAudioSettings(ece)
     const meter = ece.page.getByRole('meter', { name: 'Mikrofon seviyesi' })

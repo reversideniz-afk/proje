@@ -8,6 +8,7 @@ const { avatarUrlOf } = require("../lib/avatars");
 const { io } = require("../lib/realtime");
 const { announcePresence, removeVoiceMember, buildMemberList } = require("../lib/rooms");
 const { voiceRooms, textRoomName, voiceRoomName } = require("../lib/state");
+const { watchSessions, serializeWatch } = require("../lib/watch");
 const { pickVoiceState } = require("../lib/validate");
 
 // 1.1.0 ve öncesinin ses bağlantısı (eş başına ayrı ekran bağlantısı,
@@ -118,6 +119,8 @@ module.exports = function registerVoiceHandlers(socket, ctx) {
       .filter(([id]) => id !== socket.id)
       .map(([id, info]) => ({ socketId: id, ...info }));
     socket.emit("existing-voice-users", existingVoiceUsers);
+    // Odada birlikte izlenen bir video varsa yeni gelen de oradan katılıyor.
+    if (watchSessions.has(roomId)) socket.emit("watch-state", serializeWatch(roomId, { action: "sync" }));
 
     if (!alreadyInRoom) {
       socket.to(voiceRoomName(roomId)).emit("voice-user-joined", {
