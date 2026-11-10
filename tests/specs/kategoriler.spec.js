@@ -9,7 +9,7 @@ const channelNames = (scope) => scope.locator('.channel-name').allTextContents()
 const categoryOrder = (user) =>
   user.page.locator('section.channel-category').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))
 // Kategorisiz kanallar: ilk listedeki kanallar.
-const topChannels = (user) => channelNames(user.page.locator('.channel-sidebar .channel-list').first())
+const topChannels = (user) => channelNames(user.page.locator('.channel-ribbon .channel-list').first())
 
 test.describe('Kanal kategorileri', { tag: '@faz5' }, () => {
   test('kategori oluşturuluyor, kanal içine konuyor, sürükleyerek sıralanıyor; herkeste aynı', async ({ disco }) => {

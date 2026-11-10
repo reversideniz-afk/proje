@@ -48,8 +48,8 @@ export class UserSession {
     return this.page.locator('.channel-header-title')
   }
 
-  // Sol alttaki "Ses bağlı" paneli: seste olduğun sürece hangi kanala
-  // bakarsan bak görünüyor.
+  // Dans pisti (ses kontrolleriyle birlikte): seste olduğun sürece hangi
+  // kanala bakarsan bak görünüyor.
   voicePanel() {
     return this.page.getByRole('region', { name: 'Ses bağlantısı' })
   }
@@ -67,7 +67,16 @@ export class UserSession {
   }
 
   leaveVoiceButton() {
-    return this.voicePanel().getByRole('button', { name: 'Sesten çık' })
+    return this.voicePanel().getByRole('button', { name: 'Pistten çık' })
+  }
+
+  // Masaüstünde sunucular ve özel mesajlar alttaki dock'ta; dock imleç
+  // pencerenin alt kenarına gelince çıkıyor (telefonda çekmecede).
+  async showDock() {
+    const size = this.page.viewportSize()
+    if (!size || size.width <= 760) return
+    await this.page.mouse.move(size.width / 2, size.height - 2)
+    await expect(this.page.locator('.dock')).toHaveClass(/dock--shown/)
   }
 
   mediaButton(title) {
@@ -96,7 +105,15 @@ export class UserSession {
     await this.page.getByRole('button', { name: 'Gönder' }).click()
   }
 
+  // Pistteki kişi (sesteki herkes ortadaki topun etrafında).
   peerTile(peerName) {
+    return this.page.locator('.dancer', {
+      has: this.page.locator('.dancer-name', { hasText: new RegExp(`^${peerName}$`) }),
+    })
+  }
+
+  // Kamerası açık kişinin görüntü kutucuğu (pistin değil, sohbetin üstünde).
+  cameraTile(peerName) {
     return this.page.locator('.remote-video-wrapper', {
       has: this.page.locator('.remote-video-label', { hasText: new RegExp(`^${peerName}$`) }),
     })

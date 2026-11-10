@@ -29,6 +29,7 @@ export const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 // :root[data-theme] bloğuyla eşleşen bir kimlik + önizleme rengi. Yeni bir
 // tema eklemek istersen: base.css'e bir blok, buraya bir satır eklemen yeterli.
 export const THEMES = [
+  { id: 'kadife', label: 'Kadife', color: '#ff8fb8' },
   { id: 'mercan', label: 'Mercan', color: '#f2726c' },
   { id: 'mor', label: 'Mor', color: '#a98af7' },
   { id: 'mavi', label: 'Mavi', color: '#6ea8f7' },

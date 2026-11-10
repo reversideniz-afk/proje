@@ -31,7 +31,7 @@ import { STATUSES, presenceLine, statusLabel } from '../lib/presence.js'
 import { IS_DESKTOP_APP } from '../lib/config.js'
 
 // Menüde sadece yetkisi olan işlemler (bkz. sunucuya özel roller).
-function ServerHeader({ name, permissions, onInvite, onCreateChannel, onCreateCategory, onOpenServerSettings, onAddServer, onClose }) {
+export function ServerHeader({ name, permissions, onInvite, onCreateChannel, onCreateCategory, onOpenServerSettings, onAddServer, onClose }) {
   const canOpenSettings = permissions.isOwner || permissions.createInvites || permissions.kickMembers
   const hasActions = permissions.createInvites || permissions.manageChannels || canOpenSettings
   const [menuOpen, setMenuOpen] = useState(false)
@@ -191,7 +191,7 @@ function VoicePanel({ channelName, isDm, ping, reconnecting, isScreenSharing, on
 }
 
 // Ana sayfa (özel mesajlar): Arkadaşlar ve konuşmalar, en yeni üstte.
-function DmNav({ home }) {
+export function DmNav({ home }) {
   const { dms, activeDmId, friendsActive, incomingCount, onOpenFriends, onOpenDm } = home
   return (
     <>
@@ -292,7 +292,7 @@ function StatusMenu({ status, customStatus, onSetStatus, onEditCustomStatus, onC
   )
 }
 
-function UserPanel({
+export function UserPanel({
   displayName,
   avatarUrl,
   speaking,
@@ -309,6 +309,9 @@ function UserPanel({
   onToggleMic,
   onToggleDeafen,
   onOpenSettings,
+  // Üst çubuktaki hâli: mikrofon ve kulaklık pistin altında olduğu için
+  // burada sadece kişi ve ayarlar.
+  compact = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const panelRef = useRef(null)
@@ -323,7 +326,7 @@ function UserPanel({
         : 'Mikrofonu aç'
   const subtitle = customStatus || (pttEnabled ? `Bas-konuş: ${formatKeyCode(pttKey)}` : statusLabel(status))
   return (
-    <section className="user-panel" aria-label="Kullanıcı paneli" ref={panelRef}>
+    <section className={'user-panel' + (compact ? ' user-panel--compact' : '')} aria-label="Kullanıcı paneli" ref={panelRef}>
       <button
         type="button"
         className="user-panel-me"
@@ -355,6 +358,8 @@ function UserPanel({
           onClose={closeMenu}
         />
       )}
+      {!compact && (
+      <>
       <button
         type="button"
         className={'icon-btn' + (inVoice && !isMicOn ? ' icon-btn--off' : '')}
@@ -375,6 +380,8 @@ function UserPanel({
       >
         {isDeafened ? <HeadphoneOff className="icon" /> : <Headphones className="icon" />}
       </button>
+      </>
+      )}
       <button type="button" className="icon-btn" onClick={onOpenSettings} aria-label="Ayarlar" title="Ayarlar">
         <Settings className="icon" />
       </button>
@@ -400,7 +407,9 @@ function readCollapsed() {
 // başlığa bırakınca o kategorinin sonuna; kategoriyi bir kategorinin önüne
 // ya da en sona. Telefonda sürükleme yok, kategori kanal düzenleme
 // penceresinden seçiliyor.
-function ChannelList({ channels, categories, manage, activeChannel, myVoiceChannel, onCreateChannel, onEditCategory, onMoveChannel, onMoveCategory, renderChannel }) {
+// variant 'ribbon': masaüstündeki üst şerit (yan yana); kategorisiz kanallar
+// başta, kategoriler ardından, "Kanal oluştur" en sonda.
+export function ChannelList({ channels, categories, manage, activeChannel, myVoiceChannel, onCreateChannel, onEditCategory, onMoveChannel, onMoveCategory, renderChannel, variant = 'sidebar' }) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [drag, setDrag] = useState(null) // { kind: 'channel' | 'category', id }
   const [dropTarget, setDropTarget] = useState(null) // anahtar: 'channel:<id>', 'category:<id>', 'top', 'end'
@@ -424,11 +433,13 @@ function ChannelList({ channels, categories, manage, activeChannel, myVoiceChann
       onDragOver: (e) => {
         if (!drag || !accepts(drag)) return
         e.preventDefault()
+        e.stopPropagation()
         if (dropTarget !== key) setDropTarget(key)
       },
       onDragLeave: () => setDropTarget((current) => (current === key ? null : current)),
       onDrop: (e) => {
         e.preventDefault()
+        e.stopPropagation()
         if (drag && accepts(drag)) onDrop(drag)
         setDrag(null)
         setDropTarget(null)
@@ -464,20 +475,32 @@ function ChannelList({ channels, categories, manage, activeChannel, myVoiceChann
     ...categories.map((category) => ({ category, channels: channels.filter((c) => c.categoryId === category.id) })),
   ]
 
+  const ribbon = variant === 'ribbon'
   return (
     <>
-      <div
-        className={'sidebar-category' + (dropTarget === 'top' ? ' is-drop-target' : '')}
-        {...dropZone('top', isChannel, (d) => onMoveChannel(d.id, null, null))}
-      >
-        <span>Kanallar</span>
-        {manage && (
-          <button type="button" className="icon-btn icon-btn--small" onClick={() => onCreateChannel(null)} aria-label="Kanal oluştur" title="Kanal oluştur">
-            <Plus className="icon" />
-          </button>
-        )}
-      </div>
-      <ul className="channel-list">{groups[0].channels.map(channelRow)}</ul>
+      {ribbon ? (
+        <ul
+          className={'channel-list' + (dropTarget === 'top' ? ' is-drop-target' : '')}
+          {...dropZone('top', isChannel, (d) => onMoveChannel(d.id, null, null))}
+        >
+          {groups[0].channels.map(channelRow)}
+        </ul>
+      ) : (
+        <>
+          <div
+            className={'sidebar-category' + (dropTarget === 'top' ? ' is-drop-target' : '')}
+            {...dropZone('top', isChannel, (d) => onMoveChannel(d.id, null, null))}
+          >
+            <span>Kanallar</span>
+            {manage && (
+              <button type="button" className="icon-btn icon-btn--small" onClick={() => onCreateChannel(null)} aria-label="Kanal oluştur" title="Kanal oluştur">
+                <Plus className="icon" />
+              </button>
+            )}
+          </div>
+          <ul className="channel-list">{groups[0].channels.map(channelRow)}</ul>
+        </>
+      )}
       {groups.slice(1).map(({ category, channels: inCategory }) => {
         // Görebildiği kanalı olmayan kategori sadece yönetene görünüyor.
         if (inCategory.length === 0 && !manage) return null
@@ -534,7 +557,31 @@ function ChannelList({ channels, categories, manage, activeChannel, myVoiceChann
           En sona taşı
         </div>
       )}
+      {ribbon && manage && (
+        <button type="button" className="ribbon-add" onClick={() => onCreateChannel(null)} aria-label="Kanal oluştur" title="Kanal oluştur">
+          <Plus className="icon" />
+        </button>
+      )}
     </>
+  )
+}
+
+// Güncelleme: inerken ilerleme, hazır olunca "yeniden başlat / yenile".
+export function UpdateBanner({ update }) {
+  return (
+    <div className="update-banner" role="status">
+      {update.ready ? (
+        <button type="button" className="update-banner-button" onClick={update.onInstall}>
+          <Download className="icon" />
+          {IS_DESKTOP_APP ? 'Güncelleme hazır, yeniden başlat' : 'Güncelleme hazır, yenile'}
+        </button>
+      ) : (
+        <span className="update-banner-progress">
+          Güncelleme iniyor… %{update.progress}
+          <span className="update-banner-bar" style={{ '--progress': `${update.progress}%` }} />
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -654,21 +701,7 @@ export function ChannelSidebar({
         )}
       </div>
 
-      {update && (
-        <div className="update-banner" role="status">
-          {update.ready ? (
-            <button type="button" className="update-banner-button" onClick={update.onInstall}>
-              <Download className="icon" />
-              {IS_DESKTOP_APP ? 'Güncelleme hazır, yeniden başlat' : 'Güncelleme hazır, yenile'}
-            </button>
-          ) : (
-            <span className="update-banner-progress">
-              Güncelleme iniyor… %{update.progress}
-              <span className="update-banner-bar" style={{ '--progress': `${update.progress}%` }} />
-            </span>
-          )}
-        </div>
-      )}
+      {update && <UpdateBanner update={update} />}
       {voicePanel && <VoicePanel {...voicePanel} />}
       <UserPanel {...userPanel} />
     </aside>

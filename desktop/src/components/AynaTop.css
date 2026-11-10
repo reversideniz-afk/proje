@@ -1,0 +1,1603 @@
+/* ------------------------------------------------------------
+   Ayna Top düzeni: dönen ayna top, dans pisti, üst çubuk, kanal şeridi,
+   alttaki gizlenen dock ve telefondaki kartlar. Renkler base.css'te.
+------------------------------------------------------------ */
+
+/* ---------------- Ayna top ---------------- */
+
+.disco-ball {
+  position: relative;
+  flex: none;
+  display: block;
+  width: var(--ball-size);
+  height: var(--ball-size);
+  overflow: hidden;
+  border-radius: 50%;
+  box-shadow: 0 0 calc(var(--ball-size) * 0.45) var(--ball-glow);
+  isolation: isolate;
+}
+
+/* Yüzey iki tur genişliğinde; yarısı kadar kayınca başa dönüyor (dikiş
+   görünmüyor). İkinci yüzey aynı hızla dönüyor, rengin öbür yanı; belirip
+   kayboldukça ton kayıyor. */
+.disco-ball-strip {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 200%;
+  height: 100%;
+  background-size: 100% 100%;
+  animation: ball-spin var(--ball-speed, 12s) steps(var(--ball-steps, 120)) infinite;
+}
+
+.disco-ball-strip--alt {
+  opacity: 0;
+  animation:
+    ball-spin var(--ball-speed, 12s) steps(var(--ball-steps, 120)) infinite,
+    ball-tone 16s steps(32) infinite;
+}
+
+.disco-ball-shade {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow:
+    inset calc(var(--ball-size) * -0.16) calc(var(--ball-size) * -0.14) calc(var(--ball-size) * 0.25) rgb(0 0 0 / 50%),
+    inset calc(var(--ball-size) * 0.09) calc(var(--ball-size) * 0.075) calc(var(--ball-size) * 0.17) rgb(255 255 255 / 35%);
+}
+
+@keyframes ball-spin {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes ball-tone {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---------------- Arkadaki parıltılar ---------------- */
+
+.glints {
+  position: absolute;
+  left: 230px;
+  top: 300px;
+  z-index: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Dönüş ve parıltı adım adım (saniyede 4 ve 2 kez değişiyor): göze
+   akıcı geliyor, tarayıcı her karede yeniden çizmek zorunda kalmıyor. */
+.glints-spin {
+  position: absolute;
+  top: calc(var(--glint-r) * -1);
+  left: calc(var(--glint-r) * -1);
+  width: calc(var(--glint-r) * 2);
+  height: calc(var(--glint-r) * 2);
+  animation: glint-spin 70s steps(280) infinite;
+}
+
+.glints-set {
+  position: absolute;
+  inset: 0;
+  background-size: 100% 100%;
+  opacity: 0.85;
+  animation: glint-twinkle 6s steps(12) infinite alternate;
+}
+
+.glints-set--b {
+  animation-delay: -6s;
+}
+
+@keyframes glint-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes glint-twinkle {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0.12;
+  }
+}
+
+/* ---------------- Geniş ekran düzeni ---------------- */
+
+.app-shell {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.app-shell--wide {
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 22px 20px;
+}
+
+.app-shell--wide > .topbar,
+.app-shell--wide > .ayna-body {
+  position: relative;
+  z-index: 1;
+}
+
+/* Üst çubuktaki menüler (sunucu menüsü, durum) gövdenin üstüne açılıyor. */
+.app-shell--wide > .topbar {
+  z-index: 3;
+}
+
+.ayna-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 20px;
+}
+
+/* Sol sütun: kare pist (ya da pistler kartı) ve üyeler. Pencere alçaksa
+   pist küçülüyor ki üye listesine yer kalsın. */
+.ayna-left {
+  flex: none;
+  width: clamp(280px, min(28vw, 100dvh - 360px), 392px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Sunucu yokken (ya da bağlantı hatasında) sol sütun boş: sohbet tam genişlik. */
+.ayna-left:empty {
+  display: none;
+}
+
+.app-shell--wide .main-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: none;
+}
+
+.chat-card {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-card);
+  background: var(--sahne);
+}
+
+/* ---------------- Üst çubuk ---------------- */
+
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+}
+
+.topbar-brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-name {
+  font: 800 25px/1 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.topbar .sidebar-header {
+  flex: none;
+  height: auto;
+  max-width: 220px;
+  padding: 0;
+  border: 0;
+}
+
+.topbar .sidebar-header > .sidebar-server-name {
+  padding: 0 4px;
+  font-weight: 800;
+}
+
+.topbar .sidebar-server-button {
+  height: 42px;
+  padding: 0 12px 0 16px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  background: var(--loca);
+}
+
+.topbar .sidebar-server-button:hover,
+.topbar .sidebar-server-button[aria-expanded='true'] {
+  background: var(--kabin);
+}
+
+.topbar .sidebar-server-name {
+  font: 700 15px/1.2 var(--font-body);
+}
+
+.topbar .sidebar-server-menu {
+  right: auto;
+  left: 0;
+  z-index: 30;
+  width: 260px;
+}
+
+/* Kanal şeridi: ortada, sığmazsa yana kayıyor. */
+.channel-ribbon {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.ribbon-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.channel-ribbon .channel-list {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.channel-ribbon .channel-row {
+  position: relative;
+  flex: none;
+}
+
+.channel-ribbon .channel-button {
+  width: auto;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  color: var(--metin);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.channel-ribbon .channel-button:hover {
+  background: var(--loca);
+}
+
+.channel-ribbon .channel-button--active,
+.channel-ribbon .channel-button--active:hover {
+  border-color: var(--accent);
+  background: var(--kabin);
+}
+
+.channel-ribbon .channel-button--unread {
+  font-weight: 800;
+}
+
+.channel-ribbon .channel-button--unread::before {
+  display: none;
+}
+
+.channel-ribbon .channel-name {
+  flex: none;
+  max-width: 180px;
+}
+
+.channel-ribbon .channel-row--editable .channel-button {
+  padding-right: 36px;
+}
+
+.channel-edit {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: -14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--soluk);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.channel-edit .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.channel-edit:hover {
+  background: var(--kabin-hover);
+  color: var(--metin);
+}
+
+.channel-row:hover .channel-edit,
+.channel-edit:focus-visible {
+  opacity: 1;
+}
+
+.channel-live {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ball-color);
+  box-shadow: 0 0 8px var(--ball-color);
+}
+
+.channel-ribbon .channel-category {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--cizgi);
+}
+
+.channel-ribbon .sidebar-category {
+  flex: none;
+  min-height: 40px;
+  margin: 0;
+  gap: 2px;
+  border-radius: 999px;
+}
+
+.channel-ribbon .channel-category-toggle {
+  height: 32px;
+  padding: 0 8px 0 4px;
+  border-radius: 999px;
+}
+
+.channel-ribbon .channel-row.is-drop-target::before {
+  top: 6px;
+  right: auto;
+  bottom: 6px;
+  left: -5px;
+  width: 3px;
+  height: auto;
+}
+
+.channel-ribbon .channel-list.is-drop-target {
+  border-radius: 999px;
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+.channel-ribbon .channel-category-end {
+  flex: none;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.ribbon-add {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px dashed var(--soluk);
+  border-radius: 50%;
+  background: none;
+  color: var(--ikincil);
+}
+
+.ribbon-add:hover {
+  border-style: solid;
+  color: var(--metin);
+}
+
+.ribbon-add .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Sağdaki sen: kişi ve ayarlar (mikrofon ve kulaklık pistin altında). */
+.user-panel--compact {
+  --ring-bg: var(--loca);
+  flex: none;
+  max-width: 280px;
+  min-height: 0;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  background: var(--loca);
+}
+
+.user-panel--compact .user-panel-me {
+  padding: 2px 10px 2px 2px;
+  border-radius: 999px;
+}
+
+.user-panel--compact .icon-btn {
+  border-radius: 50%;
+}
+
+.user-panel--compact .status-menu {
+  top: calc(100% + 8px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+.topbar .update-banner {
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.topbar .update-banner-button {
+  border-radius: 999px;
+}
+
+/* ---------------- Dans pisti ---------------- */
+
+.voice-stage.dance-floor {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: none;
+}
+
+.floor-card {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-card);
+  background: var(--loca);
+}
+
+.floor-head {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  left: 16px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.floor-title {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--metin);
+  font: 800 17px/1.2 var(--font-display);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
+.floor-title:hover {
+  text-decoration: underline;
+}
+
+.floor-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ikincil);
+  font-size: 12px;
+}
+
+.floor-sub--warn {
+  color: var(--uyari);
+}
+
+.floor-sub .icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* Pistin çemberi: biraz aşağıda ki üstteki kanal adına değmesin. */
+.floor-ring {
+  --ball-r: 48px;
+  position: absolute;
+  top: calc(50% + 10px);
+  left: 50%;
+  width: 68%;
+  aspect-ratio: 1;
+  border: 1px dashed var(--cizgi);
+  border-radius: 50%;
+  translate: -50% -50%;
+}
+
+/* Topun asıldığı ip. */
+.floor-wire {
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  width: 1px;
+  height: calc(50% - var(--ball-r) + 40px);
+  background: var(--cizgi);
+}
+
+.floor-ball {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  translate: -50% -50%;
+  box-shadow:
+    0 0 0 5px var(--loca),
+    0 0 0 6px var(--cizgi),
+    0 0 40px var(--ball-glow);
+}
+
+/* En yüksek sesle konuşana topun ışığı düşüyor (yönü ve gücü
+   DanceFloor.jsx'te sesten ayarlanıyor). */
+.floor-beam {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 50%;
+  height: 32%;
+  margin-top: -16%;
+  background: linear-gradient(90deg, transparent 20%, var(--spot));
+  clip-path: polygon(0 46%, 100% 0, 100% 100%, 0 54%);
+  opacity: calc(var(--beam-on, 0) * 0.42);
+  transform: rotate(var(--beam-angle, -55deg));
+  transform-origin: 0 50%;
+  transition:
+    transform 0.35s var(--ease-out),
+    opacity 0.25s;
+}
+
+.floor-dancers {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dancer {
+  --level: 0;
+  --dancer-size: 44px;
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  translate: -50% calc(var(--dancer-size) / -2 - 2px);
+}
+
+.dancer.is-speaking {
+  z-index: 3;
+}
+
+.dancer-body {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+}
+
+button.dancer-body {
+  cursor: pointer;
+}
+
+.dancer-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--spot);
+  opacity: 0;
+  transform: scale(calc(1 + var(--level) * 0.7));
+  transition: opacity 0.2s;
+}
+
+.dancer.is-speaking .dancer-halo {
+  opacity: calc(0.18 + var(--level) * 0.4);
+}
+
+.dancer-avatar {
+  position: relative;
+  display: block;
+  border-radius: 50%;
+  transform: scale(calc(1 + var(--level) * 0.3));
+  transition: transform 70ms linear;
+}
+
+.dancer-avatar .avatar {
+  --size: var(--dancer-size);
+  width: var(--dancer-size);
+  height: var(--dancer-size);
+  box-shadow:
+    0 0 0 3px var(--loca),
+    0 0 0 4px var(--cizgi);
+  transition: box-shadow 0.2s;
+}
+
+.dancer.is-speaking .dancer-avatar .avatar {
+  box-shadow:
+    0 0 0 3px var(--loca),
+    0 0 0 5px var(--spot),
+    0 0 22px var(--spot);
+}
+
+.dancer.is-muted .dancer-avatar {
+  opacity: 0.55;
+}
+
+.dancer-tag {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 96px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--kabin);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+
+.dancer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dancer-tag .icon {
+  flex: none;
+  width: 11px;
+  height: 11px;
+}
+
+.dancer.is-speaking .dancer-tag {
+  background: var(--spot);
+  color: #170a13;
+}
+
+/* Kalabalık pist: avatarlar küçülüyor, adlar sadece konuşurken ve
+   üzerine gelince. */
+.floor-ring--crowded .dancer {
+  --dancer-size: 34px;
+}
+
+.floor-ring--crowded .dancer:not(.is-speaking, :hover, :focus-within) .dancer-tag {
+  visibility: hidden;
+}
+
+.floor-more {
+  position: absolute;
+  bottom: 10px;
+  left: 14px;
+  z-index: 4;
+  color: var(--ikincil);
+  font-size: 12px;
+}
+
+.floor-speaker {
+  color: var(--spot);
+  font-weight: 800;
+}
+
+.floor-card .stage-toast {
+  top: auto;
+  bottom: 12px;
+  max-width: calc(100% - 24px);
+  white-space: nowrap;
+}
+
+.dance-floor .stage-error {
+  position: static;
+}
+
+/* Kontroller: yuvarlak düğmeler ve "Pistten çık". */
+.dance-floor .voice-controls {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  translate: none;
+}
+
+.dance-floor .voice-control {
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--cizgi);
+  border-radius: 50%;
+  background: var(--kabin);
+}
+
+.dance-floor .voice-control .icon {
+  width: 19px;
+  height: 19px;
+}
+
+.voice-leave {
+  flex: 1 0 104px;
+  min-width: 0;
+  height: 46px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.voice-leave:hover {
+  background: var(--accent-hover);
+}
+
+/* ---------------- Pistler kartı ve etkinlikler ---------------- */
+
+.floors-card,
+.side-card {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-card);
+  background: var(--loca);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-title {
+  margin: 0;
+  font: 800 20px/1.1 var(--font-display);
+}
+
+.card-meta {
+  color: var(--ikincil);
+  font-size: 12px;
+}
+
+.floor-rows,
+.event-rows {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.floor-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--cizgi);
+  border-radius: 20px;
+  background: var(--kabin);
+}
+
+.floor-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.floor-row-name {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--metin);
+  font: 800 16px/1.2 var(--font-display);
+  white-space: nowrap;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.floor-row-name:hover {
+  text-decoration: underline;
+}
+
+.floor-row-line {
+  overflow: hidden;
+  color: var(--ikincil);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.floor-row-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.floor-row-people .avatar {
+  --size: 24px;
+  width: 24px;
+  height: 24px;
+}
+
+.floor-row-more {
+  color: var(--ikincil);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.floor-join {
+  flex: none;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: none;
+  color: var(--metin);
+  font-size: 13px;
+  font-weight: 800;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.floor-join:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.card-subtitle {
+  margin: 6px 0 0;
+  color: var(--ikincil);
+  font: 800 14px/1.2 var(--font-display);
+}
+
+.event-rows {
+  gap: 2px;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  color: var(--metin);
+  text-align: left;
+}
+
+.event-row:hover {
+  background: var(--kabin);
+}
+
+.event-row .icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--spot);
+}
+
+.event-row-text {
+  min-width: 0;
+  display: grid;
+}
+
+.event-row-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.event-row-line {
+  color: var(--ikincil);
+  font-size: 12px;
+}
+
+/* Sol sütundaki üye listesi ve özel mesajlar kartı. */
+.ayna-left .member-list-panel {
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  height: auto;
+  padding: 10px 10px 14px;
+  border: 1px solid var(--cizgi);
+  border-radius: 24px;
+  background: var(--loca);
+}
+
+.dm-card {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 10px;
+  overflow-y: auto;
+}
+
+/* ---------------- Sohbet kartı ---------------- */
+
+.channel-header-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.channel-header-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.channel-header-eyebrow {
+  overflow: hidden;
+  color: var(--ikincil);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-card .channel-header {
+  height: auto;
+  min-height: 64px;
+  padding: 12px 14px 8px 22px;
+  border-bottom: 0;
+}
+
+.chat-card .channel-header-title {
+  font: 800 24px/1.15 var(--font-display);
+}
+
+.live-dot {
+  box-shadow: 0 0 0 3px rgb(244 193 82 / 22%);
+}
+
+/* ---------------- Kamera ve ekran ---------------- */
+
+.video-stage {
+  position: relative;
+  flex: none;
+  display: flex;
+  height: clamp(220px, 36vh, 340px);
+  overflow: hidden;
+  border-radius: 24px;
+}
+
+.video-stage[hidden] {
+  display: none;
+}
+
+.video-stage--focus {
+  height: clamp(300px, 56vh, 620px);
+}
+
+.video-stage .stage-area {
+  padding: 0;
+}
+
+.video-stage .tile {
+  border-radius: 20px;
+  background: var(--kabin);
+}
+
+/* Sahnenin kenarında kesilmesin diye dıştaki ışıma yok, sadece çerçeve. */
+.video-stage .tile.is-speaking {
+  box-shadow: none;
+}
+
+.video-stage .tile::after {
+  box-shadow: inset 0 0 0 1px var(--cizgi);
+}
+
+.video-stage .tile.is-speaking::after {
+  box-shadow: inset 0 0 0 2px var(--spot);
+}
+
+.video-stage .stage-strip > .tile {
+  border-radius: 14px;
+}
+
+/* Düğmeler hap biçiminde (Ayna Top). */
+.btn {
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+/* ---------------- Sunucular: dock ve telefondaki sıra ---------------- */
+
+.server-rail {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.server-rail-icon {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
+.server-rail-face {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 15px;
+  background: var(--server-color, var(--kabin));
+  color: #170a13;
+  font: 800 15px/1 var(--font-display);
+  transition: box-shadow 0.2s;
+}
+
+.server-rail-icon--active .server-rail-face {
+  box-shadow:
+    0 0 0 3px var(--kabin),
+    0 0 0 5px var(--spot);
+}
+
+.server-rail-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.server-icon--gif {
+  position: relative;
+}
+
+.server-icon-still,
+.server-icon-anim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.server-icon-anim {
+  opacity: 0;
+}
+
+.server-rail-icon:hover .server-icon-anim,
+.server-rail-icon:focus-visible .server-icon-anim {
+  opacity: 1;
+}
+
+/* Simgenin altında (üstüne binmeden): açık sunucuda Spot noktası,
+   okunmamışta beyaz nokta, bahsedilince sayı. */
+.server-rail-dot {
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+
+.server-rail-dot::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.server-rail-icon--active .server-rail-dot::before {
+  background: var(--spot);
+}
+
+.server-rail-icon--unread .server-rail-dot::before {
+  background: var(--metin);
+}
+
+.server-rail-count {
+  min-width: 18px;
+  height: 12px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--tehlike);
+  color: #fff;
+  font: 800 9.5px/12px var(--font-body);
+  text-align: center;
+}
+
+.server-rail-divider {
+  flex: none;
+  align-self: flex-start;
+  width: 1px;
+  height: 28px;
+  margin-top: 8px;
+  background: var(--cizgi);
+}
+
+.server-rail-home {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 14px 0 12px;
+  border: 2px solid var(--cizgi);
+  border-radius: 999px;
+  background: none;
+  color: var(--metin);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.server-rail-home .icon {
+  width: 19px;
+  height: 19px;
+}
+
+.server-rail-home:hover,
+.server-rail-home--active {
+  border-color: var(--accent);
+}
+
+.server-rail-home--active {
+  background: var(--accent-soft);
+}
+
+.server-rail-home:has(.server-rail-home-count) {
+  border-color: var(--accent);
+}
+
+.server-rail-icon--add .server-rail-face {
+  border: 1px dashed var(--soluk);
+  border-radius: 50%;
+  background: none;
+  color: var(--ikincil);
+}
+
+.server-rail-icon--add:hover .server-rail-face {
+  border-style: solid;
+  color: var(--metin);
+}
+
+.server-rail-icon--add .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* macOS'taki gizlenen dock: alt kenara gelince yaylanarak çıkıyor, çıkınca
+   hızlanarak iniyor. */
+.dock-hotzone {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  height: 8px;
+}
+
+.dock-hint {
+  position: fixed;
+  bottom: 6px;
+  left: 50%;
+  z-index: 39;
+  width: 120px;
+  height: 4px;
+  margin-left: -60px;
+  border-radius: 2px;
+  background: var(--cizgi);
+  pointer-events: none;
+  transition:
+    opacity 0.3s,
+    transform 0.4s var(--ease-spring);
+}
+
+.dock-hint--hidden {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.dock {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  z-index: 41;
+  max-width: calc(100vw - 32px);
+  transform: translate(-50%, calc(100% + 28px));
+  transition: transform 0.36s cubic-bezier(0.5, 0, 0.75, 0);
+}
+
+.dock--shown {
+  transform: translate(-50%, 0);
+  transition: transform 0.55s var(--ease-spring);
+}
+
+.dock .server-rail {
+  padding: 9px 16px 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border: 1px solid var(--cizgi);
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--kabin) 92%, transparent);
+  box-shadow: 0 18px 40px rgb(8 2 6 / 60%);
+  backdrop-filter: blur(14px);
+}
+
+/* Büyüteç: üzerine gelinen simge büyüyüp kalkıyor, komşuları biraz
+   (araları 12 px; en büyük hâlde de birbirine değmiyor). */
+.dock .server-rail > * {
+  transform-origin: 50% 100%;
+  transition: transform 0.28s var(--ease-spring);
+}
+
+.dock .server-rail > :is(.server-rail-icon, .server-rail-home):hover {
+  transform: translateY(-3px) scale(1.15);
+}
+
+.dock .server-rail > :is(.server-rail-icon, .server-rail-home):has(+ :hover),
+.dock .server-rail > :is(.server-rail-icon, .server-rail-home):hover + :is(.server-rail-icon, .server-rail-home) {
+  transform: translateY(-1px) scale(1.06);
+}
+
+/* ---------------- Telefon ---------------- */
+
+.app-shell--narrow .app-glints {
+  left: 50%;
+  top: 210px;
+}
+
+.app-shell--narrow .main-panel {
+  z-index: 1;
+  gap: 10px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  background: none;
+}
+
+.app-shell--narrow .channel-header {
+  border-bottom: 0;
+}
+
+.app-shell--narrow .channel-header {
+  gap: 4px;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.app-shell--narrow .channel-header-heading {
+  flex: 1;
+  align-items: stretch;
+  overflow: hidden;
+  text-align: center;
+}
+
+.app-shell--narrow .channel-header-line {
+  justify-content: center;
+}
+
+/* Telefonda arama bir simge; dokununca açılıyor. */
+.app-shell--narrow .header-search {
+  margin-right: 0;
+}
+
+.app-shell--narrow .header-search input {
+  width: 36px;
+  height: 36px;
+  padding-right: 0;
+  background: transparent;
+  color: transparent;
+}
+
+.app-shell--narrow .header-search input::placeholder {
+  color: transparent;
+}
+
+.app-shell--narrow .header-search input:focus {
+  width: 150px;
+  background: var(--kabin);
+  color: var(--metin);
+}
+
+.app-shell--narrow .header-search input:focus::placeholder {
+  color: var(--soluk);
+}
+
+/* "Sese katıl" yuvarlak bir düğme (adı ekran okuyucuda duruyor). */
+.app-shell--narrow .join-voice-button {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  border-radius: 50%;
+  font-size: 0;
+}
+
+.app-shell--narrow .channel-header-title {
+  font: 800 20px/1.15 var(--font-display);
+}
+
+.app-shell--narrow .channel-header-actions {
+  margin-left: 0;
+}
+
+.app-shell--narrow .dance-floor,
+.app-shell--narrow .video-stage {
+  margin: 0 12px;
+}
+
+.app-shell--narrow .channel-body,
+.app-shell--narrow .main-panel > .empty-state {
+  margin: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--cizgi);
+  border-radius: var(--radius-card);
+  background: var(--sahne);
+}
+
+.app-shell--narrow .video-stage {
+  height: 190px;
+}
+
+.dance-floor--compact .floor-card {
+  height: 236px;
+  aspect-ratio: auto;
+}
+
+.dance-floor--compact .floor-ring {
+  --ball-r: 36px;
+  top: calc(50% + 12px);
+  width: min(290px, 80%);
+  height: 172px;
+  aspect-ratio: auto;
+}
+
+.dance-floor--compact .floor-wire {
+  display: none;
+}
+
+.dance-floor--compact .floor-beam {
+  height: 44%;
+  margin-top: -22%;
+}
+
+.dance-floor--compact .dancer {
+  --dancer-size: 40px;
+}
+
+/* Telefonda adlar yerine sağ altta "… konuşuyor"; adlar ekran okuyucuda. */
+.dance-floor--compact .dancer-tag {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.dance-floor--compact .voice-control {
+  width: 42px;
+  height: 42px;
+}
+
+.dance-floor--compact .voice-leave {
+  height: 42px;
+}
+
+.app-shell--narrow .nav-drawer {
+  flex-direction: column;
+  width: min(330px, calc(100vw - 40px));
+  background: var(--loca);
+}
+
+.nav-drawer .server-rail {
+  flex: none;
+  gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 14px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--gece);
+}
+
+.nav-drawer .channel-sidebar {
+  flex: 1;
+  width: 100%;
+}
+
+.nav-drawer .sidebar-header {
+  height: var(--header-height);
+  padding-top: 0;
+}
+
+/* ---------------- Hareket azaltma ---------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .disco-ball-strip,
+  .glints-spin,
+  .glints-set {
+    animation: none;
+  }
+
+  .dancer-avatar,
+  .dancer-halo {
+    transform: none;
+  }
+
+  .server-rail-icon:hover .server-icon-anim {
+    opacity: 0;
+  }
+
+  .dock,
+  .dock--shown,
+  .dock .server-rail > * {
+    transition: none;
+  }
+
+  .dock .server-rail > * {
+    transform: none !important;
+  }
+}
+
+/* ---------------- Kanal ayarı: pist topu ---------------- */
+
+.ball-picker {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.ball-picker-controls {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ball-picker-label {
+  color: var(--ikincil);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ball-hex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 14px;
+  background: var(--kabin);
+}
+
+.ball-hex:focus-within {
+  border-color: var(--accent);
+}
+
+.ball-hex--invalid {
+  border-color: var(--uyari);
+}
+
+.ball-hex input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--metin);
+  font: 500 15px/1 var(--font-mono);
+}
+
+.ball-swatch {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+}
+
+.ball-hex-hint {
+  margin: 0;
+  color: var(--uyari);
+}
+
+.ball-picker-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.ball-picker-buttons .btn {
+  flex: 1;
+}
+
+.ball-picker-buttons .btn[aria-pressed='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ball-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.ball-preset {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+}
+
+.ball-preset[aria-pressed='true'] {
+  box-shadow:
+    0 0 0 3px var(--loca),
+    0 0 0 5px var(--metin);
+}

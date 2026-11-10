@@ -14,7 +14,7 @@
   width: min(400px, 100%);
   padding: 32px 28px 24px;
   border: 1px solid var(--cizgi);
-  border-radius: 20px;
+  border-radius: var(--radius-card);
   background: var(--loca);
   box-shadow: var(--shadow-pop);
   animation: rise-in 0.3s var(--ease-out);
@@ -39,7 +39,7 @@
   translate: -50% 0;
   pointer-events: none;
   background-image:
-    radial-gradient(circle, rgb(102 224 194 / 70%) 0 1.4px, transparent 2.2px),
+    radial-gradient(circle, rgb(244 193 82 / 70%) 0 1.4px, transparent 2.2px),
     radial-gradient(circle, rgb(255 255 255 / 45%) 0 1.1px, transparent 1.8px),
     radial-gradient(circle, color-mix(in srgb, var(--accent) 70%, transparent) 0 1.3px, transparent 2px);
   background-size: 38px 31px, 27px 44px, 51px 36px;
@@ -64,7 +64,7 @@
 
 .auth-title {
   margin: 14px 0 0;
-  font: 700 26px/1.1 var(--font-display);
+  font: 800 28px/1.1 var(--font-display);
   letter-spacing: 0.01em;
 }
 

@@ -184,11 +184,12 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await ece.joinChannel(server.id, channel.id)
 
     const mert = await disco.user('Mert')
+    await mert.showDock()
     await mert.page.locator('.server-rail-icon[title="Test Sunucusu"]').click()
     await mert.openChannel('genel')
     await sendAs(ece, '@Mert buraya gel')
     const icon = mert.page.locator('.server-rail-icon[title="Mert Sunucusu"]')
-    await expect(icon.locator('.mention-badge')).toHaveText('1')
+    await expect(icon.locator('.server-rail-count')).toHaveText('1')
     await expect(icon).toHaveAttribute('aria-label', 'Mert Sunucusu, 1 bahsedilme')
   })
 
@@ -362,6 +363,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await mert.joinVoice()
     await expect.poll(() => observer.voiceUsernames()).toEqual(['Mert'])
 
+    await mert.showDock()
     await mert.page.locator('.server-rail-icon[title="Test Sunucusu"]').click()
     await mert.page.waitForTimeout(1500)
     await expect(mert.channelTitle()).toHaveText('genel')
@@ -553,17 +555,20 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     expect(saved).toEqual({ resolution: '1080', frameRate: 15, content: 'detail' })
   })
 
-  test('yayını büyütünce sahneyi dolduruyor, diğerleri şeritte, sohbet yanda açık kalıyor', async ({ disco }) => {
+  test('yayını büyütünce sahneyi dolduruyor, diğerleri şeritte, sohbet altta açık kalıyor', async ({ disco }) => {
     const mert = await disco.user('Mert')
     const ece = await disco.user('Ece')
     await joinVoiceTogether(mert, ece)
     await mert.shareScreen()
 
+    // Görüntü sahnesinde sadece açık kameralar ve ekranlar var: Ece'nin
+    // kamerası şeritte kalıyor.
+    await ece.cameraOn()
     const screenTile = ece.page.locator('.tile--screen')
     await expect(screenTile).toBeVisible()
     await screenTile.click()
     await expect(screenTile).toHaveClass(/video-tile--enlarged/)
-    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(2)
+    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(1)
     const tileBox = await screenTile.boundingBox()
     const stageBox = await ece.page.locator('.stage-area').boundingBox()
     expect(tileBox.width).toBeGreaterThan(stageBox.width - 40)
@@ -901,6 +906,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     // Mert'in disko topunda sayı; ana sayfada konuşma okunmamış.
     const home = mert.page.getByRole('button', { name: /^Özel mesajlar, 1 yeni/ })
     await expect(home).toBeVisible()
+    await mert.showDock()
     await home.click()
     const conversation = mert.page.getByRole('list', { name: 'Konuşmalar' }).getByRole('button', { name: /Ece/ })
     await expect(conversation.locator('.mention-badge')).toHaveText('1')
@@ -918,6 +924,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await ece.leaveVoiceButton().click()
 
     // Arkadaş ekle: Ece Bora'ya istek gönderiyor, Bora kabul edince listede.
+    await ece.showDock()
     await ece.page.getByRole('button', { name: /^Özel mesajlar/ }).click()
     await ece.page.getByRole('tab', { name: 'Arkadaş ekle' }).click()
     await ece.page.getByLabel('Kullanıcı adı').fill('bora')
@@ -929,6 +936,7 @@ test.describe('Faz 5: özellikler', { tag: '@faz5' }, () => {
     await expect(ece.page.locator('.friend-row', { hasText: 'Bora' })).toBeVisible()
 
     // Sunucuya dönünce son kanal açılıyor.
+    await ece.showDock()
     await ece.page.getByRole('button', { name: /^Test Sunucusu/ }).click()
     await expect(ece.channelTitle()).toHaveText('genel')
   })

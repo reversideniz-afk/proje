@@ -314,6 +314,7 @@ module.exports = function registerServerHandlers(socket, ctx) {
           id: c._id.toString(),
           name: c.name,
           categoryId: groupOf(c) >= 0 ? c.categoryId.toString() : null,
+          ballColor: c.ballColor || null,
           allowedRoleIds: (c.allowedRoleIds || []).map(String),
           legacyRoles: c.allowedRoles || [],
           ...(unread.get(c._id.toString()) || { unread: false, mentions: 0 }),
@@ -416,7 +417,9 @@ module.exports = function registerServerHandlers(socket, ctx) {
     try {
       const { server, error } = await requireServerPermission(ctx.username, serverId, "isOwner");
       if (error) return reply({ success: false, message: error });
-      const update = removing ? { iconData: null, iconUpdatedAt: null } : { iconData: imageData, iconUpdatedAt: new Date() };
+      const update = removing
+        ? { iconData: null, iconUpdatedAt: null, iconAnimated: false }
+        : { iconData: imageData, iconUpdatedAt: new Date(), iconAnimated: mimeType === "image/gif" };
       await ServerModel.updateOne({ _id: server._id }, update);
       io.to(serverRoomName(server._id.toString())).emit("server-list-changed");
       reply({ success: true, iconUrl: serverIconUrl({ _id: server._id, ...update }) });

@@ -22,3 +22,13 @@ export function squareImage(file, size = 256) {
     reader.readAsDataURL(file)
   })
 }
+
+// Dosyayı olduğu gibi data: adresine çeviriyor (GIF sunucu simgesi için).
+export function readDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Resim okunamadı, tekrar dener misin?'))
+    reader.onload = () => resolve(reader.result)
+    reader.readAsDataURL(file)
+  })
+}

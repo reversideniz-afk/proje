@@ -56,9 +56,9 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await expect(mert.peerTile('Ece')).toBeVisible()
     // Işık sahte mikrofonun bip ritminde yanıp sönüyor: yandığı kareyi yakala.
     // Çekimden önce ve sonra hâlâ yanıyorsa fotoğrafta da yanıyor demektir.
-    const speaking = () => mert.page.evaluate(() => !!document.querySelector('.tile.is-speaking'))
+    const speaking = () => mert.page.evaluate(() => !!document.querySelector('.dancer.is-speaking'))
     for (let attempt = 0; attempt < 10; attempt++) {
-      await mert.page.waitForFunction(() => !!document.querySelector('.tile.is-speaking'), null, {
+      await mert.page.waitForFunction(() => !!document.querySelector('.dancer.is-speaking'), null, {
         polling: 'raf',
         timeout: 15_000,
       })
@@ -148,10 +148,11 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     await shot(mert, testInfo, '26-ekran-paylas-penceresi')
     await mert.page.getByRole('button', { name: 'Ekranı seç ve paylaş' }).click()
 
+    await bora.cameraOn()
     const screenTile = ece.page.locator('.tile--screen')
     await expect.poll(() => screenTile.locator('video').evaluate((v) => v.videoWidth)).toBeGreaterThan(0)
     await screenTile.click()
-    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(3)
+    await expect(ece.page.locator('.stage-strip .tile')).toHaveCount(1)
     await shot(ece, testInfo, '27-yayin-odak')
   })
 
@@ -235,6 +236,7 @@ test.describe('Görünüm', { tag: '@gorunum' }, () => {
     mertClient.close()
 
     const mert = await disco.user('Mert')
+    await mert.showDock()
     await mert.page.getByRole('button', { name: /^Özel mesajlar/ }).click()
     await mert.page.getByRole('tab', { name: 'Tümü' }).click()
     await expect(mert.page.locator('.friend-row', { hasText: 'Ece' })).toContainText('League of Legends oynuyor')

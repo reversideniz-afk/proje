@@ -1,59 +1,66 @@
 /* ------------------------------------------------------------
-   TEMA: "Gece kulübü" — çok koyu bir mor gece zemin, seçilebilir tek
-   vurgu rengi (varsayılan Mercan) ve sadece "konuşuyor / canlı" için
-   kullanılan Spot ışığı. Bütün metin renkleri zeminlerde en az 4,5:1
-   kontrast veriyor.
+   TEMA: "Ayna Top / Kadife" — kadife gibi koyu bordo-mor bir zemin,
+   üstünde yuvarlak kartlar. Seçilebilir tek vurgu rengi (varsayılan
+   Kadife pembesi) ve sadece "konuşuyor / canlı" için kullanılan altın
+   Spot ışığı. Bütün metin renkleri zeminlerde en az 4,5:1 kontrast
+   veriyor.
 ------------------------------------------------------------ */
 
 :root {
   color-scheme: dark;
 
   /* Zeminler: en koyudan en açığa */
-  --gece: #120e18; /* sunucu şeridi, ses sahnesi */
-  --loca: #16111d; /* kenar çubukları */
-  --sahne: #1a1522; /* sohbet alanı */
-  --kabin: #241d2e; /* yazma alanı, seçili öğe */
-  --kabin-hover: #2d2539;
-  --cizgi: #342b40;
+  --gece: #170a13; /* pencerenin zemini */
+  --loca: #24121f; /* kartlar */
+  --sahne: #24121f; /* sohbet kartı */
+  --kabin: #311a2b; /* yazma alanı, seçili öğe */
+  --kabin-hover: #3b2134;
+  --cizgi: #4a2a41;
 
   /* Metin */
-  --metin: #f1ecf6;
-  --metin-mesaj: #e4deec;
-  --ikincil: #b3a9c2;
-  --soluk: #958aa6;
+  --metin: #f8eef4;
+  --metin-mesaj: #efe2ea;
+  --ikincil: #cdb3c4;
+  --soluk: #a88e9f;
 
   /* Vurgu (Ayarlar > Görünüm'den değişiyor) ve sabit anlamlı renkler */
-  --accent: #f2726c;
+  --accent: #ff8fb8;
   --accent-hover: color-mix(in srgb, var(--accent) 82%, white);
   --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
-  --on-accent: #120e18;
-  --spot: #66e0c2;
-  --spot-glow: rgb(102 224 194 / 45%);
+  --on-accent: #170a13;
+  --spot: #f4c152;
+  --spot-glow: rgb(244 193 82 / 45%);
   --tehlike: #e5484d;
   --tehlike-hover: #ef6064;
   --tehlike-soft: rgb(229 72 77 / 16%);
-  --cevrimici: #3fb97c;
+  --cevrimici: #5bd38a;
   --link: #8cb8ff;
   --uyari: #e6b84a;
 
-  --font-display: 'Unbounded Variable', 'Segoe UI', system-ui, sans-serif;
-  --font-body: 'Onest Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Syne Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Manrope Variable', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
 
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --shadow-pop: 0 12px 30px rgb(0 0 0 / 45%);
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-card: 26px;
+  --shadow-pop: 0 14px 34px rgb(8 2 6 / 55%);
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  /* Apple'ın yaylı açılışlarına yakın: hızlı başlayıp yumuşakça duruyor. */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
 
-  --header-height: 54px;
+  --header-height: 60px;
 }
 
 /* Renk temaları: sadece vurgu değişiyor. Zemin ve metin şeması ile
    "tehlike", "çevrimiçi" ve "konuşuyor" renkleri BİLEREK sabit —
    anlamları temaya göre kaymamalı. Yeni tema: buraya bir blok,
    lib/config.js'teki THEMES'e bir satır. */
+:root[data-theme='mercan'] {
+  --accent: #f2726c;
+}
 :root[data-theme='mor'] {
   --accent: #a98af7;
 }

@@ -4,7 +4,11 @@ import { AlertTriangle, Compass, Phone, Plus, ServerCrash, WifiOff } from 'lucid
 import './App.css'
 import { AuthScreen, RestoringScreen } from './components/AuthScreen.jsx'
 import { ChannelHeader } from './components/ChannelHeader.jsx'
-import { ChannelSidebar } from './components/ChannelSidebar.jsx'
+import { ChannelSidebar, DmNav } from './components/ChannelSidebar.jsx'
+import { DanceFloor } from './components/DanceFloor.jsx'
+import { Glints } from './components/DiscoBall.jsx'
+import { FloorsCard } from './components/FloorsCard.jsx'
+import { TopBar } from './components/TopBar.jsx'
 import { ChatPanel } from './components/ChatPanel.jsx'
 import {
   CategoryDialog,
@@ -26,9 +30,9 @@ import {
 import { MemberList } from './components/MemberList.jsx'
 import { FriendsPage } from './components/FriendsPage.jsx'
 import { MessagePanel } from './components/MessagePanel.jsx'
-import { ServerRail } from './components/ServerRail.jsx'
+import { Dock, ServerRail } from './components/ServerRail.jsx'
 import { SettingsScreen } from './components/SettingsScreen.jsx'
-import { VoiceStage } from './components/VoiceStage.jsx'
+import { RemoteAudioSinks, VideoStage } from './components/VoiceStage.jsx'
 import { SERVER_URL, DEFAULT_ICE_SERVERS, IS_DESKTOP_APP } from './lib/config.js'
 import { DEBUG, debugLog } from './lib/debug.js'
 import { describeMediaError, formatEventTime, formatKeyCode, formatRelative } from './lib/format.js'
@@ -57,7 +61,8 @@ import {
 import { MEDIA_ROLES, ROLE_KINDS, transceiverRoles } from './lib/webrtc.js'
 import { startWebUpdates } from './lib/webUpdate.js'
 import { useSwipeDrawers } from './lib/useSwipeDrawers.js'
-import { squareImage } from './lib/images.js'
+import { readDataUrl, squareImage } from './lib/images.js'
+import { autoBallColor, ballColorOf } from './lib/discoBall.js'
 
 const TYPING_HEARTBEAT_MS = 4000
 const TYPING_EXPIRY_MS = 6000
@@ -70,6 +75,20 @@ const JUST_OPENED_MS = 30_000
 function installUpdate() {
   if (window.electronAPI) window.electronAPI.installUpdate()
   else window.location.reload()
+}
+
+const NARROW_QUERY = '(max-width: 760px)'
+
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY)
+    const update = () => setNarrow(query.matches)
+    query.addEventListener('change', update)
+    update()
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return narrow
 }
 
 function App() {
@@ -170,7 +189,16 @@ function App() {
   // App.css :root[data-theme=...]), tüm arayüz otomatik uyum sağlıyor.
   // Seçim cihazda kalıcı (localStorage) — hesaba değil, bu bilgisayara
   // bağlı bir tercih.
-  const [theme, setTheme] = useState(() => window.localStorage?.getItem('theme') || 'mercan')
+  // Ayna Top'la (2.3.0) varsayılan vurgu Kadife oldu; eski varsayılan
+  // Mercan'da kalanlar bir kez Kadife'ye geçiyor (sonradan seçebilirler).
+  const [theme, setTheme] = useState(() => {
+    const stored = window.localStorage?.getItem('theme')
+    if (window.localStorage?.getItem('themeVersion') !== '2') {
+      window.localStorage?.setItem('themeVersion', '2')
+      if (!stored || stored === 'mercan') return 'kadife'
+    }
+    return stored || 'kadife'
+  })
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     window.localStorage?.setItem('theme', theme)
@@ -440,10 +468,6 @@ function App() {
   // durumunu tutuyor.
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [mobileMembersOpen, setMobileMembersOpen] = useState(false)
-  // Masaüstünde üye listesi ve ses ekranındaki sohbet paneli başlıktaki
-  // düğmelerle gizlenip açılabiliyor.
-  const [membersPanelOpen, setMembersPanelOpen] = useState(true)
-  const [voiceChatOpen, setVoiceChatOpen] = useState(true)
 
   // YENİ: sese girmek artık AYRI, isteğe bağlı bir adım.
   const [inVoice, setInVoice] = useState(false)
@@ -1056,6 +1080,11 @@ function App() {
   }, [])
   // Seste kim konuşuyor: karşı tarafların bağlantı kimlikleri ve 'local'.
   const speakingIds = useSpeakingDetector(getSpeakingSources, inVoice)
+  // Dar ekran (telefon): çekmeceli düzen; geniş ekranda üst çubuk, sol
+  // sütunda pist, sağda sohbet ve altta dock.
+  const narrow = useNarrow()
+  // Sesteki kanal başka sunucudayken de pistin adı ve rengi kalsın.
+  const voiceChannelInfoRef = useRef(null)
 
   // Uygulama başına TEK bağlantı: açılışta kuruluyor, uygulama kapanana
   // kadar açık kalıyor. Giriş, kanallar, ses ve bütün istekler bundan
@@ -2967,7 +2996,7 @@ function App() {
   // Kanal düzenleme (Kanalları yönet): ad, erişim, silme. Liste sunucunun
   // channels-changed duyurusuyla herkeste yenileniyor.
   const handleSaveChannel = useCallback(
-    async ({ name, allowedRoleIds, categoryId }) => {
+    async ({ name, allowedRoleIds, categoryId, ballColor }) => {
       const channel = editChannelDialog?.channel
       if (!channel) return
       setEditChannelDialog((prev) => prev && { ...prev, busy: true, error: null })
@@ -2976,6 +3005,7 @@ function App() {
         channelId: channel.id,
         name,
         allowedRoleIds,
+        ballColor,
       })
       // Kategorisi değiştiyse yeni kategorinin sonuna taşınıyor.
       if (response?.success && categoryId !== (channel.categoryId || null)) {
@@ -3420,11 +3450,22 @@ function App() {
   }
 
   // Sunucu simgesi (sahibi): profil fotoğrafı gibi kare küçük bir JPEG.
-  // file null ise simge kaldırılıyor. Sonuç { success, message } döner.
+  // GIF olduğu gibi gidiyor (yeniden kodlayınca hareketi kaybolurdu); dock'ta
+  // durağan duruyor, üzerine gelince oynuyor. file null ise simge kaldırılıyor.
+  // Sonuç { success, message } döner.
   const setServerIcon = async (file) => {
     const serverId = activeServerIdRef.current
     if (!file) return emitRequest('set-server-icon', { serverId, imageData: null })
     if (!file.type.startsWith('image/')) return { success: false, message: 'Sadece görsel dosyaları kullanılabilir.' }
+    if (file.type === 'image/gif') {
+      if (file.size > 500_000) return { success: false, message: 'GIF çok büyük (en fazla 500 KB olabilir).' }
+      try {
+        const imageData = await readDataUrl(file)
+        return emitRequest('set-server-icon', { serverId, imageData, mimeType: 'image/gif' })
+      } catch (err) {
+        return { success: false, message: err.message }
+      }
+    }
     if (file.size > MAX_PHOTO_BYTES) return { success: false, message: 'Resim çok büyük (en fazla 10 MB olabilir).' }
     try {
       const imageData = await squareImage(file)
@@ -3749,7 +3790,6 @@ function App() {
       .filter(([, color]) => color)
   )
   const showsServerSettings = !!(serverPermissions.isOwner || serverPermissions.createInvites || serverPermissions.kickMembers)
-  const isVoiceView = inVoice && voiceChannel === activeChannel && !!activeChannel
   const reconnecting = connectionStatus === 'reconnecting'
 
   const speakingUsernames = new Set(
@@ -3782,7 +3822,6 @@ function App() {
     ...onlineMembers.map((m) => ({ ...m, online: true })),
     ...offlineMembers.map((m) => ({ ...m, online: false })),
   ]
-  const isNarrow = () => window.matchMedia('(max-width: 760px)').matches
   // Sunucu şeridi: aktif sunucu kanal işaretlerinden, diğerleri listeden.
   const serverActivity = Object.fromEntries(
     myServers.map((s) => [
@@ -3796,14 +3835,95 @@ function App() {
   // gizli (özel mesajlar etkilenmiyor).
   const timedOutHere = !!timeoutUntil && !activeDm
   // Telefonda üye çekmecesi kapalıyken de duruyor ki kaydırınca parmağı
-  // takip ederek açılabilsin.
-  const membersVisible = !homeOpen && !isVoiceView && (membersPanelOpen || mobileMembersOpen || isNarrow())
-  // Ana sayfa simgesindeki sayı: okunmamış özel mesajlar ve gelen istekler.
+  // takip ederek açılabilsin. Geniş ekranda üye listesi sol sütunda.
+  const membersVisible = narrow && !homeOpen
+  // Dock'taki özel mesaj düğmesindeki sayı: okunmamış özel mesajlar ve gelen istekler.
   const homeBadge = dms.reduce((sum, d) => sum + (d.unread || 0), 0) + friendLists.incoming.length
+
+  // Pist: sesteki herkes (sen en sonda) ve kanalın top rengi.
+  const voiceChannelObj = channels.find((c) => c.id === voiceChannel)
+  if (voiceChannelObj) voiceChannelInfoRef.current = voiceChannelObj
+  const voiceInfo =
+    voiceChannelObj || (voiceChannelInfoRef.current?.id === voiceChannel ? voiceChannelInfoRef.current : null)
+  const floorTitle = voiceDm ? voiceDm.username : voiceInfo?.name || voiceChannelName
+  const floorColor = voiceDm ? autoBallColor(voiceDm.username) : voiceInfo ? ballColorOf(voiceInfo) : autoBallColor(floorTitle)
+  const activeChannelObj = channels.find((c) => c.id === activeChannel)
+  const glintColor = inVoice ? floorColor : activeChannelObj ? ballColorOf(activeChannelObj) : '#FF8C61'
+  const dancers = inVoice
+    ? [
+        ...peers.map((p) => ({ id: p.socketId, username: p.username, avatarUrl: p.avatarUrl, muted: !!p.muted })),
+        { id: 'local', username: displayName, avatarUrl: myAvatar, muted: !isMicOn, isMe: true },
+      ]
+    : []
+  const openVoiceChannel = () => {
+    if (voiceDm) {
+      openDm(voiceDm)
+      return
+    }
+    if (homeOpenRef.current) {
+      homeOpenRef.current = false
+      setHomeOpen(false)
+      setActiveDm(null)
+    }
+    joinChannel(voiceChannel)
+    setMobileSidebarOpen(false)
+  }
+  const danceFloor = inVoice && (
+    <DanceFloor
+      compact={narrow}
+      title={floorTitle}
+      isDm={!!voiceDm}
+      color={floorColor}
+      ping={averagePing}
+      reconnecting={reconnecting}
+      dancers={dancers}
+      speakingIds={speakingIds}
+      getLevelSources={getSpeakingSources}
+      onOpenChannel={openVoiceChannel}
+      onOpenVolume={openVolumePopup}
+      soundToast={soundToast}
+      mediaError={mediaError}
+      onDismissMediaError={() => setMediaError(null)}
+      controls={{
+        isMicOn,
+        isDeafened,
+        isCameraOn,
+        isScreenSharing,
+        pttEnabled,
+        pttKey,
+        onToggleMic: toggleMic,
+        onToggleDeafen: toggleDeafen,
+        onToggleCamera: toggleCamera,
+        onToggleScreenShare: toggleScreenShare,
+        onPlaySound: (soundId) => emitRequest('play-sound', { soundId }),
+        onLeave: leaveVoice,
+      }}
+    />
+  )
+  const videoStage = inVoice && (
+    <VideoStage
+      displayName={displayName}
+      localStream={localMainStream}
+      localScreenStream={localScreenStream}
+      localVideoRef={localVideoRef}
+      localScreenVideoRef={localScreenVideoRef}
+      peers={peers}
+      remoteStreams={remoteStreams}
+      peerPings={peerPings}
+      speakingIds={speakingIds}
+      enlargedTile={enlargedTile}
+      onToggleEnlarge={toggleEnlarge}
+      onOpenVolume={openVolumePopup}
+      outputDeviceId={selectedAudioOutput}
+      isMicOn={isMicOn}
+      isCameraOn={isCameraOn}
+      isScreenSharing={isScreenSharing}
+    />
+  )
 
   const chatPanel = activeChannel && (
     <ChatPanel
-      variant={isVoiceView ? 'side' : 'full'}
+      variant="full"
       channelName={activeChannelName}
       isDm={!!activeDm}
       lockedReason={
@@ -3889,45 +4009,6 @@ function App() {
         </button>
       </div>
     )
-  } else if (isVoiceView) {
-    mainContent = (
-      <div className={'channel-body channel-body--voice' + (voiceChatOpen ? '' : ' channel-body--chat-hidden')}>
-        <VoiceStage
-          displayName={displayName}
-          myAvatar={myAvatar}
-          localStream={localMainStream}
-          localScreenStream={localScreenStream}
-          localVideoRef={localVideoRef}
-          localScreenVideoRef={localScreenVideoRef}
-          peers={peers}
-          remoteStreams={remoteStreams}
-          peerPings={peerPings}
-          speakingIds={speakingIds}
-          enlargedTile={enlargedTile}
-          onToggleEnlarge={toggleEnlarge}
-          onOpenVolume={openVolumePopup}
-          outputDeviceId={selectedAudioOutput}
-          mediaError={mediaError}
-          onDismissMediaError={() => setMediaError(null)}
-          controls={{
-            isMicOn,
-            isDeafened,
-            isCameraOn,
-            isScreenSharing,
-            pttEnabled,
-            pttKey,
-            onToggleMic: toggleMic,
-            onToggleDeafen: toggleDeafen,
-            onToggleCamera: toggleCamera,
-            onToggleScreenShare: toggleScreenShare,
-            onPlaySound: (soundId) => emitRequest('play-sound', { soundId }),
-            onLeave: leaveVoice,
-          }}
-          soundToast={soundToast}
-        />
-        {voiceChatOpen && chatPanel}
-      </div>
-    )
   } else {
     mainContent = (
       <div className="channel-body">
@@ -3972,196 +4053,269 @@ function App() {
     )
   }
 
-  return (
-    <div className="app-shell">
-      <div className={'nav-drawer' + (mobileSidebarOpen ? ' nav-drawer--open' : '')}>
-        <ServerRail
-          servers={myServers}
-          activeServerId={homeOpen ? null : activeServerId}
-          activity={serverActivity}
-          homeActive={homeOpen}
-          homeBadge={homeBadge}
-          onHome={openHome}
-          onSelect={handleSelectServer}
-          onAdd={() => openServerModal()}
-        />
-        <ChannelSidebar
-          server={activeServer && { ...activeServer, permissions: serverPermissions }}
-          channels={channels}
-          activeChannel={activeChannel}
-          unreadChannels={unreadChannels}
-          mentionCounts={mentionCounts}
-          voiceChannel={voiceChannel}
-          inVoice={inVoice}
-          voiceLocked={timedOutHere}
-          voicersByChannel={voicersByChannel}
-          onOpenChannel={(channelId) => {
-            joinChannel(channelId)
-            setMobileSidebarOpen(false)
-          }}
-          onJoinVoiceIn={(channelId) => {
-            joinChannel(channelId)
-            joinVoice()
-            setMobileSidebarOpen(false)
-          }}
-          onInvite={openServerInvitePopover}
-          onCreateChannel={(categoryId = null) => setCreateChannelDialog({ busy: false, error: null, categoryId })}
-          onEditChannel={(channel) => setEditChannelDialog({ channel, busy: false, error: null })}
-          categories={channelCategories}
-          onCreateCategory={() => setCategoryDialog({ category: null, busy: false, error: null })}
-          onEditCategory={(category) => setCategoryDialog({ category, busy: false, error: null })}
-          onMoveChannel={moveChannel}
-          onMoveCategory={moveCategory}
-          onOpenServerSettings={() => openSettings('server')}
-          onAddServer={() => openServerModal()}
-          onClose={() => setMobileSidebarOpen(false)}
-          voicePanel={
-            inVoice && {
-              channelName: voiceChannelName,
-              isDm: !!voiceDm,
-              ping: averagePing,
-              reconnecting,
-              isScreenSharing,
-              onOpenChannel: () => {
-                if (voiceDm) {
-                  openDm(voiceDm)
+  const userPanelProps = {
+    displayName,
+    avatarUrl: myAvatar,
+    speaking: speakingIds.has('local'),
+    inVoice,
+    isMicOn,
+    isDeafened,
+    pttEnabled,
+    pttKey,
+    status: myStatus,
+    customStatus: myCustomStatus?.text || null,
+    onSetStatus: changeStatus,
+    onEditCustomStatus: () => setCustomStatusDialog({ busy: false, error: null }),
+    onClearCustomStatus: clearCustomStatus,
+    onToggleMic: toggleMic,
+    onToggleDeafen: toggleDeafen,
+    onOpenSettings: () => openSettings(),
+  }
+  const updateProps =
+    updateReady
+      ? { ready: true, onInstall: installUpdate }
+      : updateInfo && updateProgress !== null
+        ? { ready: false, progress: updateProgress }
+        : null
+  const homeProps =
+    homeOpen
+      ? {
+          dms,
+          activeDmId: activeDm?.id || null,
+          friendsActive: !activeDm,
+          incomingCount: friendLists.incoming.length,
+          onOpenFriends: openHome,
+          onOpenDm: openDm,
+        }
+      : null
+  const serverRail = (
+    <ServerRail
+      servers={myServers}
+      activeServerId={homeOpen ? null : activeServerId}
+      activity={serverActivity}
+      homeActive={homeOpen}
+      homeBadge={homeBadge}
+      onHome={openHome}
+      onSelect={handleSelectServer}
+      onAdd={() => openServerModal()}
+    />
+  )
+  const header = (
+    <ChannelHeader
+      title={
+        activeChannel && !connectionError ? activeChannelName : homeOpen ? 'Arkadaşlar' : activeServerName || 'Disco'
+      }
+      eyebrow={narrow && activeChannel && !connectionError && !activeDm ? activeServerName : null}
+      isChannel={!!activeChannel && !connectionError}
+      isDm={!!activeDm}
+      voiceCount={homeOpen ? 0 : voiceCountHere}
+      showJoinVoice={!!activeChannel && !connectionError && !inVoice && !timedOutHere}
+      onJoinVoice={joinVoice}
+      membersOpen={mobileMembersOpen}
+      onToggleMembers={
+        narrow && activeChannel && !connectionError && !homeOpen ? () => setMobileMembersOpen((open) => !open) : null
+      }
+      onOpenNav={() => setMobileSidebarOpen(true)}
+      search={
+        activeChannel && !connectionError
+          ? {
+              scopeLabel: activeDm ? 'Konuşma' : activeServerName,
+              onSearch: searchMessages,
+              onClear: () => setMessagePanel((panel) => (panel?.kind === 'search' ? null : panel)),
+            }
+          : null
+      }
+      pins={
+        activeChannel && !connectionError
+          ? {
+              open: messagePanel?.kind === 'pins',
+              onToggle: () => {
+                if (messagePanel?.kind === 'pins') {
+                  setMessagePanel(null)
                   return
                 }
-                if (homeOpenRef.current) {
-                  homeOpenRef.current = false
-                  setHomeOpen(false)
-                  setActiveDm(null)
-                }
-                joinChannel(voiceChannel)
-                setMobileSidebarOpen(false)
+                setMessagePanel({ kind: 'pins', channelId: activeChannel, messages: [], loading: true })
+                showPins()
               },
-              onToggleScreenShare: toggleScreenShare,
-              onLeave: leaveVoice,
             }
-          }
-          userPanel={{
-            displayName,
-            avatarUrl: myAvatar,
-            speaking: speakingIds.has('local'),
-            inVoice,
-            isMicOn,
-            isDeafened,
-            pttEnabled,
-            pttKey,
-            status: myStatus,
-            customStatus: myCustomStatus?.text || null,
-            onSetStatus: changeStatus,
-            onEditCustomStatus: () => setCustomStatusDialog({ busy: false, error: null }),
-            onClearCustomStatus: clearCustomStatus,
-            onToggleMic: toggleMic,
-            onToggleDeafen: toggleDeafen,
-            onOpenSettings: () => openSettings(),
-          }}
-          update={
-            updateReady
-              ? { ready: true, onInstall: installUpdate }
-              : updateInfo && updateProgress !== null
-                ? { ready: false, progress: updateProgress }
-                : null
-          }
-          events={upcomingEvents}
-          onOpenEvent={(event) => jumpToMessage(event)}
-          home={
-            homeOpen
-              ? {
-                  dms,
-                  activeDmId: activeDm?.id || null,
-                  friendsActive: !activeDm,
-                  incomingCount: friendLists.incoming.length,
-                  onOpenFriends: openHome,
-                  onOpenDm: openDm,
-                }
-              : null
-          }
-        />
-      </div>
-      {/* Telefonda hep duruyor (kaydırırken çekmeceyle birlikte koyulaşıyor),
-          sadece bir çekmece açıkken görünüyor ve dokunulabiliyor. */}
-      <div
-        className={'mobile-backdrop' + (mobileSidebarOpen || mobileMembersOpen ? ' mobile-backdrop--open' : '')}
-        aria-hidden="true"
-        onClick={() => {
-          setMobileSidebarOpen(false)
-          setMobileMembersOpen(false)
-        }}
-      />
+          : null
+      }
+    />
+  )
+  const banners = (
+    <>
+      {reconnecting && (
+        <div className="status-banner status-banner--warn reconnecting-banner" role="status">
+          <WifiOff className="icon" />
+          Bağlantı koptu, yeniden bağlanılıyor…
+        </div>
+      )}
+      {dmCall && voiceChannel !== dmCall.channelId && (
+        <div className="status-banner call-banner" role="alert">
+          <Phone className="icon" />
+          <span className="call-banner-text">
+            <strong>{dmCall.from}</strong> seni arıyor
+          </span>
+          <button type="button" className="btn btn--small" onClick={() => answerDmCall(dmCall)}>
+            Katıl
+          </button>
+          <button type="button" className="btn btn--ghost btn--small" onClick={() => setDmCall(null)}>
+            Yok say
+          </button>
+        </div>
+      )}
+      {notice && notice !== connectionError && (
+        <div className="status-banner notice-banner" role="status">
+          <AlertTriangle className="icon" />
+          {notice}
+        </div>
+      )}
+    </>
+  )
 
-      <main className="main-panel">
-        <ChannelHeader
-          title={
-            activeChannel && !connectionError ? activeChannelName : homeOpen ? 'Arkadaşlar' : activeServerName || 'Disco'
-          }
-          isChannel={!!activeChannel && !connectionError}
-          isDm={!!activeDm}
-          voiceCount={homeOpen ? 0 : voiceCountHere}
-          showJoinVoice={!!activeChannel && !connectionError && !inVoice && !timedOutHere}
-          onJoinVoice={joinVoice}
-          membersOpen={isNarrow() ? mobileMembersOpen : membersPanelOpen}
-          onToggleMembers={
-            activeChannel && !connectionError && !isVoiceView && !homeOpen
-              ? () => (isNarrow() ? setMobileMembersOpen((open) => !open) : setMembersPanelOpen((open) => !open))
-              : null
-          }
-          chatToggle={isVoiceView ? { open: voiceChatOpen, onToggle: () => setVoiceChatOpen((open) => !open) } : null}
-          onOpenNav={() => setMobileSidebarOpen(true)}
-          search={
-            activeChannel && !connectionError && !isVoiceView
-              ? {
-                  scopeLabel: activeDm ? 'Konuşma' : activeServerName,
-                  onSearch: searchMessages,
-                  onClear: () => setMessagePanel((panel) => (panel?.kind === 'search' ? null : panel)),
-                }
-              : null
-          }
-          pins={
-            activeChannel && !connectionError && !isVoiceView
-              ? {
-                  open: messagePanel?.kind === 'pins',
-                  onToggle: () => {
-                    if (messagePanel?.kind === 'pins') {
-                      setMessagePanel(null)
-                      return
-                    }
-                    setMessagePanel({ kind: 'pins', channelId: activeChannel, messages: [], loading: true })
-                    showPins()
-                  },
-                }
-              : null
-          }
-        />
-        {reconnecting && (
-          <div className="status-banner status-banner--warn reconnecting-banner" role="status">
-            <WifiOff className="icon" />
-            Bağlantı koptu, yeniden bağlanılıyor…
+  return (
+    <div className={'app-shell' + (narrow ? ' app-shell--narrow' : ' app-shell--wide')}>
+      <Glints color={glintColor} className="app-glints" />
+      {narrow ? (
+        <>
+          <div className={'nav-drawer' + (mobileSidebarOpen ? ' nav-drawer--open' : '')}>
+            {serverRail}
+            <ChannelSidebar
+              server={activeServer && { ...activeServer, permissions: serverPermissions }}
+              channels={channels}
+              activeChannel={activeChannel}
+              unreadChannels={unreadChannels}
+              mentionCounts={mentionCounts}
+              voiceChannel={voiceChannel}
+              inVoice={inVoice}
+              voiceLocked={timedOutHere}
+              voicersByChannel={voicersByChannel}
+              onOpenChannel={(channelId) => {
+                joinChannel(channelId)
+                setMobileSidebarOpen(false)
+              }}
+              onJoinVoiceIn={(channelId) => {
+                joinChannel(channelId)
+                joinVoice()
+                setMobileSidebarOpen(false)
+              }}
+              onInvite={openServerInvitePopover}
+              onCreateChannel={(categoryId = null) => setCreateChannelDialog({ busy: false, error: null, categoryId })}
+              onEditChannel={(channel) => setEditChannelDialog({ channel, busy: false, error: null })}
+              categories={channelCategories}
+              onCreateCategory={() => setCategoryDialog({ category: null, busy: false, error: null })}
+              onEditCategory={(category) => setCategoryDialog({ category, busy: false, error: null })}
+              onMoveChannel={moveChannel}
+              onMoveCategory={moveCategory}
+              onOpenServerSettings={() => openSettings('server')}
+              onAddServer={() => openServerModal()}
+              onClose={() => setMobileSidebarOpen(false)}
+              voicePanel={null}
+              userPanel={userPanelProps}
+              update={updateProps}
+              events={upcomingEvents}
+              onOpenEvent={(event) => jumpToMessage(event)}
+              home={homeProps}
+            />
           </div>
-        )}
-        {dmCall && voiceChannel !== dmCall.channelId && (
-          <div className="status-banner call-banner" role="alert">
-            <Phone className="icon" />
-            <span className="call-banner-text">
-              <strong>{dmCall.from}</strong> seni arıyor
-            </span>
-            <button type="button" className="btn btn--small" onClick={() => answerDmCall(dmCall)}>
-              Katıl
-            </button>
-            <button type="button" className="btn btn--ghost btn--small" onClick={() => setDmCall(null)}>
-              Yok say
-            </button>
+          {/* Hep duruyor (kaydırırken çekmeceyle birlikte koyulaşıyor), sadece
+              bir çekmece açıkken görünüyor ve dokunulabiliyor. */}
+          <div
+            className={'mobile-backdrop' + (mobileSidebarOpen || mobileMembersOpen ? ' mobile-backdrop--open' : '')}
+            aria-hidden="true"
+            onClick={() => {
+              setMobileSidebarOpen(false)
+              setMobileMembersOpen(false)
+            }}
+          />
+          <main className="main-panel">
+            {header}
+            {banners}
+            {danceFloor}
+            {videoStage}
+            {mainContent}
+          </main>
+        </>
+      ) : (
+        <>
+          <TopBar
+            home={homeOpen}
+            server={activeServer && { ...activeServer, permissions: serverPermissions }}
+            serverMenu={{
+              onInvite: openServerInvitePopover,
+              onCreateChannel: () => setCreateChannelDialog({ busy: false, error: null, categoryId: null }),
+              onCreateCategory: () => setCategoryDialog({ category: null, busy: false, error: null }),
+              onOpenServerSettings: () => openSettings('server'),
+              onAddServer: () => openServerModal(),
+            }}
+            channels={channels}
+            categories={channelCategories}
+            activeChannel={activeChannel}
+            unreadChannels={unreadChannels}
+            mentionCounts={mentionCounts}
+            voiceChannel={voiceChannel}
+            inVoice={inVoice}
+            voicersByChannel={voicersByChannel}
+            onOpenChannel={joinChannel}
+            onEditChannel={(channel) => setEditChannelDialog({ channel, busy: false, error: null })}
+            onCreateChannel={(categoryId = null) => setCreateChannelDialog({ busy: false, error: null, categoryId })}
+            onEditCategory={(category) => setCategoryDialog({ category, busy: false, error: null })}
+            onMoveChannel={moveChannel}
+            onMoveCategory={moveCategory}
+            update={updateProps}
+            userPanel={userPanelProps}
+          />
+          <div className="ayna-body">
+            <aside className="ayna-left" aria-label="Pist ve üyeler">
+              {danceFloor}
+              {homeOpen ? (
+                <section className="side-card dm-card" aria-label="Özel mesajlar">
+                  <DmNav home={homeProps} />
+                </section>
+              ) : (
+                activeServer &&
+                !inVoice && (
+                  <FloorsCard
+                    channels={channels}
+                    voicersByChannel={voicersByChannel}
+                    activeChannel={activeChannel}
+                    canJoin={!timedOutHere}
+                    onJoin={(channelId) => {
+                      joinChannel(channelId)
+                      joinVoice()
+                    }}
+                    onOpenChannel={joinChannel}
+                    events={upcomingEvents}
+                    onOpenEvent={(event) => jumpToMessage(event)}
+                  />
+                )
+              )}
+              {!homeOpen && activeServer && (
+                <MemberList
+                  online={onlineMembers}
+                  offline={offlineMembers}
+                  roles={serverRoles}
+                  displayName={displayName}
+                  channelNameOf={channelNameOf}
+                  speakingUsernames={speakingUsernames}
+                  onOpenVolume={openVolumePopup}
+                  onClose={() => {}}
+                />
+              )}
+            </aside>
+            <main className="main-panel">
+              {videoStage}
+              <div className="chat-card">
+                {header}
+                {banners}
+                {mainContent}
+              </div>
+            </main>
           </div>
-        )}
-        {notice && notice !== connectionError && (
-          <div className="status-banner notice-banner" role="status">
-            <AlertTriangle className="icon" />
-            {notice}
-          </div>
-        )}
-        {mainContent}
-      </main>
+          <Dock>{serverRail}</Dock>
+        </>
+      )}
+      {inVoice && <RemoteAudioSinks remoteStreams={remoteStreams} />}
 
       {showAppSettings && (
         <SettingsScreen

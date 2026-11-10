@@ -4,7 +4,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Check, Copy, MessageSquare, Monitor, Plus, RotateCcw, ShieldAlert, X } from 'lucide-react'
 import { Dialog } from './Dialog.jsx'
+import { DiscoBall } from './DiscoBall.jsx'
 import { Toggle } from './Toggle.jsx'
+import { HEX_COLOR, autoBallColor, randomBallColor } from '../lib/discoBall.js'
 import { serverInitials } from '../lib/format.js'
 import { CUSTOM_STATUS_DURATIONS } from '../lib/presence.js'
 import { PERMISSIONS, ROLE_COLORS } from '../lib/roles.js'
@@ -834,13 +836,106 @@ export function RoleDialog({ role, busy, error, onSave, onDelete, onClose }) {
   )
 }
 
-// Kanalı düzenleme: ad, kimlerin görebileceği, silme (Kanalları yönet).
-// Sunucu sahibi kısıtlı kanalları da her zaman görüyor.
+// Kanalın pist topu: hex kodu yazılıyor ya da hazır renklerden seçiliyor;
+// top o renge yakın tonlardan üretiliyor. "Otomatik" kanal adından gelen
+// renge döndürüyor (value null).
+const BALL_PRESETS = [
+  ['#FF8C61', 'Mercan'],
+  ['#4CB8E8', 'Deniz'],
+  ['#9B7BFF', 'Lavanta'],
+  ['#5BBF8A', 'Nane'],
+  ['#E5B53B', 'Altın'],
+  ['#FF6B9A', 'Pembe'],
+]
+
+function BallColorField({ channelName, value, onChange }) {
+  const autoColor = autoBallColor(channelName)
+  const [text, setText] = useState(value || autoColor)
+  const shown = value || autoColor
+  const invalid = !HEX_COLOR.test(text)
+  const hintId = useId()
+  // Otomatikteyken kanalın adı değişince renk de onunla değişiyor.
+  useEffect(() => {
+    if (!value) setText(autoColor)
+  }, [autoColor, value])
+  const pick = (hex) => {
+    setText(hex)
+    onChange(hex)
+  }
+  return (
+    <div className="field">
+      <span className="field-label">Pist topu</span>
+      <div className="ball-picker">
+        <DiscoBall color={shown} size={84} facets={8} speed={12} />
+        <div className="ball-picker-controls">
+          <label className="ball-picker-label" htmlFor="channel-edit-ball">
+            Hex kodu
+          </label>
+          <div className={'ball-hex' + (invalid ? ' ball-hex--invalid' : '')}>
+            <span className="ball-swatch" style={{ background: shown }} aria-hidden="true" />
+            <input
+              id="channel-edit-ball"
+              value={text}
+              maxLength={7}
+              spellCheck="false"
+              aria-describedby={invalid ? hintId : undefined}
+              onChange={(e) => {
+                let next = e.target.value.trim()
+                if (next && next[0] !== '#') next = `#${next}`
+                setText(next)
+                if (HEX_COLOR.test(next)) onChange(next.toUpperCase())
+              }}
+            />
+          </div>
+          {invalid && (
+            <p className="field-hint ball-hex-hint" id={hintId}>
+              #RRGGBB biçiminde yaz (ör. #FF8C61).
+            </p>
+          )}
+          <div className="ball-picker-buttons">
+            <button type="button" className="btn btn--secondary btn--small" onClick={() => pick(randomBallColor())}>
+              Rastgele
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary btn--small"
+              aria-pressed={!value}
+              onClick={() => {
+                setText(autoColor)
+                onChange(null)
+              }}
+            >
+              Otomatik
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="ball-presets" role="group" aria-label="Hazır renkler">
+        {BALL_PRESETS.map(([hex, label]) => (
+          <button
+            key={hex}
+            type="button"
+            className="ball-preset"
+            aria-label={`${label} ${hex}`}
+            aria-pressed={value === hex}
+            onClick={() => pick(hex)}
+          >
+            <DiscoBall color={hex} size={36} facets={6} speed={14} glow={false} />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Kanalı düzenleme: ad, kimlerin görebileceği, pist topu, silme (Kanalları
+// yönet). Sunucu sahibi kısıtlı kanalları da her zaman görüyor.
 export function EditChannelDialog({ channel, roles, categories = [], busy, error, onSave, onDelete, onClose }) {
   const [name, setName] = useState(channel.name)
   const [categoryId, setCategoryId] = useState(channel.categoryId || '')
   const [restricted, setRestricted] = useState((channel.allowedRoleIds || []).length > 0)
   const [roleIds, setRoleIds] = useState(channel.allowedRoleIds || [])
+  const [ballColor, setBallColor] = useState(channel.ballColor || null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const accessLabelId = useId()
   const toggleRole = (id) => setRoleIds((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]))
@@ -850,7 +945,7 @@ export function EditChannelDialog({ channel, roles, categories = [], busy, error
         className="dialog-body"
         onSubmit={(e) => {
           e.preventDefault()
-          onSave({ name: name.trim(), allowedRoleIds: restricted ? roleIds : [], categoryId: categoryId || null })
+          onSave({ name: name.trim(), allowedRoleIds: restricted ? roleIds : [], categoryId: categoryId || null, ballColor })
         }}
       >
         <div className="field">
@@ -906,6 +1001,7 @@ export function EditChannelDialog({ channel, roles, categories = [], busy, error
             </p>
           )}
         </div>
+        <BallColorField channelName={name.trim() || channel.name} value={ballColor} onChange={setBallColor} />
         {error && (
           <p className="form-error" role="alert">
             {error}

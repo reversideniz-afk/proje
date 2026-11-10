@@ -240,7 +240,7 @@ test.describe('Faz 4: tasarım', { tag: '@faz4' }, () => {
     expect(composer.y + composer.height).toBeLessThanOrEqual(844)
   })
 
-  test('konuşan kişi kutucukta, kenar çubuğunda ve üye listesinde ışıklanıyor', async ({ disco }) => {
+  test('konuşan kişi pistte ve üye listesinde ışıklanıyor, avatarı sesle büyüyor', async ({ disco }) => {
     // Sahte mikrofon yaklaşık saniyede bir kısa bip çalıyor, ışık da her bipte
     // yarım saniye kadar yanıyor. Saniyede bir yoklamak hep sessiz anlara denk
     // gelebildiği için her ekran karesinde bakılıyor.
@@ -276,22 +276,28 @@ test.describe('Faz 4: tasarım', { tag: '@faz4' }, () => {
     await mert.openChannel('genel')
     await mert.joinVoice()
     await expect(mert.peerTile('Ece')).toBeVisible()
-    expect(await staysDark(mert, '.remote-video-wrapper', 'Ece', 1500)).toBe(true)
+    expect(await staysDark(mert, '.dancer', 'Ece', 1500)).toBe(true)
 
     await ece.micOn()
-    await lightsUp(mert, '.remote-video-wrapper', 'Ece')
-    await lightsUp(mert, '.channel-voicer', 'Ece')
-    // Kendi mikrofonu açık olan da kendi kutucuğunda ışıklanıyor.
-    await lightsUp(ece, '.tile--local')
+    await lightsUp(mert, '.dancer', 'Ece')
+    await lightsUp(mert, '.member-item-activity', 'konuşuyor')
+    // Kendi mikrofonu açık olan da pistte kendi yerinde ışıklanıyor.
+    await lightsUp(ece, '.dancer--me')
+    // Konuşanın avatarı sesin gücüne göre büyüyor (seviye ekran karesinde).
+    await ece.page.waitForFunction(
+      () => Number(document.querySelector('.dancer--me')?.style.getPropertyValue('--level')) > 0.05,
+      null,
+      { polling: 'raf', timeout: 15_000 }
+    )
 
     // Sağırlaştırınca da kimin konuştuğu görünmeye devam ediyor.
     await mert.mediaButton('Sağırlaştır (herkesi sustur)').click()
-    await lightsUp(mert, '.remote-video-wrapper', 'Ece')
+    await lightsUp(mert, '.dancer', 'Ece')
 
     // Mikrofonu kapatınca ışık sönüyor ve sönük kalıyor.
     await ece.mediaButton('Mikrofonu kapat').click()
     await mert.page.waitForTimeout(1000)
-    expect(await staysDark(mert, '.remote-video-wrapper', 'Ece', 2500)).toBe(true)
+    expect(await staysDark(mert, '.dancer', 'Ece', 2500)).toBe(true)
   })
 
   test('mesajlar gün ayraçlarıyla ve aynı kişinin ardışık mesajları gruplu', async ({ disco }) => {

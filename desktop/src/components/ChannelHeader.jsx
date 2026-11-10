@@ -2,7 +2,7 @@
 // sohbet/üye panellerini açıp kapatan düğmeler. Telefonda kanal
 // çekmecesini açan düğme de burada.
 import { useState } from 'react'
-import { AtSign, Hash, Headphones, Menu, MessageSquare, Phone, Pin, Search, Users } from 'lucide-react'
+import { AtSign, Headphones, Menu, MessageSquare, Phone, Pin, Search, Users } from 'lucide-react'
 
 // Mesajlarda arama: Enter arar, Esc temizler. "from:Ece" ile kişiye göre.
 function SearchBox({ scopeLabel, onSearch, onClear }) {
@@ -36,8 +36,10 @@ function SearchBox({ scopeLabel, onSearch, onClear }) {
 }
 
 // isDm: özel mesaj (başlıkta @, "Sese katıl" yerine "Sesli ara").
+// eyebrow: telefonda başlığın üstündeki sunucu adı.
 export function ChannelHeader({
   title,
+  eyebrow,
   isChannel,
   isDm = false,
   voiceCount,
@@ -55,8 +57,13 @@ export function ChannelHeader({
       <button type="button" className="icon-btn mobile-only" onClick={onOpenNav} aria-label="Kanalları göster">
         <Menu className="icon" />
       </button>
-      {isChannel && (isDm ? <AtSign className="icon channel-header-hash" /> : <Hash className="icon channel-header-hash" />)}
-      <h2 className="channel-header-title">{title}</h2>
+      <div className="channel-header-heading">
+        {eyebrow && <span className="channel-header-eyebrow">{eyebrow}</span>}
+        <span className="channel-header-line">
+          {isChannel && isDm && <AtSign className="icon channel-header-hash" />}
+          <h2 className="channel-header-title">{title}</h2>
+        </span>
+      </div>
       {isChannel && voiceCount > 0 && (
         <span className="channel-header-voice">
           <span className="live-dot" aria-hidden="true" />

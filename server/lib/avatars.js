@@ -45,7 +45,8 @@ async function avatarUrlOf(username) {
 // Sunucu simgesi de aynı şekilde sürümlü bir adresle veriliyor.
 function serverIconUrl(server) {
   if (!server?.iconUpdatedAt) return null;
-  return `/api/server-icons/${server._id}?v=${avatarVersion(server.iconUpdatedAt)}`;
+  const animated = server.iconAnimated ? "&a=1" : "";
+  return `/api/server-icons/${server._id}?v=${avatarVersion(server.iconUpdatedAt)}${animated}`;
 }
 
 module.exports = { AVATAR_TYPES, avatarVersion, avatarUrl, avatarUrlsFor, avatarUrlOf, serverIconUrl };

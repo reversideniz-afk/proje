@@ -186,6 +186,8 @@ const serverSchema = new mongoose.Schema({
   // yokken iconUpdatedAt de boş.
   iconData: { type: String, default: null },
   iconUpdatedAt: { type: Date, default: null },
+  // Simge GIF ise true: istemci durağan kareyi gösterip üzerine gelince oynatıyor.
+  iconAnimated: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 const Server = mongoose.models.Server || mongoose.model("Server", serverSchema);
@@ -259,6 +261,9 @@ const channelSchema = new mongoose.Schema({
   // kısımdaki sırası (eşitse oluşturulma sırası; bkz. lib/categories.js).
   categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "ChannelCategory", default: null },
   position: { type: Number, default: 0 },
+  // Pistteki disko topunun rengi (#RRGGBB). Boşsa istemci kanal adından
+  // üretiyor; kanal ayarından elle seçilebiliyor.
+  ballColor: { type: String, default: null, match: /^#[0-9a-fA-F]{6}$/ },
   createdAt: { type: Date, default: Date.now },
 });
 channelSchema.index({ serverId: 1, name: 1 }, { unique: true });

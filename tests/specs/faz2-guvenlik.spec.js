@@ -195,6 +195,7 @@ test.describe('Faz 2: güvenlik ve yetki', { tag: '@faz2' }, () => {
     await expect(other.getByTitle('Sil')).toHaveCount(0)
 
     // Kendi sunucusunda var ve çalışıyor.
+    await mert.showDock()
     await mert.page.locator('.server-rail-icon[title="Mert Sunucusu"]').click()
     await mert.openChannel('sohbet')
     const message = mert.page.locator('.chat-message', { hasText: 'Ece burada' })

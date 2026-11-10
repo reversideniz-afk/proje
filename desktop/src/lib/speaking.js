@@ -14,7 +14,7 @@ function sameSet(a, b) {
   return true
 }
 
-function rmsOf(analyser, buffers) {
+export function rmsOf(analyser, buffers) {
   let data = buffers.get(analyser)
   if (!data || data.length !== analyser.fftSize) {
     data = new Float32Array(analyser.fftSize)

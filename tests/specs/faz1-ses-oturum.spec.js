@@ -112,7 +112,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     const observer = await disco.observer('genel')
     const { mert } = await mertVeEceSeste(disco)
     await mert.openChannel('oyun')
-    await expect(mert.voicePanel()).toContainText('#genel')
+    await expect(mert.voicePanel()).toContainText('genel')
 
     const mark = observer.mark()
     disco.dropConnections()
@@ -208,7 +208,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
   test('H3: kamerasını açan kişinin görüntüsü karşı tarafta görünüyor', async ({ disco }) => {
     const { mert, ece } = await mertVeEceSeste(disco)
     await ece.cameraOn()
-    const video = mert.peerTile('Ece').locator('video.remote-video')
+    const video = mert.cameraTile('Ece').locator('video.remote-video')
     await expect(video).toBeVisible()
     await expect
       .poll(() => video.evaluate((v) => v.videoWidth), { timeout: 15_000 })
@@ -234,7 +234,7 @@ test.describe('Faz 1: ses ve oturum', { tag: '@faz1' }, () => {
     await mert.openChannel('genel')
     await mert.joinVoice()
     await mert.openChannel('oyun')
-    await expect(mert.voicePanel()).toContainText('#genel')
+    await expect(mert.voicePanel()).toContainText('genel')
 
     await mert.context.close()
     await expect

@@ -170,7 +170,9 @@ module.exports = function registerRoleHandlers(socket, ctx) {
 
   // Kanalın adı ve kimlerin göreceği. Kaydedince eski kısıtlama (platform
   // rolleri) temizleniyor, yerini sunucunun rolleri alıyor.
-  socket.on("update-channel", async ({ serverId, channelId, name, allowedRoleIds = [] } = {}, callback) => {
+  // ballColor: verilmezse dokunulmuyor, null ise kanal adından üretilen
+  // renge dönüyor.
+  socket.on("update-channel", async ({ serverId, channelId, name, allowedRoleIds = [], ballColor } = {}, callback) => {
     if (typeof callback !== "function") return;
     try {
       const { server, error } = await requireServerPermission(ctx.username, serverId, "manageChannels");
@@ -178,11 +180,16 @@ module.exports = function registerRoleHandlers(socket, ctx) {
       if (typeof name !== "string" || !name.trim() || name.trim().length > 50) {
         return callback({ success: false, message: "Kanal adı 1-50 karakter olmalı." });
       }
+      if (ballColor !== undefined && ballColor !== null && !/^#[0-9a-fA-F]{6}$/.test(ballColor)) {
+        return callback({ success: false, message: "Top rengi #RRGGBB biçiminde olmalı." });
+      }
       const ids = await serverRoleIds(server._id, allowedRoleIds);
       if (!ids || !isObjectId(channelId)) return callback({ success: false, message: "Geçersiz bilgi." });
+      const update = { name: name.trim(), allowedRoleIds: ids, allowedRoles: [] };
+      if (ballColor !== undefined) update.ballColor = ballColor ? ballColor.toUpperCase() : null;
       const channel = await Channel.findOneAndUpdate(
         { _id: channelId, serverId: server._id },
-        { name: name.trim(), allowedRoleIds: ids, allowedRoles: [] },
+        update,
         { new: true }
       ).lean();
       if (!channel) return callback({ success: false, message: "Böyle bir kanal yok." });

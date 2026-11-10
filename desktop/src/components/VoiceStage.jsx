@@ -1,4 +1,6 @@
-// Ses sahnesi: seste olan herkesin kutucuğu ve altta ortada ses kontrolleri.
+// Görüntü sahnesi: seste açık kameralar ve paylaşılan ekranlar (sohbetin
+// üstünde, sadece biri görüntü açınca). Sesteki herkes soldaki pistte
+// (bkz. DanceFloor.jsx); ses kontrolleri de orada.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Headphones,
@@ -8,10 +10,8 @@ import {
   Monitor,
   MonitorOff,
   PartyPopper,
-  PhoneOff,
   Video,
   VideoOff,
-  X,
 } from 'lucide-react'
 import { RemoteCameraTile } from './RemoteCameraTile.jsx'
 import { RemoteScreenTile } from './RemoteScreenTile.jsx'
@@ -29,7 +29,7 @@ function LocalVideo({ videoRef, stream, className }) {
   return <video ref={videoRef} autoPlay playsInline muted className={className} />
 }
 
-function VoiceControls({
+export function VoiceControls({
   isMicOn,
   isDeafened,
   isCameraOn,
@@ -123,15 +123,31 @@ function VoiceControls({
           )}
         </div>
       )}
-      <button
-        type="button"
-        className="voice-control voice-control--leave leave-voice-button"
-        onClick={onLeave}
-        title="Sesten çık"
-        aria-label="Sesten çık"
-      >
-        <PhoneOff className="icon" />
+      <button type="button" className="voice-leave leave-voice-button" onClick={onLeave} title="Sesten çık">
+        Pistten çık
       </button>
+    </div>
+  )
+}
+
+// Karşı tarafların sesi Web Audio üzerinden çalıyor (kişi bazlı ses ayarı
+// için); Chrome uzak WebRTC sesini Web Audio'ya ancak akış bir medya
+// elemanına da bağlıysa veriyor. Kamera kapalıyken kutucuk olmadığı için
+// her akışa susturulmuş, görünmez bir <audio> bağlanıyor.
+function AudioSink({ stream }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (ref.current && ref.current.srcObject !== stream) ref.current.srcObject = stream
+  }, [stream])
+  return <audio ref={ref} autoPlay muted />
+}
+
+export function RemoteAudioSinks({ remoteStreams }) {
+  return (
+    <div hidden>
+      {Object.entries(remoteStreams).map(
+        ([socketId, streams]) => streams.mainStream && <AudioSink key={socketId} stream={streams.mainStream} />
+      )}
     </div>
   )
 }
@@ -167,9 +183,8 @@ function useElementSize(ref) {
   return size
 }
 
-export function VoiceStage({
+export function VideoStage({
   displayName,
-  myAvatar,
   localStream,
   localScreenStream,
   localVideoRef,
@@ -182,29 +197,29 @@ export function VoiceStage({
   onToggleEnlarge,
   onOpenVolume,
   outputDeviceId,
-  mediaError,
-  onDismissMediaError,
-  soundToast,
-  controls,
+  isMicOn,
+  isCameraOn,
+  isScreenSharing,
 }) {
   const gridRef = useRef(null)
   const gridSize = useElementSize(gridRef)
-  const tiles = [
-    <StageTile
-      key="local-camera"
-      className="tile--local"
-      name={displayName}
-      label="Sen"
-      avatarUrl={myAvatar}
-      muted={!controls.isMicOn}
-      speaking={speakingIds.has('local')}
-      showAvatar={!controls.isCameraOn}
-      media={controls.isCameraOn ? <LocalVideo videoRef={localVideoRef} stream={localStream} className="local-video" /> : null}
-      isEnlarged={enlargedTile === 'local-camera'}
-      onToggleEnlarge={() => onToggleEnlarge('local-camera')}
-    />,
-  ]
-  if (controls.isScreenSharing) {
+  const tiles = []
+  if (isCameraOn) {
+    tiles.push(
+      <StageTile
+        key="local-camera"
+        className="tile--local"
+        name={displayName}
+        label="Sen"
+        muted={!isMicOn}
+        speaking={speakingIds.has('local')}
+        media={<LocalVideo videoRef={localVideoRef} stream={localStream} className="local-video" />}
+        isEnlarged={enlargedTile === 'local-camera'}
+        onToggleEnlarge={() => onToggleEnlarge('local-camera')}
+      />
+    )
+  }
+  if (isScreenSharing) {
     tiles.push(
       <StageTile
         key="local-screen"
@@ -223,20 +238,20 @@ export function VoiceStage({
   for (const [socketId, streams] of Object.entries(remoteStreams)) {
     const peer = peers.find((p) => p.socketId === socketId)
     const label = peer ? peer.username : '…'
-    if (streams.mainStream) {
+    if (streams.mainStream && peer?.cameraOn) {
       tiles.push(
         <RemoteCameraTile
           key={`${socketId}-camera`}
           stream={streams.mainStream}
           label={label}
-          cameraOn={peer ? peer.cameraOn : false}
-          micOn={peer ? !peer.muted : false}
+          cameraOn
+          micOn={!peer.muted}
           speaking={speakingIds.has(socketId)}
           isEnlarged={enlargedTile === `${socketId}-camera`}
           onToggleEnlarge={() => onToggleEnlarge(`${socketId}-camera`)}
-          onOpenVolumeMenu={(e) => peer && onOpenVolume(peer.username, e)}
+          onOpenVolumeMenu={(e) => onOpenVolume(peer.username, e)}
           ping={peerPings[socketId]}
-          avatarUrl={peer?.avatarUrl}
+          avatarUrl={peer.avatarUrl}
         />
       )
     }
@@ -255,18 +270,23 @@ export function VoiceStage({
   }
 
   // Büyütülen kutucuk sahneyi dolduruyor, diğerleri altta bir şeride
-  // iniyor; yandaki sohbet açık kalıyor (yayını izlerken yazışmak için).
+  // iniyor; alttaki sohbet açık kalıyor (yayını izlerken yazışmak için).
   const focused = enlargedTile ? tiles.find((tile) => tile.key === enlargedTile) : null
   const tileWidth = Math.max(0, Math.floor(bestLayout(tiles.length, gridSize.width, gridSize.height).tileWidth))
+  const hasVideo = tiles.length > 0
 
   return (
-    <section className="voice-stage" aria-label="Ses sahnesi">
+    <section
+      className={'video-stage' + (focused ? ' video-stage--focus' : '')}
+      aria-label="Kamera ve ekran"
+      hidden={!hasVideo}
+    >
       <div ref={gridRef} className={'stage-area' + (focused ? ' stage-area--focus' : '')}>
         {focused ? (
           <>
             <div className="stage-focus">{focused}</div>
             {tiles.length > 1 && (
-              <div className="stage-strip" aria-label="Sesteki diğer kişiler">
+              <div className="stage-strip" aria-label="Diğer görüntüler">
                 {tiles.filter((tile) => tile !== focused)}
               </div>
             )}
@@ -277,21 +297,6 @@ export function VoiceStage({
           </div>
         )}
       </div>
-      {soundToast && (
-        <div key={soundToast.key} className="stage-toast" role="status">
-          <span aria-hidden="true">{soundToast.sound.emoji}</span>
-          <strong>{soundToast.username}</strong> {soundToast.sound.label}
-        </div>
-      )}
-      {mediaError && (
-        <div className="stage-error" role="alert">
-          <span>{mediaError}</span>
-          <button type="button" className="icon-btn" onClick={onDismissMediaError} aria-label="Uyarıyı kapat">
-            <X className="icon" />
-          </button>
-        </div>
-      )}
-      <VoiceControls {...controls} />
     </section>
   )
 }
