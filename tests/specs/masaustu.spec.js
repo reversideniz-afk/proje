@@ -57,7 +57,7 @@ test.describe('Masaüstü uygulaması', { tag: '@masaustu' }, () => {
       const mert = new UserSession('Mert', app.context(), page)
       await mert.login()
       await mert.openChannel('genel')
-      expect(await app.evaluate(({ app: electronApp }) => electronApp.getVersion())).toBe('2.2.0')
+      expect(await app.evaluate(({ app: electronApp }) => electronApp.getVersion())).toBe('2.3.0')
     } finally {
       await app.close()
     }
